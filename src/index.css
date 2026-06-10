@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --luxury-bg-deep: #050403;
+  --luxury-bg: #0d0b07;
+  --luxury-surface: #1a1712;
+  --luxury-elevated: #252018;
+  --luxury-border: #2e2a1e;
+  
+  --luxury-text-primary: #e8e0d0;
+  --luxury-text-verse: #c9a84c;
+  --luxury-text-muted: #6b6355;
+  --luxury-text-accent: #d4a843;
+  
+  --luxury-gold: #c9a84c;
+  --luxury-gold-light: #e8c97a;
+  --luxury-gold-dark: #8a6f2e;
+  
+  --luxury-button-bg: rgba(201, 168, 76, 0.12);
+  --simulator-border: #221e16;
+}
+
+.theme-sepia {
+  --luxury-bg-deep: #e8dfc7;
+  --luxury-bg: #f4ecd8;
+  --luxury-surface: #fdfaf2;
+  --luxury-elevated: #ebdcb9;
+  --luxury-border: #dfd5c2;
+  
+  --luxury-text-primary: #3d2f1f;
+  --luxury-text-verse: #8e6812;
+  --luxury-text-muted: #82725e;
+  --luxury-text-accent: #a37207;
+  
+  --luxury-gold: #8e6812;
+  --luxury-gold-light: #ab822e;
+  --luxury-gold-dark: #634706;
+  
+  --luxury-button-bg: rgba(142, 104, 18, 0.1);
+  --simulator-border: #dfd5c2;
+}
+
+@theme {
+  --font-sans: 'Inter', sans-serif;
+  --font-serif: 'Playfair Display', serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  
+  --color-luxury-bg-deep: var(--luxury-bg-deep);
+  --color-luxury-bg: var(--luxury-bg);
+  --color-luxury-surface: var(--luxury-surface);
+  --color-luxury-elevated: var(--luxury-elevated);
+  --color-luxury-border: var(--luxury-border);
+  
+  --color-luxury-text-primary: var(--luxury-text-primary);
+  --color-luxury-text-verse: var(--luxury-text-verse);
+  --color-luxury-text-muted: var(--luxury-text-muted);
+  --color-luxury-text-accent: var(--luxury-text-accent);
+  
+  --color-luxury-gold: var(--luxury-gold);
+  --color-luxury-gold-light: var(--luxury-gold-light);
+  --color-luxury-gold-dark: var(--luxury-gold-dark);
+  
+  --color-luxury-button-bg: var(--luxury-button-bg);
+  --color-simulator-border: var(--simulator-border);
+}
+
+@utility shadow-gold-glow {
+  box-shadow: 0 0 20px rgba(201, 168, 76, 0.18);
+}
+
+@utility shadow-gold-intense {
+  box-shadow: 0 0 35px rgba(201, 168, 76, 0.35);
+}
+
+@utility shadow-soft {
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.6);
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-fade-slide-up {
+  animation: fadeSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@utility bg-luxury-gradient {
+  background: var(--luxury-bg);
+}
+
+@utility bg-gold-gradient {
+  background: linear-gradient(135deg, var(--luxury-gold) 0%, var(--luxury-gold-dark) 100%);
+}
+
+/* Base style resets */
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--luxury-bg-deep);
+  color: var(--luxury-text-primary);
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease;
+}
+
+/* Scrollbar customizations */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--luxury-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--luxury-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--luxury-gold);
+}
+

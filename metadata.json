@@ -1,0 +1,6 @@
+{
+  "name": "Bible Mobile",
+  "description": "Une application biblique moderne avec navigation simple, recherche intégrée, lexique Strong et compagnon d'apprentissage propulsé par Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
