@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sparkles, MessageSquare, BookOpen } from 'lucide-react';
+import { cleanBibleMarkdown } from '../lib/bibleFormatter';
 
 interface AnalysisCardProps {
   type: 'linguistic' | 'context' | 'historical';
@@ -63,8 +64,8 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
       )}
 
       {/* Main Analysis content body */}
-      <p className="font-sans text-[14px] leading-[22px] text-luxury-text-primary mb-4 whitespace-pre-line">
-        {content}
+      <p className="font-reading text-[15.5px] md:text-[16.5px] leading-[25px] md:leading-[28px] text-luxury-text-primary/95 mb-5 whitespace-pre-line">
+        {cleanBibleMarkdown(content)}
       </p>
 
       {/* Clickable Greek/Hebrew Strong words */}

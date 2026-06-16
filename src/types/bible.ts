@@ -60,5 +60,6 @@ export interface VerseNote {
   chapter: number;
   verse: number;
   note: string;
+  audio?: string;
   updated_at: string;
 }

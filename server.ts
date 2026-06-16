@@ -114,6 +114,90 @@ Explique les thèmes majeurs abordés dans ce chapitre, les personnages principa
   }
 });
 
+// Analyze multiple notes/journal entries
+app.post("/api/gemini/analyze-notes", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée." });
+      return;
+    }
+    const { notes } = req.body;
+    if (!notes || !Array.isArray(notes) || notes.length === 0) {
+      res.status(400).json({ error: "Aucune note fournie pour l'analyse." });
+      return;
+    }
+
+    const notesSummaryText = notes.map((n, i) => {
+      const ref = n.book_id > 0 ? `${n.book_name} ${n.chapter}:${n.verse}` : n.book_name;
+      return `Note ${i + 1} (${ref}): "${n.note}"`;
+    }).join("\n\n");
+
+    const prompt = `Voici une liste de notes d'étude spirituelle, de méditations personnelles, ou d'exégèses sauvegardées par un utilisateur dans son journal d'étude biblique:
+    
+${notesSummaryText}
+
+Effectue une analyse spirituelle, théologique et pastorale de ces notes sous la forme d'un magnifique rapport bienveillant (en français) comportant :
+1. **Synthèse et Thèmes Dominants** : Identifie les principaux thèmes spirituels qui émergent de ces notes (p.ex. la grâce, la persévérance, l'écoute, les doutes, etc.).
+2. **Encouragement Floral Pastoral** : Offre une parole d'édification chaleureuse et fraternelle pour encourager l'étudiant dans ses recherches.
+3. **Versets d'Approfondissement Recommandés** : Suggère 2 ou 3 autres passages bibliques Louis Segond pertinents en rapport avec sa réflexion actuelle pour nourrir sa foi.
+
+Sois inspirant, érudit et profondément réconfortant.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: "Tu es un guide spirituel, mentor de théologie et pasteur bienveillant. Tu aides à synthétiser et encourager les croyants dans leur étude approfondie des écritures.",
+      }
+    });
+
+    res.json({ analysis: response.text });
+  } catch (error: any) {
+    console.error("Error in analyze-notes endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de la génération de la synthèse spirituelle." });
+  }
+});
+
+// Deepen/Elaborate on a single note
+app.post("/api/gemini/deepen-note", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée." });
+      return;
+    }
+    const { note, bookName, chapter, verse } = req.body;
+    if (!note) {
+      res.status(400).json({ error: "Texte de la note manquant." });
+      return;
+    }
+
+    const reference = bookName ? `du passage ${bookName} ${chapter}:${verse}` : "de sa méditation";
+    const prompt = `Voici une note personnelle rédigée ou enregistrée par un étudiant de la Bible à propos ${reference} :
+    
+"${note}"
+
+Fournis un approfondissement théologique et philologique approfondi en français basé sur cette note :
+1. **Éclairage Théologique & Exégèse** : Apporte d'autres vérités bibliques ou doctrinaires qui complètent sa réflexion. Offre des pistes sémantiques ou historiques.
+2. **Étude linguistique (greg/hébreu)** : Si applicable, mentionne une ou deux racines d'origine significatives en hébreu ou en grec qui s'y rapportent.
+3. **Piste de Prière ou de Méditation** : Donne une prière courte d'inspiration ou une question d'introspection spirituelle liée à sa note.
+
+Reste rigoureux, érudit et encourageant.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction: "Tu es un assistant universitaire en théologie et langues bibliques. Tu aides à enrichir et approfondir les pensées des étudiants.",
+      }
+    });
+
+    res.json({ deepenedContent: response.text });
+  } catch (error: any) {
+    console.error("Error in deepen-note endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de l'approfondissement de la note." });
+  }
+});
+
 // AI Chatbot Companion
 app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -224,6 +308,143 @@ Ne mets aucune explication avant ou après le JSON. Rends uniquement le JSON bru
     res.status(500).json({ error: `Impossible de récupérer le chapitre ${req.body.chapterNum} de ${req.body.bookName}: ` + (error.message || "") });
   }
 });
+
+
+// Compare a verse in multiple translations
+app.post("/api/gemini/compare-verse", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée pour l'étude comparative." });
+      return;
+    }
+    const { bookName, chapter, verse, originalText } = req.body;
+    if (!bookName || !chapter || !verse) {
+      res.status(400).json({ error: "Livre, chapitre et verset requis pour la comparaison." });
+      return;
+    }
+
+    const reference = `${bookName} ${chapter}:${verse}`;
+    const prompt = `Génère des traductions et versions comparables pour le verset biblique: "${reference}".
+Le texte fourni pour la version Louis Segond 1910 est: "${originalText || ''}".
+
+Tu dois renvoyer STRICTEMENT un objet JSON contenant:
+- reference: "${reference}"
+- translations: un tableau d'objets. Chaque objet contient:
+  * code: le code de la version (ex: "LSG", "KJV", "DARBY", "SEMEUR", "ORIGINAL")
+  * name: le nom de la version (ex: "Louis Segond (1910)", "King James (KJV)", "Darby", "Semeur", "Original & Translittéré")
+  * text: le texte exact de ce verset dans cette traduction. Pour ORIGINAL, si c'est de l'Ancien Testament fournis le texte hébreu avec voyelles (s'il s'agit des livres de l'AT) suivi de sa translittération phonétique simplifiée entre parenthèses. Si c'est du Nouveau Testament, fournis le texte grec suivi de sa translittération.
+  * language: "fr", "en", ou "he/gr"
+  * description: une explication concise (1 à 2 phrases en français) sur l'intérêt théologique ou exégétique de cette version.
+
+Génère des traductions très exactes caractéristiques des écritures sacrées sans approximation.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            reference: { type: Type.STRING },
+            translations: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  code: { type: Type.STRING },
+                  name: { type: Type.STRING },
+                  text: { type: Type.STRING },
+                  language: { type: Type.STRING },
+                  description: { type: Type.STRING }
+                },
+                required: ["code", "name", "text", "language", "description"]
+              }
+            }
+          },
+          required: ["reference", "translations"]
+        },
+        systemInstruction: "Tu es un serveur théologique fournissant des données de comparaison de textes bibliques d'une fidélité académique absolue sous forme JSON.",
+      }
+    });
+
+    const outputText = response.text || "{}";
+    res.json(JSON.parse(outputText));
+  } catch (error: any) {
+    console.error("Error in compare-verse endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de la comparaison des versions bibliques." });
+  }
+});
+
+
+// Search or generate definition for a biblical name, location, or event
+app.post("/api/gemini/dictionary", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée pour le dictionnaire théologique." });
+      return;
+    }
+    const { query } = req.body;
+    if (!query) {
+      res.status(400).json({ error: "Le terme recherché est vide." });
+      return;
+    }
+
+    const prompt = `Génère une définition théologique et une fiche encyclopédique de haute précision pour le terme biblique: "${query}".
+Il peut s'agir d'un personnage (ex: Moïse, Paul de Tarse), d'un lieu (ex: Jérusalem, Sodome), ou d'un événement / concept théologique (ex: L'Exode, La Pâque, La Transfiguration).
+
+Tu dois renvoyer STRICTEMENT un objet JSON structuré contenant:
+- term: le nom propre ou concept recherché (ex: "${query}")
+- category: une chaîne de caractères parmi ["personne", "lieu", "evenement", "notion"]
+- pronunciation: prononciation phonétique ou écriture originale hébreu/grec (ex: "Mōšeh (מֹשֶׁה)" ou "Hierousalēm (Ἱερουσαλήμ)")
+- etymology: origine étymologique ou signification littérale du nom (ex: "Du mot hébreu signifiant 'sauve des eaux'...")
+- shortDefinition: un résumé de 1 à 2 phrases précises et impactantes.
+- detailedDescription: l'analyse théologique complète au format Markdown (2 à 3 paragraphes détaillés sur sa place dans l'histoire du salut, sa signification prophétique/thologique, et ses implications).
+- scriptureReferences: une liste d'array (2 à 5 chaînes de caractères) de chapitres ou versets clés de la Bible (ex: ["Exode 2:10", "Deutéronome 34:10"]).
+- relatedTerms: une liste d'array de 3 termes bibliques connexes d'intérêt.
+
+Sois rigoureux intellectuellement et respectueux de la théologie chrétienne et de l'histoire du texte.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            term: { type: Type.STRING },
+            category: { type: Type.STRING },
+            pronunciation: { type: Type.STRING },
+            etymology: { type: Type.STRING },
+            shortDefinition: { type: Type.STRING },
+            detailedDescription: { type: Type.STRING },
+            scriptureReferences: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            },
+            relatedTerms: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: [
+            "term", "category", "pronunciation", "etymology",
+            "shortDefinition", "detailedDescription", "scriptureReferences", "relatedTerms"
+          ]
+        },
+        systemInstruction: "Tu es un bibliste expert et directeur de thèse de théologie sacrée fournissant des descriptions encyclopédiques académiques sous forme JSON.",
+      }
+    });
+
+    const outputText = response.text || "{}";
+    res.json(JSON.parse(outputText));
+  } catch (error: any) {
+    console.error("Error in dictionary endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur de l'API lors de l'interrogation du dictionnaire." });
+  }
+});
+
 
 // -------------------------------------------------------------
 // Vite or Static Asset Integration

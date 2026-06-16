@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with study settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "textSize": { "type": "integer" }
+      },
+      "required": ["uid", "email"]
+    },
+    "FavoriteVerse": {
+      "title": "FavoriteVerse",
+      "description": "Bookmarked verses of the user",
+      "type": "object",
+      "properties": {
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "verse": { "type": "integer" },
+        "text": { "type": "string" },
+        "added_at": { "type": "string" }
+      },
+      "required": ["book_id", "book_name", "chapter", "verse", "text", "added_at"]
+    },
+    "VerseNote": {
+      "title": "VerseNote",
+      "description": "Personal study notes on specific verses",
+      "type": "object",
+      "properties": {
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "verse": { "type": "integer" },
+        "note": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["book_id", "book_name", "chapter", "verse", "note", "updated_at"]
+    },
+    "ReadingHistory": {
+      "title": "ReadingHistory",
+      "description": "Chapters read by the user",
+      "type": "object",
+      "properties": {
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["book_id", "book_name", "chapter", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Users information"
+    },
+    "users/{userId}/bookmarks/{bookmarkId}": {
+      "schema": "FavoriteVerse",
+      "description": "User bookmarked verses"
+    },
+    "users/{userId}/notes/{noteId}": {
+      "schema": "VerseNote",
+      "description": "User personal verse study notes"
+    },
+    "users/{userId}/history/{historyId}": {
+      "schema": "ReadingHistory",
+      "description": "User reading history for study charts and plans"
+    }
+  }
+}

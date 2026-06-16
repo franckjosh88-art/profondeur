@@ -1,2368 +1,1769 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import { 
-  BookOpen, 
-  Search, 
-  MessageSquare, 
-  Heart, 
-  Home, 
-  Volume2, 
-  VolumeX, 
-  Sparkles, 
-  ChevronRight, 
-  ChevronLeft, 
-  Copy, 
-  FileText, 
-  Send, 
-  Activity, 
-  X,
-  BookMarked,
-  Crown,
-  BookOpenCheck,
-  Globe,
-  Settings,
-  HelpCircle,
-  Eye,
-  Repeat
-} from 'lucide-react';
-import { Verse, Book as BibleBook, StrongEntry, FavoriteVerse, ReadingHistory, VerseNote } from './types/bible';
+  doc, setDoc, getDoc, onSnapshot, collection, deleteDoc, updateDoc, writeBatch
+} from 'firebase/firestore';
 import { 
-  BOOKS, 
-  STRONG_ENTRIES, 
-  getDailyVerseForToday, 
-  searchLocalVerses,
-  isSqliteInitialized,
-  initializeSqliteDatabase,
-  querySqliteChapter,
-  resetSqliteDatabase
+  onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, signInWithPopup, User 
+} from 'firebase/auth';
+import { 
+  auth, db, googleProvider, handleFirestoreError, OperationType 
+} from './lib/firebase';
+import { 
+  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse 
+} from './types/bible';
+import { 
+  BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter 
 } from './data/bibleData';
 
-// Premium custom design system components
+import { 
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+// Subcomponents import
+import { TopBar } from './components/TopBar';
 import { VerseItem } from './components/VerseItem';
-import { VerseQuote } from './components/VerseQuote';
+import { StrongLexicon } from './components/StrongLexicon';
+import { ReadingChallenges } from './components/ReadingChallenges';
+import { StudyStatsChart } from './components/StudyStatsChart';
+import { DailyReminder } from './components/DailyReminder';
 import { AnalysisCard } from './components/AnalysisCard';
 import { ContextSection } from './components/ContextSection';
-import { TopBar } from './components/TopBar';
+import { VerseQuote } from './components/VerseQuote';
 import { RevelationBadge } from './components/RevelationBadge';
-import { ReadingChallenges } from './components/ReadingChallenges';
-import { DailyReminder } from './components/DailyReminder';
-import { StudyStatsChart } from './components/StudyStatsChart';
-import { StrongLexicon } from './components/StrongLexicon';
-import { MAPPED_STRONG_ENTRIES_DIC } from './data/strongLexiconData';
-
-const categoryTitles: Record<string, string> = {
-  pentateuque: "LE PENTATEUQUE",
-  historique: "LIVRES HISTORIQUES",
-  poetique: "SAGESSE & POÉSIE",
-  prophetique: "LIVRES PROPHÉTIQUES",
-  evangile: "LES ÉVANGILES",
-  epitre: "LES ÉPÎTRES",
-  apocalypse: "LA RÉVÉLATION"
-};
+import { cleanBibleMarkdown } from './lib/bibleFormatter';
+import { VerseComparison } from './components/VerseComparison';
+import { BibleDictionary } from './components/BibleDictionary';
 
 export default function App() {
-  // SQLite Database setup states
-  const [sqliteDbReady, setSqliteDbReady] = useState<boolean>(isSqliteInitialized());
-  const [sqliteProgress, setSqliteProgress] = useState<number>(0);
-  const [sqliteStatusText, setSqliteStatusText] = useState<string>("");
+  // Authentication states
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [displayName, setDisplayName] = useState<string>('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState<boolean>(false);
 
-  // Navigation & Tabs
-  const [activeTab, setActiveTab] = useState<'home' | 'read' | 'search' | 'ai' | 'favorites' | 'lexicon'>('home');
-  
-  // 3-Step sacred Bible Navigation states
-  const [isNavigating, setIsNavigating] = useState<boolean>(true);
-  const [navTestament, setNavTestament] = useState<'AT' | 'NT'>('AT');
-  const [navBook, setNavBook] = useState<BibleBook | null>(BOOKS[18]); // Pre-selected to Psaumes (id: 19, index: 18)
-  const [navChapter, setNavChapter] = useState<number | null>(23); // Pre-selected Psaumes 23
-  
-  // Reading Mode State
-  const [selectedBook, setSelectedBook] = useState<BibleBook>(BOOKS[18]); // Default to Psaumes (id: 19, index: 18)
-  const [selectedChapter, setSelectedChapter] = useState<number>(23); // Default Psaumes 23
-  const [slideDirection, setSlideDirection] = useState<'forward' | 'backward'>('forward');
-  const [selectedVerseNum, setSelectedVerseNum] = useState<number | null>(null); // For elegant tap to reveal verse action bar
-  const [verses, setVerses] = useState<Verse[]>([]);
+  // User Settings 
+  const [textSize, setTextSize] = useState<number>(18);
+  const [themeMode, setThemeMode] = useState<'dark' | 'sepia'>('dark');
+  const [selectedTranslation, setSelectedTranslation] = useState<string>(() => {
+    try {
+      return localStorage.getItem('bible_translation') || 'local';
+    } catch (_) {
+      return 'local';
+    }
+  });
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+
+  // App Navigation Tabs
+  // 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary
+  const [activeTab, setActiveTab] = useState<'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia'>('read');
+
+  // Local database initialization
+  const [sqliteDbReady, setSqliteDbReady] = useState<boolean>(false);
+  const [dbInitProgress, setDbInitProgress] = useState<number>(0);
+  const [dbInitText, setDbInitText] = useState<string>('Préparation de la base de données...');
+
+  // Reading Passage States
+  const [selectedBook, setSelectedBook] = useState<Book>(BOOKS[0]); // Default to Genesis
+  const [selectedChapter, setSelectedChapter] = useState<number>(1);
+  const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingVerses, setLoadingVerses] = useState<boolean>(false);
-  const [verseError, setVerseError] = useState<string | null>(null);
+  const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null); // formatted as "bookId_chapter_verse"
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
 
-  // Settings State
-  const [textSize, setTextSize] = useState<number>(17); // font-size in pixels
+  // AI Chapter Summary Cache state
+  const [chapterSummary, setChapterSummary] = useState<string | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState<boolean>(false);
 
-  // Focus Mode State to read scriptures distraction-free
-  const [isFocusMode, setIsFocusMode] = useState<boolean>(() => {
-    try {
-      const savedFocus = localStorage.getItem('bible_focus_mode');
-      return savedFocus === 'true';
-    } catch (e) {}
-    return false;
-  });
+  // AI Single Verse Explanation State
+  const [activeExplainVerse, setActiveExplainVerse] = useState<Verse | null>(null);
+  const [verseExplanation, setVerseExplanation] = useState<string | null>(null);
+  const [loadingExplanation, setLoadingExplanation] = useState<boolean>(false);
+  const [exegesisTab, setExegesisTab] = useState<'exegesis' | 'compare'>('exegesis');
 
-  const toggleFocusMode = () => {
-    const nextMode = !isFocusMode;
-    setIsFocusMode(nextMode);
-    localStorage.setItem('bible_focus_mode', String(nextMode));
-  };
+  // Interactive dictionary linking state
+  const [targetedStrongCode, setTargetedStrongCode] = useState<string | null>(null);
 
-  // Derived state to determine if actual Focus Mode layout should be presented (only in Lecture)
-  const isActualFocusMode = isFocusMode && activeTab === 'read';
-
-  // Theme state: 'auto' | 'sepia' | 'night'
-  const [themeMode, setThemeMode] = useState<'auto' | 'sepia' | 'night'>(() => {
-    try {
-      const savedTheme = localStorage.getItem('bible_theme_mode');
-      if (savedTheme === 'sepia' || savedTheme === 'night' || savedTheme === 'auto') {
-        return savedTheme;
-      }
-    } catch (e) {}
-    return 'auto';
-  });
-
-  // Derived state to determine if active theme should be 'sepia' or 'night'
-  const [resolvedTheme, setResolvedTheme] = useState<'sepia' | 'night'>('night');
-
-  useEffect(() => {
-    const evaluateTheme = () => {
-      if (themeMode === 'sepia') {
-        setResolvedTheme('sepia');
-      } else if (themeMode === 'night') {
-        setResolvedTheme('night');
-      } else {
-        // Auto mode: check prefers-color-scheme & local hour
-        const hour = new Date().getHours();
-        const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        
-        let isDay = true;
-        if (prefersDark) {
-          isDay = false;
-        } else if (prefersLight) {
-          isDay = true;
-        } else {
-          // Standard day time: 7 AM to 7 PM (7h to 19h)
-          isDay = hour >= 7 && hour < 19;
-        }
-        setResolvedTheme(isDay ? 'sepia' : 'night');
-      }
-    };
-
-    evaluateTheme();
-
-    // Listeners for system changes & hour intervals
-    const mediaQueryLight = window.matchMedia('(prefers-color-scheme: light)');
-    const mediaQueryDark = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    const onChange = () => evaluateTheme();
-    
-    mediaQueryLight.addEventListener('change', onChange);
-    mediaQueryDark.addEventListener('change', onChange);
-
-    // Ticker every 10 seconds to keep track of evening/day transitions
-    const interval = setInterval(evaluateTheme, 10000);
-
-    return () => {
-      mediaQueryLight.removeEventListener('change', onChange);
-      mediaQueryDark.removeEventListener('change', onChange);
-      clearInterval(interval);
-    };
-  }, [themeMode]);
-
-  // Apply resolvedTheme class to body element
-  useEffect(() => {
-    const root = document.documentElement;
-    if (resolvedTheme === 'sepia') {
-      root.classList.add('theme-sepia');
-      root.classList.remove('theme-night');
-    } else {
-      root.classList.remove('theme-sepia');
-      root.classList.add('theme-night');
-    }
-  }, [resolvedTheme]);
-
-  // Favorites & History (Persisted in localStorage)
-  const [favorites, setFavorites] = useState<FavoriteVerse[]>([]);
-  const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
-  const [notes, setNotes] = useState<VerseNote[]>([]);
-  const [favSubTab, setFavSubTab] = useState<'favs' | 'notes'>('favs');
-
-  // Explain Verse Context (AI Theological Desk)
-  const [selectedVerseForExplain, setSelectedVerseForExplain] = useState<Verse | null>(null);
-  const [explanationText, setExplanationText] = useState<string>("");
-  const [explainLoading, setExplainLoading] = useState<boolean>(false);
-
-  // Chapter Summary Context
-  const [chapterSummary, setChapterSummary] = useState<string>("");
-  const [summaryLoading, setSummaryLoading] = useState<boolean>(false);
-
-  // Strong Lexicon
-  const [selectedStrong, setSelectedStrong] = useState<StrongEntry | null>(null);
-
-  // Search Screen State
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [searchResults, setSearchResults] = useState<Verse[]>([]);
-  
-  // Daily Verse
-  const dailyVerseData = getDailyVerseForToday();
-
-  // AI Chat Bot Screen State
-  const [chatMessage, setChatMessage] = useState<string>("");
-  const [chatHistory, setChatHistory] = useState<Array<{ role: 'user' | 'model'; content: string }>>([
-    { role: 'model', content: "Que la paix soit avec vous ! Je suis votre compagnon exégétique propulsé par Gemini. L'esthétique de mon sanctuaire a été revêtue d'un habit noir et d'accents dorés sacrés. Posez-moi vos questions de traduction, d'histoire ou de doctrine." }
+  // Chat conversation
+  const [chatInput, setChatInput] = useState<string>('');
+  const [chatMessages, setChatMessages] = useState<{role: 'user' | 'model', content: string}[]>([
+    { role: 'model', content: "Paix et joie ! Je suis votre guide théologique d'étude biblique. Comment puis-je vous accompagner dans les écritures sacrées aujourd'hui ?" }
   ]);
-  const [chatLoading, setChatLoading] = useState<boolean>(false);
-  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const [loadingChat, setLoadingChat] = useState<boolean>(false);
 
-  // Audio TTS State
-  const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
-  const [isContinuousAudio, setIsContinuousAudio] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem('bible_continuous_audio');
-      return saved === null ? true : saved === 'true'; // Default to true as requested
-    } catch (e) {
-      return true;
-    }
-  });
-  const [shouldAutoPlayNext, setShouldAutoPlayNext] = useState<boolean>(false);
-  const [ttsRate, setTtsRate] = useState<number>(0.95);
-  const [currentlySpeakingVerseIndex, setCurrentlySpeakingVerseIndex] = useState<number>(-1);
-  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  // Synced User Collections from Firestore
+  const [favorites, setFavorites] = useState<FavoriteVerse[]>([]);
+  const [notes, setNotes] = useState<VerseNote[]>([]);
+  const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
 
-  // Load favorites & reading history from localStorage on mounting
+  // Daily Verse of the Day
+  const dailyVerseForCurrentDay: DailyVerse = getDailyVerseForToday();
+
+  // Handle local database initialization on mount
   useEffect(() => {
-    try {
-      const storedFavorites = localStorage.getItem('bible_favorites');
-      if (storedFavorites) {
-        setFavorites(JSON.parse(storedFavorites));
-      }
-
-      const storedHistory = localStorage.getItem('bible_reading_history');
-      if (storedHistory) {
-        setReadingHistory(JSON.parse(storedHistory));
-      }
-
-      const storedNotes = localStorage.getItem('bible_notes');
-      if (storedNotes) {
-        setNotes(JSON.parse(storedNotes));
-      }
-
-      const savedTextSize = localStorage.getItem('bible_text_size');
-      if (savedTextSize) {
-        setTextSize(Number(savedTextSize));
-      }
-    } catch (e) {
-      console.warn("Could not load from localStorage:", e);
-    }
-  }, []);
-
-  // Fetch the active book and chapter verses
-  useEffect(() => {
-    if (sqliteDbReady) {
-      loadChapterVerses(selectedBook, selectedChapter);
-    }
-  }, [selectedBook, selectedChapter, sqliteDbReady]);
-
-  // First launch SQLite import orchestrator
-  useEffect(() => {
-    if (!sqliteDbReady) {
+    if (isSqliteInitialized()) {
+      setSqliteDbReady(true);
+    } else {
       initializeSqliteDatabase((progress, text) => {
-        setSqliteProgress(progress);
-        setSqliteStatusText(text);
+        setDbInitProgress(progress);
+        setDbInitText(text);
       }).then(() => {
         setSqliteDbReady(true);
       });
     }
-  }, [sqliteDbReady]);
-
-  // Handle auto scrolling down for chatbot messages
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory]);
-
-  // Continuous audio automatic playback triggers on verse load completion
-  useEffect(() => {
-    if (shouldAutoPlayNext && verses.length > 0) {
-      setShouldAutoPlayNext(false);
-      setIsPlayingAudio(true);
-      const timer = setTimeout(() => {
-        speakSequential(0);
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-  }, [verses, shouldAutoPlayNext]);
-
-  // Clean speech synthesis if component unmounts
-  useEffect(() => {
-    return () => {
-      window.speechSynthesis?.cancel();
-    };
   }, []);
 
-  // Load verses from 100% offline Local SQLite Simulator
-  const loadChapterVerses = async (book: BibleBook, chapterNum: number) => {
+  // Listen to Auth State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthLoading(false);
+      
+      if (firebaseUser) {
+        setAuthError(null);
+        setupUserSnapshotListeners(firebaseUser.uid);
+      } else {
+        setFavorites([]);
+        setNotes([]);
+        setReadingHistory([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Sync state variables with current theme preference
+  useEffect(() => {
+    if (themeMode === 'sepia') {
+      document.documentElement.classList.add('theme-sepia');
+      document.body.classList.add('theme-sepia');
+    } else {
+      document.documentElement.classList.remove('theme-sepia');
+      document.body.classList.remove('theme-sepia');
+    }
+  }, [themeMode]);
+
+  // Load and cache chapter verses on Book or Chapter selector changes
+  useEffect(() => {
+    if (!sqliteDbReady) return;
+    
+    let active = true;
     setLoadingVerses(true);
-    setVerseError(null);
-    setSelectedVerseNum(null);
-    window.speechSynthesis?.cancel();
-    setIsPlayingAudio(false);
-    setCurrentlySpeakingVerseIndex(-1);
+    setSelectedVerseId(null);
+    setChapterSummary(null); // Clear active summary cache
+
+    const loadVerses = async () => {
+      try {
+        if (selectedTranslation === 'local') {
+          const verses = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
+          if (active) setChapterVerses(verses);
+        } else {
+          const verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, selectedChapter, selectedTranslation);
+          if (active) setChapterVerses(verses);
+        }
+      } catch (err) {
+        console.warn("Failed to load online chapter scriptures, falling back to local:", err);
+        // Fallback to local offline verses
+        const verses = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
+        if (active) setChapterVerses(verses);
+      } finally {
+        if (active) setLoadingVerses(false);
+      }
+    };
+
+    loadVerses();
+
+    return () => {
+      active = false;
+    };
+  }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation]);
+
+  // Read subcollections reactively from Firestore
+  const setupUserSnapshotListeners = (uid: string) => {
+    // 1. Favorite Bookmarks
+    const bookmarksRef = collection(db, 'users', uid, 'bookmarks');
+    const unsubscribeBookmarks = onSnapshot(bookmarksRef, (snapshot) => {
+      const favList: FavoriteVerse[] = [];
+      snapshot.forEach((docSnap) => {
+        favList.push(docSnap.data() as FavoriteVerse);
+      });
+      setFavorites(favList);
+    }, (error) => {
+      console.error("Bookmarks sync error:", error);
+    });
+
+    // 2. Spiritual Verse Study Notes
+    const notesRef = collection(db, 'users', uid, 'notes');
+    const unsubscribeNotes = onSnapshot(notesRef, (snapshot) => {
+      const notesList: VerseNote[] = [];
+      snapshot.forEach((docSnap) => {
+        notesList.push(docSnap.data() as VerseNote);
+      });
+      setNotes(notesList);
+    }, (error) => {
+      console.error("Notes sync error:", error);
+    });
+
+    // 3. User Chapter Reading History Logs
+    const historyRef = collection(db, 'users', uid, 'history');
+    const unsubscribeHistory = onSnapshot(historyRef, (snapshot) => {
+      const historyList: ReadingHistory[] = [];
+      snapshot.forEach((docSnap) => {
+        historyList.push(docSnap.data() as ReadingHistory);
+      });
+      setReadingHistory(historyList);
+    }, (error) => {
+      console.error("Reading history sync:", error);
+    });
+
+    return () => {
+      unsubscribeBookmarks();
+      unsubscribeNotes();
+      unsubscribeHistory();
+    };
+  };
+
+  // Auth Submit Handlers
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    if (!email || !password) {
+      setAuthError("S'il vous plaît, fournissez un email et un mot de passe.");
+      return;
+    }
 
     try {
-      // Query SQLite database simulated on-device index
-      const dbVerses = querySqliteChapter(book.id, book.name, chapterNum);
-      if (dbVerses && dbVerses.length > 0) {
-        setVerses(dbVerses);
-        addToHistory(book, chapterNum);
+      if (authMode === 'login') {
+        await signInWithEmailAndPassword(auth, email, password);
       } else {
-        throw new Error("Aucun verset retourné par le moteur SQLite.");
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(userCredential.user, {
+          displayName: displayName || "Pèlerin de Foi"
+        });
+        
+        // Setup default user profile document in Firestore
+        await setDoc(doc(db, 'users', userCredential.user.uid), {
+          uid: userCredential.user.uid,
+          email: email,
+          displayName: displayName || "Pèlerin de Foi",
+          createdAt: new Date().toISOString()
+        });
       }
     } catch (err: any) {
       console.error(err);
-      setVerseError(err.message || "Erreur de lecture locale SQL.");
-    } finally {
-      setLoadingVerses(false);
+      let errorFriendly = "Une erreur s'est produite lors de l'authentification.";
+      if (err.code === 'auth/user-not-found') errorFriendly = "Aucun compte trouvé avec cet email.";
+      else if (err.code === 'auth/wrong-password') errorFriendly = "Mot de passe de compte incorrect.";
+      else if (err.code === 'auth/email-already-in-use') errorFriendly = "Cet email est déjà lié à un compte existant.";
+      else if (err.code === 'auth/weak-password') errorFriendly = "Votre mot de passe doit faire au moins 6 caractères.";
+      setAuthError(errorFriendly);
     }
   };
 
-  const addToHistory = (book: BibleBook, chapterNum: number) => {
-    const newHistoryEntry: ReadingHistory = {
-      book_id: book.id,
-      book_name: book.name,
-      chapter: chapterNum,
-      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-    };
-    
-    setReadingHistory(prev => {
-      const filtered = prev.filter(h => !(h.book_id === book.id && h.chapter === chapterNum));
-      const updated = [newHistoryEntry, ...filtered].slice(0, 8); // Keep last 8
-      localStorage.setItem('bible_reading_history', JSON.stringify(updated));
-      return updated;
-    });
+  const handleGoogleSignIn = async () => {
+    setAuthError(null);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user) {
+        // Init profile document if not existing
+        const userDocRef = doc(db, 'users', result.user.uid);
+        const docSnap = await getDoc(userDocRef);
+        if (!docSnap.exists()) {
+          await setDoc(userDocRef, {
+            uid: result.user.uid,
+            email: result.user.email || '',
+            displayName: result.user.displayName || "Pèlerin de Foi",
+            createdAt: new Date().toISOString()
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAuthError("Connexion avec l'authentification Google impossible ou annulée.");
+    }
   };
 
-  // Toggle favorite state
-  const handleToggleFavorite = (verse: Verse) => {
-    const exists = favorites.find(f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse);
-    let updated: FavoriteVerse[] = [];
-    
-    if (exists) {
-      updated = favorites.filter(f => !(f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse));
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("Signout error:", err);
+    }
+  };
+
+  // Navigating chapter index helpers
+  const handleNextChapter = () => {
+    if (selectedChapter < selectedBook.chapters_count) {
+      setSelectedChapter(selectedChapter + 1);
     } else {
-      const fav: FavoriteVerse = {
-        book_id: verse.book_id,
-        book_name: verse.book_name,
-        chapter: verse.chapter,
-        verse: verse.verse,
-        text: verse.text,
-        added_at: new Date().toLocaleDateString('fr-FR')
+      // Go to next book
+      const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
+      if (currentIdx < BOOKS.length - 1) {
+        setSelectedBook(BOOKS[currentIdx + 1]);
+        setSelectedChapter(1);
+      }
+    }
+  };
+
+  const handlePreviousChapter = () => {
+    if (selectedChapter > 1) {
+      setSelectedChapter(selectedChapter - 1);
+    } else {
+      // Go to prev book
+      const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
+      if (currentIdx > 0) {
+        const prevBook = BOOKS[currentIdx - 1];
+        setSelectedBook(prevBook);
+        setSelectedChapter(prevBook.chapters_count);
+      }
+    }
+  };
+
+  // Synchronize reading log state, marking current chapter as completed
+  const markCurrentChapterRead = async () => {
+    if (!user) return;
+    
+    // Check if already exist
+    const isAlreadyRead = readingHistory.some(
+      h => h.book_id === selectedBook.id && h.chapter === selectedChapter
+    );
+    if (isAlreadyRead) return;
+
+    try {
+      const historyItem: ReadingHistory = {
+        book_id: selectedBook.id,
+        book_name: selectedBook.name,
+        chapter: selectedChapter,
+        timestamp: new Date().toISOString()
       };
-      updated = [fav, ...favorites];
+      
+      const docId = `history_${selectedBook.id}_${selectedChapter}`;
+      await setDoc(doc(db, 'users', user.uid, 'history', docId), historyItem);
+    } catch (error) {
+      console.error("Error saving reading progress record:", error);
     }
-    
-    setFavorites(updated);
-    localStorage.setItem('bible_favorites', JSON.stringify(updated));
   };
 
-  // Save or delete notes for a verse
-  const handleSaveNote = (verse: Verse, noteText: string) => {
-    let updated: VerseNote[] = [];
-    const index = notes.findIndex(n => n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse);
+  // Bookmark toggling helper
+  const handleToggleFavorite = async (verse: Verse) => {
+    if (!user) return;
     
-    if (noteText.trim() === "") {
-      // Delete the note
-      updated = notes.filter(n => !(n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse));
-    } else {
-      if (index >= 0) {
-        // Update existing note
-        updated = [...notes];
-        updated[index] = {
-          ...updated[index],
-          note: noteText,
-          updated_at: new Date().toLocaleDateString('fr-FR')
-        };
+    const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+    const favorited = favorites.some(
+      f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse
+    );
+
+    try {
+      const docRef = doc(db, 'users', user.uid, 'bookmarks', docId);
+      if (favorited) {
+        await deleteDoc(docRef);
       } else {
-        // Add new note
-        const newNote: VerseNote = {
+        const favoriteItem: FavoriteVerse = {
           book_id: verse.book_id,
           book_name: verse.book_name,
           chapter: verse.chapter,
           verse: verse.verse,
-          note: noteText,
-          updated_at: new Date().toLocaleDateString('fr-FR')
+          text: verse.text,
+          added_at: new Date().toISOString()
         };
-        updated = [newNote, ...notes];
+        await setDoc(docRef, favoriteItem);
       }
+    } catch (error) {
+      console.error("Could not toggle favorite status:", error);
     }
-    
-    setNotes(updated);
-    localStorage.setItem('bible_notes', JSON.stringify(updated));
   };
 
-  // Trigger Gemini Verse Explainer
-  const handleExplainVerse = async (verse: Verse) => {
-    setSelectedVerseForExplain(verse);
-    setExplanationText("");
-    setExplainLoading(true);
+  // Save Verse Note helper
+  const handleSaveSpiritualNote = async (verse: Verse, textNote: string, audioBase64?: string) => {
+    if (!user) return;
+
+    const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+    const docRef = doc(db, 'users', user.uid, 'notes', docId);
+
+    try {
+      const existingNote = notes.find(n => n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse);
+      let targetAudio = existingNote?.audio;
+
+      if (audioBase64 === '') {
+        targetAudio = undefined;
+      } else if (audioBase64) {
+        targetAudio = audioBase64;
+      }
+
+      if (textNote.trim() === '' && !targetAudio) {
+        await deleteDoc(docRef);
+      } else {
+        const noteItem: VerseNote = {
+          book_id: verse.book_id,
+          book_name: verse.book_name,
+          chapter: verse.chapter,
+          verse: verse.verse,
+          note: textNote,
+          updated_at: new Date().toISOString()
+        };
+        if (targetAudio) {
+          noteItem.audio = targetAudio;
+        }
+        await setDoc(docRef, noteItem);
+      }
+    } catch (error) {
+      console.error("Could not save note:", error);
+    }
+  };
+
+  // Single Verse Explain via AI exegesis endpoint
+  const handleExplainVerse = async (verse: Verse, tab: 'exegesis' | 'compare' = 'exegesis') => {
+    setActiveExplainVerse(verse);
+    setExegesisTab(tab);
+    setVerseExplanation(null);
+    setLoadingExplanation(true);
     
     try {
-      const res = await fetch('/api/gemini/explain', {
+      const response = await fetch('/api/gemini/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          verseText: verse.text, 
+        body: JSON.stringify({
+          verseText: verse.text,
           reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
           bookName: verse.book_name
         })
       });
 
-      if (!res.ok) {
-        throw new Error("Erreur serveur.");
-      }
-
-      const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      setExplanationText(data.explanation);
-    } catch (error: any) {
-      setExplanationText(`⚠️ Erreur : ${error.message || "Impossible de générer l'analyse."}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Impossible de joindre l'interlocuteur d'étude.");
+      
+      setVerseExplanation(data.explanation || "Exégèse non générée par le modèle théologique.");
+    } catch (err: any) {
+      console.error("Bible Explanation query fails:", err);
+      setVerseExplanation(`Échec d'exégèse : ${err.message || 'Problème de connexion réseau.'}`);
     } finally {
-      setExplainLoading(false);
+      setLoadingExplanation(false);
     }
   };
 
-  // Trigger Gemini Chapter Summarizer
-  const handleChapterSummarize = async () => {
-    if (verses.length === 0) return;
-    setChapterSummary("");
-    setSummaryLoading(true);
+  // Chapter Summary trigger via Gemini API
+  const handleSummarizeChapter = async () => {
+    setLoadingSummary(true);
+    setChapterSummary(null);
 
     try {
-      const res = await fetch('/api/gemini/summarize', {
+      // Format current chapter payload
+      const formattedVerses = chapterVerses.map(v => ({
+        verse: v.verse,
+        text: v.text
+      }));
+
+      const response = await fetch('/api/gemini/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           bookName: selectedBook.name,
           chapterNum: selectedChapter,
-          verses: verses
+          verses: formattedVerses
         })
       });
 
-      if (!res.ok) {
-        throw new Error("Erreur de connexion.");
-      }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Erreur réseau.");
 
-      const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      setChapterSummary(data.summary);
-    } catch (error: any) {
-      setChapterSummary(`⚠️ Erreur : ${error.message || "Impossible d'obtenir la synthèse."}`);
+      setChapterSummary(data.summary || "Aucun résumé n'a pu être structuré.");
+      // Auto log progress of study when summarized
+      markCurrentChapterRead();
+    } catch (err: any) {
+      console.error("Summary failed:", err);
+      setChapterSummary(`Impossible de résumer le chapitre de ${selectedBook.name}: ` + (err.message || "Problème d'API."));
     } finally {
-      setSummaryLoading(false);
+      setLoadingSummary(false);
     }
   };
 
-  // Handle Strong Lexicon code lookup
-  const handleStrongLookup = (code: string) => {
-    const entry = MAPPED_STRONG_ENTRIES_DIC[code] || STRONG_ENTRIES[code];
-    if (entry) {
-      setSelectedStrong(entry);
-    } else {
-      setSelectedStrong({
-        code: code,
-        language: code.startsWith('H') ? 'hebrew' : 'greek',
-        word: code.startsWith('H') ? 'דָּבָר' : 'λόγος',
-        transliteration: "recherche...",
-        definition: `Dictionnaire Strong dictionnaire pour le code [${code}]. Demandez à l'assistant Gemini d'effectuer une analyse étymologique complète en cliquant sur le bouton ci-dessous.`,
-        usage: "Utilisé dans de nombreuses bénédictions théologiques pour refléter la volonté divine."
-      });
-    }
-    setActiveTab('lexicon');
+  // Strong code interactive selection callback
+  const handleStrongSelectionCode = (code: string) => {
+    setTargetedStrongCode(code);
+    setActiveTab('dictionary'); // Quick redirect to Lexicon Lookup Tab
   };
 
-  // Standard Voice Speaking Player using HTML5 SpeechSynthesis
-  const handlePlayTTS = () => {
-    if (verses.length === 0) return;
+  // Web Speech API Text-to-Speech (TTS) Integration
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
+  const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const currentVerseToSpeakRef = useRef<number>(-1);
 
-    if (isPlayingAudio) {
-      window.speechSynthesis.cancel();
-      setIsPlayingAudio(false);
-      setCurrentlySpeakingVerseIndex(-1);
-      return;
-    }
-
-    setIsPlayingAudio(true);
-    speakSequential(0);
-  };
-
-  const speakSequential = (index: number) => {
-    if (index >= verses.length) {
-      if (isContinuousAudio) {
-        setSlideDirection('forward'); // Continuous reading always advances forward
-        if (selectedChapter < selectedBook.chapters_count) {
-          const nextChap = selectedChapter + 1;
-          setSelectedChapter(nextChap);
-          setNavChapter(nextChap);
-          setShouldAutoPlayNext(true);
-        } else {
-          const currentIndex = BOOKS.findIndex(b => b.id === selectedBook.id);
-          if (currentIndex < BOOKS.length - 1) {
-            const nextBook = BOOKS[currentIndex + 1];
-            setSelectedBook(nextBook);
-            setSelectedChapter(1);
-            setNavBook(nextBook);
-            setNavChapter(1);
-            setNavTestament(nextBook.testament);
-            setShouldAutoPlayNext(true);
-          } else {
-            setIsPlayingAudio(false);
-            setCurrentlySpeakingVerseIndex(-1);
-          }
-        }
-      } else {
-        setIsPlayingAudio(false);
-        setCurrentlySpeakingVerseIndex(-1);
+  // Clean up speech synthesis when navigating away or selecting another chapter
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
       }
+    };
+  }, [selectedBook, selectedChapter, activeTab]);
+
+  const speakVerse = (index: number) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    if (index < 0 || index >= chapterVerses.length) {
+      stopSpeaking();
       return;
     }
 
-    setCurrentlySpeakingVerseIndex(index);
-    const textToRead = `Verset ${verses[index].verse}. ${verses[index].text.replace(/\[[HG]\d+\]/g, '')}`;
-    const utterance = new SpeechSynthesisUtterance(textToRead);
+    window.speechSynthesis.cancel();
+    setCurrentSpeakingVerseIndex(index);
+    currentVerseToSpeakRef.current = index;
+
+    const verseObj = chapterVerses[index];
+    // Remove Strong codes from the spoken reading
+    const cleanText = verseObj.text.replace(/\[[HG]\d+\]/g, '').trim();
+    const textToSpeak = `Verset ${verseObj.verse}. ${cleanText}`;
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.lang = 'fr-FR';
-    
-    // Set a calm, slow rate (0.95) for a majestic and solemn lecture
-    utterance.rate = ttsRate;
-    
-    // Select French male voice according to exclusive preference criteria
+    utterance.rate = playbackRate;
+
+    // Dynamically look up French voice for Louis Segond French reading
     const voices = window.speechSynthesis.getVoices();
-    const frVoices = voices.filter(v => {
-      const languageCode = v.lang.toLowerCase();
-      return languageCode === 'fr-fr' || languageCode === 'fr' || languageCode.startsWith('fr-') || languageCode.startsWith('fr_');
-    });
-
-    let selectedVoice = null;
-    let isExplicitlyMale = false;
-
-    if (frVoices.length > 0) {
-      // 1. Exclusive Priority: Select known male voices/names or male-gendered system vocalizers
-      selectedVoice = frVoices.find(v => {
-        const nameLower = v.name.toLowerCase();
-        const isMaleGender = (v as any).gender === 'male' || (v as any).gender === 'MALE' || (v as any).gender === 'Male';
-        if (isMaleGender) return true;
-
-        const matchesMaleKeywords = 
-          nameLower.includes('male') || 
-          nameLower.includes('homme') || 
-          nameLower.includes('thomas') || 
-          nameLower.includes('nicolas') ||
-          nameLower.includes('paul') ||
-          nameLower.includes('henri') ||
-          nameLower.includes('claude') ||
-          nameLower.includes('daniel') ||
-          nameLower.includes('yannick') ||
-          nameLower.includes('julien') ||
-          nameLower.includes('gilles') ||
-          nameLower.includes('gérard') ||
-          nameLower.includes('bernard') ||
-          nameLower.includes('alain') ||
-          nameLower.includes('pierre') ||
-          nameLower.includes('jean') ||
-          nameLower.includes('marc') ||
-          nameLower.includes('luc') ||
-          nameLower.includes('michel') ||
-          nameLower.includes('françois') ||
-          nameLower.includes('francois') ||
-          nameLower.includes('jacques') ||
-          nameLower.includes('antoine') ||
-          nameLower.includes('guy') ||
-          nameLower.includes('charles') ||
-          nameLower.includes('robert') ||
-          nameLower.includes('louis') ||
-          nameLower.includes('gabriel') ||
-          nameLower.includes('olivier') ||
-          nameLower.includes('philippe') ||
-          nameLower.includes('yab') || // Google local male
-          nameLower.includes('frg') || // Google local male
-          nameLower.includes('frd') || // Google local male
-          nameLower.includes('fio') || // Google local male
-          nameLower.includes('-b') ||  // Wavenet-B / Standard-B
-          nameLower.includes('-d');   // Wavenet-D / Standard-D
-          
-        return matchesMaleKeywords;
-      });
-
-      if (selectedVoice) {
-        isExplicitlyMale = true;
-      }
-
-      // 2. Strict Filter: If no named male voice is found, filter out and ban any explicitly female vocals
-      if (!selectedVoice) {
-        selectedVoice = frVoices.find(v => {
-          const nameLower = v.name.toLowerCase();
-          const matchesFemaleKeywords = 
-            nameLower.includes('female') ||
-            nameLower.includes('femme') ||
-            nameLower.includes('girl') ||
-            nameLower.includes('woman') ||
-            nameLower.includes('hortense') ||
-            nameLower.includes('julie') ||
-            nameLower.includes('celine') ||
-            nameLower.includes('céline') ||
-            nameLower.includes('lea') ||
-            nameLower.includes('léa') ||
-            nameLower.includes('berenice') ||
-            nameLower.includes('bérénice') ||
-            nameLower.includes('harmonie') ||
-            nameLower.includes('chantal') ||
-            nameLower.includes('gwen') ||
-            nameLower.includes('caroline') ||
-            nameLower.includes('audrey') ||
-            nameLower.includes('aurelie') ||
-            nameLower.includes('aurélie') ||
-            nameLower.includes('charlotte') ||
-            nameLower.includes('marianne') ||
-            nameLower.includes('sarah') ||
-            nameLower.includes('lucie') ||
-            nameLower.includes('marie') ||
-            nameLower.includes('valérie') ||
-            nameLower.includes('valerie') ||
-            nameLower.includes('sandrine') ||
-            nameLower.includes('isabelle') ||
-            nameLower.includes('virginie') ||
-            nameLower.includes('corinne') ||
-            nameLower.includes('sylvie') ||
-            nameLower.includes('nathalie') ||
-            nameLower.includes('amelie') ||
-            nameLower.includes('amélie') ||
-            nameLower.includes('claudine') ||
-            nameLower.includes('françoise') ||
-            nameLower.includes('francoise') ||
-            nameLower.includes('michele') ||
-            nameLower.includes('michèle') ||
-            nameLower.includes('zira') ||
-            nameLower.includes('susan') ||
-            nameLower.includes('karen') ||
-            nameLower.includes('hazel') ||
-            nameLower.includes('moira') ||
-            nameLower.includes('tessa') ||
-            nameLower.includes('veena') ||
-            nameLower.includes('samantha') ||
-            nameLower.includes('vsk') || // Google local female
-            nameLower.includes('vsp') || // Google local female
-            nameLower.includes('vsc') || // Google local female
-            nameLower.includes('vsd') || // Google local female
-            nameLower.includes('google français') || // default Google female
-            nameLower.includes('google francais'); // default Google female
-          return !matchesFemaleKeywords;
-        });
-      }
-
-      // 3. Fallback: If only a generic voice is installed, use it with a very low pitch (0.58) to force standard 
-      // vocal cords frequencies to align with a very grave, resonant baritone/masculine lectoral voice.
-      if (!selectedVoice) {
-        selectedVoice = frVoices[0];
-      }
-    }
-
-    // Adapt pitch strictly based on voice nature:
-    if (isExplicitlyMale) {
-      utterance.pitch = 0.84; // Dignified solemn male pitch
-      console.log(`[TTS] Voix d'homme explicite sélectionnée : "${selectedVoice?.name}". Pitch appliqué : 0.84 (Grave liturgique).`);
-    } else {
-      utterance.pitch = 0.58; // Radical transformation to voice of a deep male reader
-      console.log(`[TTS] Aucune voix masculine explicite détectée. Voix de contournement utilisée : "${selectedVoice?.name}". Pitch appliqué : 0.58 (Baritonisation forcée).`);
-    }
-
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
+    const frenchVoice = voices.find(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR')) || null;
+    if (frenchVoice) {
+      utterance.voice = frenchVoice;
     }
 
     utterance.onend = () => {
-      speakSequential(index + 1);
+      // Move consecutively to next verse if we are still active on index
+      if (currentVerseToSpeakRef.current === index) {
+        speakVerse(index + 1);
+      }
     };
 
-    utterance.onerror = () => {
-      setIsPlayingAudio(false);
-      setCurrentlySpeakingVerseIndex(-1);
+    utterance.onerror = (e) => {
+      console.error("Speech Synthesis Utterance Error:", e);
+      if (e.error !== 'interrupted' && currentVerseToSpeakRef.current === index) {
+        stopSpeaking();
+      }
     };
 
-    speechUtteranceRef.current = utterance;
     window.speechSynthesis.speak(utterance);
+    setIsSpeaking(true);
+    setIsPaused(false);
   };
 
-  const handleStopTTS = () => {
+  const pauseSpeaking = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.pause();
+    setIsPaused(true);
+  };
+
+  const resumeSpeaking = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.resume();
+    setIsPaused(false);
+  };
+
+  const stopSpeaking = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    setIsPlayingAudio(false);
-    setCurrentlySpeakingVerseIndex(-1);
+    setIsSpeaking(false);
+    setIsPaused(false);
+    setCurrentSpeakingVerseIndex(-1);
+    currentVerseToSpeakRef.current = -1;
   };
 
-  // Send message in GPT chat
-  const handleSendChatMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!chatMessage.trim()) return;
+  const handlePlayPause = () => {
+    if (isSpeaking) {
+      if (isPaused) {
+        resumeSpeaking();
+      } else {
+        pauseSpeaking();
+      }
+    } else {
+      let startIndex = 0;
+      if (selectedVerseId) {
+        const parts = selectedVerseId.split('_');
+        if (parts.length === 3) {
+          const verseNum = Number(parts[2]);
+          const foundIdx = chapterVerses.findIndex(v => v.verse === verseNum);
+          if (foundIdx !== -1) {
+            startIndex = foundIdx;
+          }
+        }
+      }
+      speakVerse(startIndex);
+    }
+  };
 
-    const userMsg = chatMessage.trim();
-    setChatHistory(prev => [...prev, { role: 'user', content: userMsg }]);
-    setChatMessage("");
-    setChatLoading(true);
+  // Conversational Assistant Handler
+  const handleSendChatMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setLoadingChat(true);
+
+    const updatedHistory = [...chatMessages];
+    setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
 
     try {
-      const res = await fetch('/api/gemini/chat', {
+      // Prepare history formatted array for the backend
+      const formattedHistory = updatedHistory.map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      const response = await fetch('/api/gemini/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: userMsg,
-          history: chatHistory.slice(-8)
+          history: formattedHistory
         })
       });
 
-      if (!res.ok) {
-        throw new Error("L'assistant est momentanément injoignable.");
-      }
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Échec d'assistant.");
 
-      const data = await res.json();
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      setChatHistory(prev => [...prev, { role: 'model', content: data.reply }]);
-    } catch (error: any) {
-      setChatHistory(prev => [...prev, { role: 'model', content: `⚠️ Erreur : ${error.message || "Impossible de dialoguer avec l'assistant."}` }]);
+      setChatMessages(prev => [...prev, { role: 'model', content: data.reply || "Je n'ai pas pu répondre à cette requête spirituelle." }]);
+    } catch (err: any) {
+      console.error("Chat error:", err);
+      setChatMessages(prev => [...prev, { role: 'model', content: `Désolé, j'ai rencontré un obstacle céleste lors du traitement de votre question : ${err.message || 'Instabilité réseau.'}` }]);
     } finally {
-      setChatLoading(false);
+      setLoadingChat(false);
     }
   };
 
-  // Search verses locally
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    if (!query.trim()) {
-      setSearchResults([]);
-      return;
-    }
-    const results = searchLocalVerses(query);
-    setSearchResults(results);
-  };
-
-  // Navigate to read a specific verse
-  const navigateToVerse = (bookId: number, chapterNum: number) => {
-    const book = BOOKS.find(b => b.id === bookId);
-    if (book) {
-      setSelectedBook(book);
+  // Reading plans navigation integration helper
+  const handleNavigateChallengeToReader = (bookId: number, chapterNum: number) => {
+    const targetBook = BOOKS.find(b => b.id === bookId);
+    if (targetBook) {
+      setSelectedBook(targetBook);
       setSelectedChapter(chapterNum);
-      setNavBook(book);
-      setNavChapter(chapterNum);
-      setNavTestament(book.testament);
-      setIsNavigating(false);
       setActiveTab('read');
     }
   };
 
-  const getCategoryLabel = (category: BibleBook['category']) => {
-    switch (category) {
-      case 'pentateuque': return 'Pentateuque';
-      case 'historique': return 'Histoire';
-      case 'poetique': return 'Sagesse & Poésie';
-      case 'prophetique': return 'Prophétie';
-      case 'evangile': return 'Évangile';
-      case 'epitre': return 'Épître';
-      case 'apocalypse': return 'Révélation';
-    }
+  // Check if a specific verse ID matches notes and bookmarks
+  const getVerseHasBookmark = (v: Verse) => {
+    return favorites.some(f => f.book_id === v.book_id && f.chapter === v.chapter && f.verse === v.verse);
   };
 
-  const getCategoryColor = (category: BibleBook['category']) => {
-    switch (category) {
-      case 'pentateuque': return 'bg-luxury-button-bg text-amber-500 border-luxury-border';
-      case 'historique': return 'bg-luxury-button-bg text-yellow-500 border-luxury-border';
-      case 'poetique': return 'bg-luxury-button-bg text-luxury-gold border-luxury-gold/30 shadow-gold-glow';
-      case 'prophetique': return 'bg-luxury-button-bg text-orange-500 border-luxury-border';
-      case 'evangile': return 'bg-luxury-button-bg text-teal-400 border-luxury-border';
-      case 'epitre': return 'bg-luxury-button-bg text-sky-400 border-luxury-border';
-      case 'apocalypse': return 'bg-luxury-button-bg text-rose-500 border-luxury-border';
-    }
+  const getVerseHasNote = (v: Verse): { hasNote: boolean; text: string; audio?: string } => {
+    const found = notes.find(n => n.book_id === v.book_id && n.chapter === v.chapter && n.verse === v.verse);
+    return {
+      hasNote: found !== undefined,
+      text: found ? found.note : '',
+      audio: found ? found.audio : undefined
+    };
   };
 
-  // Map strong word extractors for helper words
-  const extractStrongWords = () => {
-    if (!selectedVerseForExplain) return [];
-    const rx = /\[(H\d+|G\d+)\]/g;
-    const words: { word: string; code: string }[] = [];
-    let match;
-    while ((match = rx.exec(selectedVerseForExplain.text)) !== null) {
-      const code = match[1];
-      const entry = STRONG_ENTRIES[code];
-      const word = entry ? entry.word : (code.startsWith('H') ? 'דָּבָר' : 'λόγος');
-      if (!words.some(w => w.code === code)) {
-        words.push({ word, code });
-      }
-    }
-    return words;
-  };
-
+  // Splash Loading database initialization interface
   if (!sqliteDbReady) {
     return (
-      <div className="min-h-screen bg-[#050403] text-luxury-text-primary flex flex-col items-center justify-center p-6 font-sans">
-        <div className="max-w-md w-full bg-[#12100c] border border-luxury-gold/30 rounded-3xl p-8 shadow-2xl relative overflow-hidden text-center space-y-6 shadow-gold-glow">
-          {/* Decorative sacred lines */}
-          <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-transparent via-luxury-gold to-transparent"></div>
-          
-          <div className="inline-flex p-3.5 bg-luxury-surface rounded-2xl border border-luxury-gold/20 text-luxury-gold">
-            <BookMarked className="w-8 h-8 animate-pulse text-luxury-gold" />
-          </div>
-
-          <div className="space-y-2">
-            <h2 className="font-serif italic text-2xl text-luxury-text-verse tracking-wide">
-              Initialisation du Sanctuaire
-            </h2>
-            <p className="text-xs text-luxury-text-muted font-mono uppercase tracking-[0.15em]">
-              BIBLE PROFONDE · SQLITE DATABASE
-            </p>
-          </div>
-
-          {/* SQLite Progress Visualization */}
-          <div className="space-y-4 pt-4">
-            <div className="flex justify-between items-center text-[10px] font-mono text-luxury-text-muted">
-              <span>IMPORTATION DU BUNDLE JSON...</span>
-              <span className="text-luxury-gold font-extrabold">{sqliteProgress}%</span>
-            </div>
-            
-            {/* Elegant luxury progress bar */}
-            <div className="h-2.5 bg-[#050403] border border-luxury-border rounded-full overflow-hidden p-0.5">
-              <div 
-                className="h-full bg-gradient-to-r from-luxury-gold to-amber-500 rounded-full transition-all duration-300"
-                style={{ width: `${sqliteProgress}%` }}
-              ></div>
-            </div>
-
-            <p className="text-[11px] font-serif italic text-luxury-gold-light min-h-[36px] pt-1 leading-relaxed">
-              {sqliteStatusText || "Préparation du moteur relationnel SQLite..."}
-            </p>
-          </div>
-
-          <div className="w-16 h-[1px] bg-gradient-to-r from-transparent via-luxury-gold/40 to-transparent mx-auto"></div>
-          
-          <p className="text-[10px] text-luxury-text-muted font-sans leading-relaxed">
-            Note : Cette opération charge les 66 livres et l'index de concordance de Louis Segond dans la table SQLite de l'appareil. Le mode de lecture fonctionnera à 100% hors ligne.
-          </p>
+      <div className="min-h-screen bg-[#050403] flex flex-col items-center justify-center p-6 text-center select-none text-[#e8e0d0]">
+        <div className="relative mb-6">
+          <div className="w-16 h-16 rounded-full border-t-2 border-r-2 border-[#c9a84c] animate-spin"></div>
+          <BookOpen className="w-8 h-8 text-[#c9a84c] absolute inset-0 m-auto animate-pulse" />
+        </div>
+        <h2 className="text-xl font-serif tracking-[0.12em] text-[#c9a84c] uppercase font-extrabold">BIBLE MOBILE</h2>
+        <p className="text-xs text-[#6b6355] mt-2 tracking-wider font-mono max-w-sm leading-relaxed">
+          {dbInitText}
+        </p>
+        <div className="w-48 h-1 bg-[#1a1712] border border-[#2e2a1e] rounded-full overflow-hidden mt-4">
+          <div 
+            className="h-full bg-gradient-to-r from-[#c9a84c] to-[#e8c97a] transition-all duration-300"
+            style={{ width: `${dbInitProgress}%` }}
+          ></div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-luxury-bg-deep text-luxury-text-primary py-4 px-2 sm:px-6 md:py-8 font-sans transition-colors duration-300">
-      
-      {/* Premium Dark Luxury Header Banner - Hidden in Focus Mode */}
-      {!isActualFocusMode && (
-        <header className="max-w-7xl mx-auto mb-8 text-center space-y-2 animate-fade-in">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-luxury-button-bg rounded-lg border border-luxury-gold/20">
-            <span className="w-1.5 h-1.5 rounded-full bg-luxury-gold animate-ping"></span>
-            <span className="font-mono text-[9px] tracking-[0.2em] uppercase text-luxury-gold font-extrabold">STUDIUM SACRUM</span>
-          </div>
-          <h1 className="font-serif italic text-4xl sm:text-5xl lg:text-6xl text-luxury-text-verse tracking-wide text-shadow-gold">
-            Bible Profonde
-          </h1>
-          <p className="text-luxury-text-muted text-xs sm:text-sm font-sans tracking-[0.05em] max-w-xl mx-auto">
-            Dictionnaire Strong annoté, synthèses exégétiques par l'intelligence artificielle Gemini & Cabinet d'études théologiques
-          </p>
-          <div className="w-24 h-[1px] bg-gradient-to-r from-transparent via-luxury-gold/50 to-transparent mx-auto mt-4"></div>
-        </header>
-      )}
+  // Auth Loading state splash screen
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#050403] flex flex-col items-center justify-center p-6 text-center select-none text-[#e8e0d0]">
+        <div className="w-8 h-8 rounded-full border-b border-r border-[#c9a84c] animate-spin mb-4"></div>
+        <p className="text-xs text-[#6b6355] tracking-widest font-mono uppercase">Vérification de l'alliance...</p>
+      </div>
+    );
+  }
 
-      {/* Dynamic Alert Banner if API Key is not loaded - Hidden in Focus Mode */}
-      {!isActualFocusMode && !process.env.GEMINI_API_KEY && (
-        <div className="max-w-7xl mx-auto mb-6 bg-luxury-surface border border-luxury-border text-luxury-text-primary px-5 py-4 rounded-xl flex flex-col sm:flex-row items-center justify-between text-xs gap-3">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 bg-luxury-gold rounded-full animate-ping"></span>
-            <span>
-              <strong>Mode Écrivain :</strong> L'analyse de l'IA utilise l'accès cloud d'émulation. Ajoutez la variable <code>GEMINI_API_KEY</code> dans vos secrets pour débloquer la réactivité maximale.
-            </span>
-          </div>
-          <span className="font-mono text-[10px] text-luxury-gold-light bg-luxury-button-bg px-2.5 py-1 rounded border border-luxury-gold/20">
-            CONNECTÉ AU CLOUD
-          </span>
-        </div>
-      )}
+  // Non-authenticated luxury portal screen
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#050403] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-[#12100c] border border-[#2e2a1e] p-8 rounded-[2rem] shadow-gold-glow relative overflow-hidden text-center">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
+          <div className="absolute -bottom-10 -left-10 w-36 h-36 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
 
-      {/* Main Responsive Grid layout (Left: Mobile interface / Right: Desktop Large Interactive Assistant Desk) */}
-      <div className={`max-w-7xl mx-auto grid grid-cols-1 ${isActualFocusMode ? 'grid-cols-1' : 'lg:grid-cols-12'} gap-8 items-start`}>
-        
-        {/* ========================================================= */}
-        {/* LEFT COLUMN: THE PHONE EMULATOR (VIBRANT MODEL VIEW)       */}
-        {/* ========================================================= */}
-        <div className={`${isActualFocusMode ? 'col-span-12 flex justify-center w-full' : 'lg:col-span-5 xl:col-span-5 flex justify-center'}`}>
-          <div className={`w-full transition-all duration-300 flex flex-col overflow-hidden shadow-gold-glow ${
-            isActualFocusMode 
-              ? 'max-w-[760px] h-[820px] bg-luxury-bg rounded-2xl border border-luxury-border p-1' 
-              : 'max-w-[390px] h-[780px] bg-luxury-bg rounded-[3.2rem] p-3 border-[10px] border-simulator-border relative'
-          }`}>
-            
-            {/* Phone Speaker & Notch - Hidden in Focus Mode */}
-            {!isActualFocusMode && (
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-6 bg-simulator-border rounded-b-2xl z-50 flex items-center justify-center transition-colors duration-300">
-                <div className="w-12 h-1 bg-luxury-bg rounded-full mb-1 transition-colors duration-300"></div>
+          {/* Majestic Icon Header */}
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-14 h-14 bg-luxury-button-bg border border-[#c9a84c]/25 text-[#c9a84c] rounded-full flex items-center justify-center shadow-inner mb-3.5">
+              <BookOpen className="w-7 h-7 text-[#c9a84c]" />
+            </div>
+            <h1 className="text-2xl font-serif tracking-[0.1em] text-[#c9a84c] font-black uppercase">Bible Mobile</h1>
+            <p className="text-xs text-[#6b6355] mt-2 font-serif leading-relaxed max-w-xs">
+              Exégèse érudite de la Bible Louis Segond 1910 par intelligence artificielle théologique
+            </p>
+          </div>
+
+          {/* In-tab Auth Segment Panel */}
+          <div className="flex bg-[#0d0b07] border border-[#2e2a1e]/85 p-1 rounded-xl mb-6">
+            <button
+              onClick={() => { setAuthMode('login'); setAuthError(null); }}
+              className={`flex-1 py-2 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
+                authMode === 'login' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+              }`}
+            >
+              Connexion
+            </button>
+            <button
+              onClick={() => { setAuthMode('signup'); setAuthError(null); }}
+              className={`flex-1 py-1.5 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
+                authMode === 'signup' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+              }`}
+            >
+              Inscription
+            </button>
+          </div>
+
+          {authError && (
+            <motion.div 
+              initial={{ opacity: 0, y: -4 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-red-950/20 border border-red-900/35 text-red-300 p-3.5 rounded-xl text-xs mb-5 flex items-start gap-2 text-left"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+              <span className="font-sans leading-relaxed">{authError}</span>
+            </motion.div>
+          )}
+
+          {/* Form Entries block */}
+          <form onSubmit={handleAuthSubmit} className="space-y-4 text-left">
+            {authMode === 'signup' && (
+              <div className="space-y-1">
+                <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Nom d'Étudiant ou Pseudo</label>
+                <div className="relative">
+                  <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
+                  <input
+                    type="text"
+                    required
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Grand Voyageur"
+                    className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-4 py-3 rounded-xl transition outline-none"
+                  />
+                </div>
               </div>
             )}
 
-            {/* Simulated Phone Screen Canvas - STRICTLY DARK LUXURY BG */}
-            <div className={`flex-1 bg-luxury-bg flex flex-col overflow-hidden relative text-luxury-text-primary transition-all duration-300 ${
-              isActualFocusMode ? 'rounded-2xl pt-2' : 'rounded-[2.5rem] pt-6'
-            }`}>
-              
-              {/* Header Status Bar - Hidden in Focus Mode */}
-              {!isActualFocusMode && (
-                <div className="px-6 pt-1.5 pb-2.5 flex justify-between items-center text-[10px] font-semibold text-luxury-text-muted select-none">
-                  <div className="flex items-center gap-1">
-                    <Globe className="w-3 h-3 text-luxury-gold" />
-                    <span>LOUIS SEGOND 1910</span>
+            <div className="space-y-1">
+              <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Adresse Email</label>
+              <div className="relative">
+                <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nom@exemple.com"
+                  className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-4 py-3 rounded-xl transition outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Mot de passe</label>
+              <div className="relative">
+                <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-10 py-3 rounded-xl transition outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="p-1 hover:text-[#c9a84c] text-[#6b6355] absolute right-3.5 top-3 transition cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-gold-gradient text-[#0d0b07] font-bold font-serif text-xs uppercase tracking-widest rounded-xl transition shadow-gold-glow cursor-pointer mt-6 flex items-center justify-center gap-1 hover:opacity-95"
+            >
+              <span>{authMode === 'login' ? 'Accéder au Sanctuaire' : 'S\'engager dans la Foi'}</span>
+              <ArrowRight className="w-4 h-4 text-[#0d0b07]" />
+            </button>
+          </form>
+
+          {/* Social Sign-In option divider */}
+          <div className="relative flex py-4 items-center select-none">
+            <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
+            <span className="flex-shrink mx-4 text-[9px] font-mono uppercase text-[#6b6355] tracking-[0.18em]">Ou s'assembler par</span>
+            <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
+          </div>
+
+          <button
+            onClick={handleGoogleSignIn}
+            className="w-full py-3 bg-[#0d0b07] hover:bg-[#1a1712] text-[#e8e0d0] border border-[#2e2a1e] rounded-xl transition text-[10px] font-mono tracking-widest uppercase flex items-center justify-center gap-2.5 cursor-pointer"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+            </svg>
+            <span>Google Sign-In</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Main Authenticated Layout
+  return (
+    <div className="min-h-screen bg-luxury-bg-deep text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 pb-20 md:pb-6 text-left selection:text-[#c9a84c]">
+      
+      {/* Dynamic luxury TopBar header, syncing click navigations */}
+      <TopBar 
+        onSearchPress={() => {
+          setActiveTab('read');
+          // focus input if available
+          setTimeout(() => {
+            const inputEl = document.getElementById('bible-search-input');
+            if (inputEl) inputEl.focus();
+          }, 100);
+        }}
+        onStudyPress={() => setActiveTab('read')}
+        onProfilePress={() => setIsSettingsOpen(!isSettingsOpen)}
+      />
+
+      {/* Embedded Settings Box/Drawer */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="w-full bg-[#12100c] border-b border-[#2e2a1e] py-5 px-4"
+          >
+            <div className="max-w-4xl mx-auto space-y-4">
+              <div className="flex justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
+                <h4 className="font-serif text-[#c9a84c] text-sm font-bold uppercase tracking-widest flex items-center gap-1.5 animate-pulse">
+                  <Settings className="w-4 h-4 text-[#c9a84c]" />
+                  <span>Ma Cabine d'Études & Préférences</span>
+                </h4>
+                <button onClick={() => setIsSettingsOpen(false)} className="text-[#6b6355] hover:text-white transition">
+                  <X className="w-4.5 h-4.5" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                {/* 1. Profile information */}
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl flex flex-col justify-between">
+                  <div className="space-y-1">
+                    <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">COMPTE ACTIF</span>
+                    <h5 className="font-serif font-bold text-[#e8e0d0] text-sm truncate">
+                      {displayName || user.displayName || user.email?.split('@')[0]}
+                    </h5>
+                    <p className="text-[10px] font-mono text-[#6b6355] truncate">{user.email}</p>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
-                    <span className="uppercase tracking-widest text-[#9ca3af] text-[8px] font-bold">MODE SÉCURISÉ</span>
+                  <button 
+                    onClick={handleSignOut}
+                    className="mt-4 w-full py-1.5 border border-red-500/20 hover:border-red-500 hover:bg-red-500/10 text-red-400 font-mono text-[9px] tracking-widest uppercase rounded-lg transition duration-200 cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Se Déconnecter</span>
+                  </button>
+                </div>
+
+                {/* 2. Style Adjustments (textSize & Theme) */}
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-3 text-left">
+                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">PASTAGE VISUEL</span>
+                  
+                  {/* Slider size font */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] font-mono">
+                      <span className="text-[#6b6355]">Taille du texte</span>
+                      <span className="text-[#c9a84c] font-bold">{textSize}px</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="14" 
+                      max="24" 
+                      value={textSize}
+                      onChange={(e) => setTextSize(Number(e.target.value))}
+                      className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1.5 appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Theme toggler */}
+                  <div className="space-y-1.5">
+                    <span className="text-[9px] font-mono text-[#6b6355] uppercase block">Palette d'ambiance</span>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => setThemeMode('dark')}
+                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition ${
+                          themeMode === 'dark' ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]' : 'text-[#6b6355] border-[#2e2a1e]'
+                        }`}
+                      >
+                        Nuit noire 
+                      </button>
+                      <button 
+                        onClick={() => setThemeMode('sepia')}
+                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition ${
+                          themeMode === 'sepia' ? 'bg-[#8e6812]/20 text-[#8e6812] border-[#8e6812]' : 'text-[#6b6355] border-[#2e2a1e]'
+                        }`}
+                      >
+                        Vieux parchemin
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Sync and database statistics */}
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-2 text-left">
+                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">SAISIE DE CONFIANCE</span>
+                  <div className="space-y-1 text-xs">
+                    <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
+                    <p className="text-[#6b6355]">Notes d'études : <span className="font-mono text-[#e8e0d0] font-bold">{notes.length}</span></p>
+                    <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
+                  </div>
+                  <div className="text-[8.5px] text-[#6b6355] italic leading-relaxed pt-1.5 border-t border-[#2e2a1e]/40">
+                    * Toutes vos données sont sauvegardées en temps réel sur Firestore cloud.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col md:flex-row gap-6">
+        
+        {/* SIDEBAR NAVIGATION TAB COLUMN FOR MEDIUM+ DISPLAY */}
+        <aside className="w-full md:w-60 shrink-0 hidden md:flex flex-col gap-1.5 text-left font-serif py-1">
+          <span className="text-[10px] font-mono font-black uppercase text-[#6b6355] tracking-[0.24em] px-3 mb-2">Sanctuaire</span>
+          
+          <button
+            onClick={() => setActiveTab('read')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'read' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <BookOpen className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Étude & Lecteur</span>
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('dictionary'); setTargetedStrongCode(null); }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'dictionary' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <Search className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Concordance Strong</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('encyclopedia')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'encyclopedia' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <Library className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Dictionnaire IA</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('assistant')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'assistant' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <MessageSquare className="w-4.5 h-4.5 text-[#c9a84c] animate-pulse" />
+            <span>Assistant Biblique</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('challenges')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'challenges' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <Flame className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Défis & Fidélité</span>
+          </button>
+
+          <div className="pt-4 border-t border-[#2e2a1e]/40 mt-2 px-3">
+            <span className="text-[8.5px] font-mono uppercase text-[#6b6355] tracking-widest block">PASSAGE ACTUEL</span>
+            <p className="text-xs font-serif italic text-[#c9a84c] font-bold mt-1">
+              {selectedBook.name} · {selectedChapter}
+            </p>
+          </div>
+        </aside>
+
+        {/* CONTAINER SWITCH FOR THE POWERFUL ACTIVE TABS */}
+        <div className="flex-1 flex flex-col min-h-[500px]">
+          
+          {/* A. STUDY AND READING MODULE TAB */}
+          {activeTab === 'read' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              {/* Daily Verse of the day Hero banner */}
+              <div className="bg-[#12100c] border border-[#2e2a1e] p-6 rounded-[2rem] shadow-soft text-center space-y-4 relative overflow-hidden">
+                <div className="absolute top-0 left-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl"></div>
+                <div className="text-center">
+                  <RevelationBadge text="RÉVÉLATION DU JOUR" isCrown={true} />
+                </div>
+                
+                <p className="font-serif italic text-lg leading-relaxed text-[#c9a84c] max-w-2xl mx-auto px-2">
+                  « {dailyVerseForCurrentDay.verse.text} »
+                </p>
+                <div className="text-center font-mono text-[10px] tracking-widest text-[#6b6355] uppercase font-bold">
+                  {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
+                </div>
+                
+                <p className="text-xs text-[#a0947f] max-w-xl mx-auto font-sans leading-relaxed">
+                  {dailyVerseForCurrentDay.explanation}
+                </p>
+
+                <div className="flex justify-center pt-2">
+                  <button
+                    onClick={() => {
+                      setSelectedBook(BOOKS.find(b => b.id === dailyVerseForCurrentDay.verse.book_id) || BOOKS[0]);
+                      setSelectedChapter(dailyVerseForCurrentDay.verse.chapter);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-luxury-button-bg hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Rejoindre la Lecture</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Dynamic Scripture Selector and Chapter Nav Box */}
+              <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                  {/* Book dropdown selector */}
+                  <div className="flex flex-col text-left">
+                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Livre Saint</label>
+                    <select
+                      value={selectedBook.id}
+                      onChange={(e) => {
+                        const nextBook = BOOKS.find(b => b.id === Number(e.target.value)) || BOOKS[0];
+                        setSelectedBook(nextBook);
+                        setSelectedChapter(1);
+                      }}
+                      className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-serif font-bold text-[#e8e0d0] rounded-xl px-3.5 py-2 outline-none focus:border-[#c9a84c] select-none text-left"
+                    >
+                      {BOOKS.map((b) => (
+                        <option key={b.id} value={b.id} className="font-serif text-[#0d0b07] bg-[#e8e0d0]">
+                          {b.name} ({b.testament})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Chapter picker dropdown */}
+                  <div className="flex flex-col text-left">
+                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Chapitre</label>
+                    <select
+                      value={selectedChapter}
+                      onChange={(e) => setSelectedChapter(Number(e.target.value))}
+                      className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-4 py-2 outline-none focus:border-[#c9a84c] select-none"
+                    >
+                      {Array.from({ length: selectedBook.chapters_count }, (_, index) => index + 1).map((n) => (
+                        <option key={n} value={n} className="font-mono text-[#0d0b07] bg-[#e8e0d0]">
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Chapter back and forward paging buttons */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={handlePreviousChapter}
+                    className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
+                    title="Chapitre précédent"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    onClick={handleSummarizeChapter}
+                    disabled={loadingSummary}
+                    className="h-8 px-3 bg-gradient-to-r from-[#8a6f2e]/10 to-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl text-[10px] font-mono font-bold tracking-wider uppercase transition flex items-center justify-center gap-1 cursor-pointer hover:border-[#c9a84c]/40"
+                  >
+                    {loadingSummary ? (
+                      <div className="w-3.5 h-3.5 rounded-full border border-t-transparent border-[#c9a84c] animate-spin"></div>
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                    )}
+                    <span>Résumer le Chapitre</span>
+                  </button>
+
+                  <button
+                    onClick={handleNextChapter}
+                    className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
+                    title="Chapitre suivant"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Integrated offline concordance keyword search in the reader page */}
+              <div className="bg-[#12100c] border border-[#2e2a1e] p-3 rounded-2xl flex items-center gap-2 select-none">
+                <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
+                <input 
+                  id="bible-search-input"
+                  type="text"
+                  value={searchKeyword}
+                  onChange={(e) => setSearchKeyword(e.target.value)}
+                  placeholder="Rechercher localement un verset (ex: berger, paix, foi)..."
+                  className="bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355]"
+                />
+                {searchKeyword ? (
+                  <button 
+                    onClick={() => setSearchKeyword('')}
+                    className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-0.5 rounded uppercase">Concinnance</span>
+                )}
+              </div>
+
+              {/* Secondary results placeholder for localized keywords lookups */}
+              {searchKeyword.trim() !== "" && (
+                <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl space-y-3">
+                  <span className="text-[8px] font-mono uppercase tracking-widest text-[#c9a84c] font-black block">Occurrences trouvées pour "{searchKeyword}" :</span>
+                  <div className="max-h-60 overflow-y-auto space-y-2 scroller-thin pr-1">
+                    {searchLocalVerses(searchKeyword).length === 0 ? (
+                      <p className="text-xs text-[#6b6355] italic">Aucune concordance locale trouvée. Essayez un autre mot clé.</p>
+                    ) : (
+                      searchLocalVerses(searchKeyword).map((v, i) => (
+                        <div 
+                          key={i}
+                          onClick={() => {
+                            const target = BOOKS.find(b => b.id === v.book_id);
+                            if (target) {
+                              setSelectedBook(target);
+                              setSelectedChapter(v.chapter);
+                              setSearchKeyword('');
+                            }
+                          }}
+                          className="bg-[#0d0b07] hover:bg-[#14120e] p-2.5 rounded-xl border border-[#2e2a1e]/40 transition text-left cursor-pointer space-y-1"
+                        >
+                          <p className="text-xs text-[#e8e0d0] leading-relaxed font-serif truncate">« {v.text.replace(/\[[HG]\d+\]/g, '')} »</p>
+                          <span className="text-[9px] font-mono text-[#c9a84c] block uppercase">{v.book_name} {v.chapter}:{v.verse}</span>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Main Navigation Tab view container */}
-              <div className="flex-1 overflow-hidden flex flex-col">
-                
-                {/* --------------------------------------------------- */}
-                {/* 1. HOME TAB ACCUEIL                                 */}
-                {/* --------------------------------------------------- */}
-                {activeTab === 'home' && (
-                  <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-6 scrollbar-thin">
+              {/* Display chapter summary if queried */}
+              {chapterSummary && (
+                <div className="bg-[#12100c] border border-[#c9a84c]/20 p-5 rounded-[2rem] text-left space-y-3 shadow-gold-glow animate-fade-slide-up select-text">
+                  <div className="flex justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
+                    <span className="text-[9px] font-mono tracking-widest text-[#c9a84c] uppercase font-black flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" />
+                      <span>Sagesse & Synthèse IA du Chapitre {selectedChapter}</span>
+                    </span>
+                    <button 
+                      onClick={() => setChapterSummary(null)}
+                      className="p-1 hover:bg-[#1a1712] rounded text-[#6b6355] hover:text-white transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="font-sans text-[13.5px] leading-relaxed text-[#c9a84c] whitespace-pre-line prose max-w-none">
+                    {cleanBibleMarkdown(chapterSummary)}
+                  </div>
+                </div>
+              )}
+
+              {/* Main Scriptures container */}
+              <div className="bg-[#12100c] border border-[#2e2a1e] p-5 rounded-[2.5rem] shadow-soft">
+                <div className="flex flex-col gap-4 pb-3 border-b border-[#2e2a1e]/50 mb-4">
+                  <div className="flex items-center justify-between select-none">
+                    <h3 className="font-serif font-extrabold text-[#c9a84c] text-sm uppercase flex items-center gap-1.5">
+                      <BookOpen className="w-4.5 h-4.5" />
+                      <span>{selectedBook.name} · Chapitre {selectedChapter}</span>
+                    </h3>
                     
-                    {/* TopBar custom component */}
-                    <TopBar 
-                      onSearchPress={() => setActiveTab('search')}
-                      onStudyPress={() => setActiveTab('read')}
-                      onProfilePress={() => alert("Profil Écritures de Franck — Bible Profonde")}
-                    />
-
-                    {/* Revelation badge component */}
-                    <RevelationBadge 
-                      onClick={() => handleExplainVerse(dailyVerseData.verse)}
-                      text="RÉVÉLATION DU JOUR"
-                    />
-
-                    {/* Beautiful VerseQuote Centerpiece */}
-                    <VerseQuote 
-                      text={dailyVerseData.verse.text}
-                      book={dailyVerseData.book.name}
-                      chapter={dailyVerseData.verse.chapter}
-                      verse={dailyVerseData.verse.verse}
-                      onExplainPress={() => handleExplainVerse(dailyVerseData.verse)}
-                    />
-
-                    {/* Quick navigation modules */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <button 
-                        onClick={() => setActiveTab('read')}
-                        className="bg-luxury-surface border border-luxury-border hover:border-luxury-gold/50 p-4 rounded-xl flex items-center gap-3 transition"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-luxury-button-bg flex items-center justify-center text-luxury-gold">
-                          <BookOpen className="w-4.5 h-4.5" />
-                        </div>
-                        <div className="text-left">
-                          <p className="font-serif font-bold text-xs text-luxury-text-primary">Lire la Bible</p>
-                          <p className="text-[9px] text-[#9ca3af]">66 Livres sacrés</p>
-                        </div>
-                      </button>
-
-                      <button 
-                        onClick={() => setActiveTab('ai')}
-                        className="bg-luxury-surface border border-luxury-border hover:border-luxury-gold/50 p-4 rounded-xl flex items-center gap-3 transition shadow-gold-glow"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-luxury-button-bg flex items-center justify-center text-luxury-gold-light">
-                          <Sparkles className="w-4.5 h-4.5" />
-                        </div>
-                        <div className="text-left">
-                          <p className="font-serif font-bold text-xs text-luxury-text-primary">Assistant IA</p>
-                          <p className="text-[9px] text-[#9ca3af]">Dialogue & Dogme</p>
-                        </div>
-                      </button>
-
-                      <button 
-                        onClick={() => setActiveTab('lexicon')}
-                        className="col-span-2 bg-gradient-to-r from-[#1c1811] to-[#282218] border border-luxury-gold/20 hover:border-luxury-gold/50 p-4 rounded-xl flex items-center gap-3 transition shadow-sm relative overflow-hidden"
-                      >
-                        <div className="absolute right-0 bottom-0 select-none opacity-5 text-luxury-gold">
-                          <BookOpenCheck className="w-24 h-24 translate-x-4 translate-y-4" />
-                        </div>
-                        <div className="w-9 h-9 rounded-lg bg-luxury-button-bg/80 border border-luxury-gold/30 flex items-center justify-center text-luxury-gold shrink-0">
-                          <BookOpenCheck className="w-4.5 h-4.5" />
-                        </div>
-                        <div className="text-left col-span-2">
-                          <p className="font-serif font-bold text-xs text-luxury-text-primary flex items-center gap-1.5">
-                            <span>Lexique Strong Biblique</span>
-                            <span className="text-[7.5px] font-mono bg-luxury-gold/15 text-[#c9a84c] border border-luxury-gold/30 px-1 py-0.2 rounded font-bold uppercase tracking-wider">H & G</span>
-                          </p>
-                          <p className="text-[9.5px] text-[#9ca3af] leading-relaxed">Racines grecques, hébraïques & concordance d'occurrences intégrale des textes.</p>
-                        </div>
-                      </button>
-                    </div>
-
-                    {/* Mode de Lecture (Sépia / Nuit) Dynamic Controller Card */}
-                    <div className="bg-luxury-surface border border-luxury-border p-4 rounded-2xl space-y-3 shadow-sm transition-all duration-300">
-                      <div className="flex justify-between items-center border-b border-luxury-border/40 pb-2">
-                        <div className="flex items-center gap-1.5">
-                          <Eye className="w-3.5 h-3.5 text-luxury-gold" />
-                          <span className="text-[10px] font-mono tracking-wider text-luxury-text-primary uppercase font-bold">Thémographe & Vision</span>
-                        </div>
-                        <span className="text-[8.5px] font-mono text-luxury-text-muted bg-luxury-button-bg px-1.5 py-0.5 rounded uppercase">
-                          {resolvedTheme === 'sepia' ? 'Sépia (Jour)' : 'Nuit (Soir)'}
-                        </span>
-                      </div>
-                      
-                      <p className="text-[10.5px] text-luxury-text-muted leading-relaxed font-sans">
-                        Basculez entre le mode d'étude <strong className="text-luxury-text-primary text-luxury-gold">Sépia</strong> pour préserver vos yeux le jour et l'ambiance sacrée <strong className="text-luxury-text-primary text-luxury-gold">Nuit</strong> pour le soir.
-                      </p>
-
-                      <div className="grid grid-cols-3 gap-1.5 p-0.5 bg-luxury-bg rounded-xl border border-luxury-border/60">
-                        <button
-                          onClick={() => {
-                            setThemeMode('auto');
-                            localStorage.setItem('bible_theme_mode', 'auto');
-                          }}
-                          className={`py-2 px-1 rounded-lg text-[9px] font-mono uppercase font-bold tracking-wider transition cursor-pointer ${
-                            themeMode === 'auto'
-                              ? 'bg-luxury-gold text-luxury-bg shadow-sm font-extrabold'
-                              : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                          }`}
-                          title="Bascule automatique intelligente selon l'heure ou le système"
-                        >
-                          Auto ⚙️
-                        </button>
-                        <button
-                          onClick={() => {
-                            setThemeMode('sepia');
-                            localStorage.setItem('bible_theme_mode', 'sepia');
-                          }}
-                          className={`py-2 px-1 rounded-lg text-[9px] font-mono uppercase font-bold tracking-wider transition cursor-pointer ${
-                            themeMode === 'sepia'
-                              ? 'bg-luxury-gold text-luxury-bg shadow-sm font-extrabold'
-                              : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                          }`}
-                          title="Forcer le thème de lecture Sépia (crème relaxant)"
-                        >
-                          Sépia ☀️
-                        </button>
-                        <button
-                          onClick={() => {
-                            setThemeMode('night');
-                            localStorage.setItem('bible_theme_mode', 'night');
-                          }}
-                          className={`py-2 px-1 rounded-lg text-[9px] font-mono uppercase font-bold tracking-wider transition cursor-pointer ${
-                            themeMode === 'night'
-                              ? 'bg-luxury-gold text-luxury-bg shadow-sm font-extrabold'
-                              : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                          }`}
-                          title="Forcer le thème obscur Nuit (noir profond)"
-                        >
-                          Nuit 🌙
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Mode d'Écoute Sacré (Voix Masculine Seule Permanente) */}
-                    <div className="bg-luxury-surface border border-luxury-border/60 p-4 rounded-2xl space-y-3 shadow-sm transition-all duration-300">
-                      <div className="flex justify-between items-center border-b border-luxury-border/40 pb-2">
-                        <div className="flex items-center gap-1.5">
-                          <Volume2 className="w-3.5 h-3.5 text-luxury-gold" />
-                          <span className="text-[10px] font-mono tracking-wider text-luxury-text-primary uppercase font-bold">Configuration Écoute</span>
-                        </div>
-                        <span className="text-[8px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-900/30 px-1.5 py-0.5 rounded uppercase font-bold tracking-wider">
-                          🔒 Voix Masculine Unie
-                        </span>
-                      </div>
-                      
-                      <p className="text-[10.5px] text-luxury-text-muted leading-relaxed font-sans">
-                        La lecture audio est configurée de manière <strong className="text-luxury-gold">stricte et permanente</strong> sur une voix d'homme française (<strong className="text-luxury-text-primary">Timbre Lectoral Profond</strong>), ralentie à <strong className="text-[#e8c97a]">0.95x</strong> pour une prononciation majestueuse et solennelle adaptée à l'étude.
-                      </p>
-
-                      <div className="bg-luxury-bg border border-luxury-border/40 rounded-xl p-2.5 space-y-1">
-                        <div className="flex justify-between items-center text-[10px] font-mono">
-                          <span className="text-luxury-text-muted">Canal d'Écoute :</span>
-                          <span className="text-luxury-gold font-extrabold">VOIX HOMME SEULEMENT</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[10px] font-mono">
-                          <span className="text-luxury-text-muted">Hauteur (Pitch) :</span>
-                          <span className="text-luxury-text-primary">Grave (Timbre Solennel)</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[10px] font-mono">
-                          <span className="text-luxury-text-muted">Enchaînement :</span>
-                          <span className={isContinuousAudio ? "text-emerald-400 font-bold flex items-center gap-1" : "text-luxury-text-muted"}>
-                            {isContinuousAudio ? "Liaison de chapitres active 🔂" : "Arrêt au chapitre"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center text-[10px] font-mono">
-                          <span className="text-luxury-text-muted">Statut des options :</span>
-                          <span className="text-rose-400/80 font-bold">Autres genres révoqués 🚫</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Reading Challenges Plan Section */}
-                    <div className="space-y-3 bg-[#110e0a]/40 p-2.5 rounded-2xl border border-[#2e2a1e]/30">
-                      <div className="flex justify-between items-center px-1">
-                        <span className="text-[10px] font-mono tracking-[0.12em] text-[#c9a84c] font-bold uppercase">📖 Défis de Lecture</span>
-                        <div className="flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
-                        </div>
-                      </div>
-                      <ReadingChallenges 
-                        readingHistory={readingHistory}
-                        onNavigateToChapter={(bookId, chapterNum) => {
-                          const bk = BOOKS.find(b => b.id === bookId);
-                          if (bk) {
-                            setSelectedBook(bk);
-                            setSelectedChapter(chapterNum);
-                            setNavBook(bk);
-                            setNavChapter(chapterNum);
-                            setNavTestament(bk.testament);
-                            setIsNavigating(false);
-                            setActiveTab('read');
-                          }
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={selectedTranslation}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedTranslation(val);
+                          try {
+                            localStorage.setItem('bible_translation', val);
+                          } catch (_) {}
                         }}
-                      />
+                        className="text-[9.5px] font-mono text-[#c9a84c] uppercase tracking-wider bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/50 px-2.5 py-1 rounded-lg cursor-pointer focus:outline-none focus:border-[#c9a84c] transition"
+                      >
+                        <option value="local">Louis Segond (Offline)</option>
+                        <option value="web">WEB English (Online)</option>
+                        <option value="rvr09">RVR09 Spanish (Online)</option>
+                        <option value="almeida">Almeida Portuguese (Online)</option>
+                        <option value="clementine">Clementine Latin (Online)</option>
+                      </select>
                     </div>
-
-                    {/* Daily Reminders Scheduler Section */}
-                    <DailyReminder />
-
-                    {/* Recharts Study Performance Graph Section */}
-                    <StudyStatsChart readingHistory={readingHistory} />
-
-                    {/* Historic / Recent Readings */}
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[9px] font-mono tracking-[0.15em] text-luxury-text-muted uppercase">LECTURES RÉCENTES</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-luxury-gold"></span>
-                      </div>
-                      
-                      {readingHistory.length === 0 ? (
-                        <div className="bg-luxury-surface/50 border border-luxury-border border-dashed p-4 rounded-xl text-center">
-                          <p className="text-[11px] text-luxury-text-muted">Aucun chapitre lu récemment.</p>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2.5 overflow-x-auto pb-1.5">
-                          {readingHistory.map((hist, index) => {
-                            const b = BOOKS.find(bk => bk.id === hist.book_id);
-                            return (
-                              <button
-                                key={index}
-                                onClick={() => navigateToVerse(hist.book_id, hist.chapter)}
-                                className="min-w-[110px] max-w-[110px] bg-luxury-surface p-3 rounded-lg border border-luxury-border text-left hover:border-luxury-gold/30 transition shrink-0"
-                              >
-                                <span className={`inline-block text-[8px] font-bold uppercase rounded px-1 mb-1.5 border ${b ? getCategoryColor(b.category) : ''}`}>
-                                  {b ? getCategoryLabel(b.category) : 'Texte'}
-                                </span>
-                                <p className="text-[11px] font-serif font-bold text-luxury-text-primary truncate">{hist.book_name}</p>
-                                <p className="text-[9px] text-luxury-text-muted">Chapitre {hist.chapter}</p>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Spiritual guidance advice footer */}
-                    <div className="p-4 bg-luxury-surface border border-luxury-border rounded-xl">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Crown className="w-4 h-4 text-luxury-gold" />
-                        <span className="font-mono text-[9px] tracking-wider text-luxury-gold font-bold">CONSEIL DE MÉDITATION</span>
-                      </div>
-                      <p className="text-xs text-luxury-text-primary leading-relaxed font-serif italic text-left">
-                        {getDailyVerseForToday().explanation}
-                      </p>
-                    </div>
-
                   </div>
-                )}
 
-                {/* --------------------------------------------------- */}
-                {/* 2. READ BIBLE TAB                                   */}
-                {/* --------------------------------------------------- */}
-                {activeTab === 'read' && (
-                  <div className="flex-1 overflow-hidden flex flex-col bg-[#0d0b07] text-[#e8e0d0]">
-                    
-                    {isNavigating ? (
-                      /* --- THE 3-STEP SACRED BIBLE NAVIGATOR --- */
-                      <div className="flex-1 overflow-hidden flex flex-col select-none">
-                        
-                        {/* BARRE DE STATUT EN HAUT (fixe) */}
-                        <div className="bg-[#0b0a08] px-5 py-3 flex justify-between items-center border-b border-[#2e2a1e] shrink-0">
-                          <span className="text-[#c9a84c] text-[11px] font-mono tracking-[0.15em] font-extrabold uppercase">
-                            LSG 1910
-                          </span>
-                          <span className="text-[#6b6355] text-[10px] font-mono font-medium">
-                            {navBook 
-                              ? `${getCategoryLabel(navBook.category).toUpperCase()} · ${navBook.testament}`
-                              : `SÉLECTION · ${navTestament}`}
-                          </span>
-                        </div>
-
-                        {/* Navigation Scrolling Steps Container */}
-                        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scrollbar-thin">
-                          
-                          {/* ÉTAPE 1 — Sélection du Testament */}
-                          <div className="space-y-2">
-                            <span className="block text-[9px] font-mono tracking-[0.12em] text-[#6b6355] uppercase font-bold text-left">
-                              Étape 1 · Alliance du Testament
-                            </span>
-                            <div className="flex gap-2.5">
-                              <button
-                                onClick={() => {
-                                  setNavTestament('AT');
-                                  setNavBook(null);
-                                  setNavChapter(null);
-                                }}
-                                className="flex-1 py-2.5 rounded-xl text-center text-xs font-semibold tracking-wide border transition-all duration-300 cursor-pointer"
-                                style={{
-                                  backgroundColor: navTestament === 'AT' ? '#c9a84c' : 'transparent',
-                                  color: navTestament === 'AT' ? '#0d0b07' : '#6b6355',
-                                  borderColor: navTestament === 'AT' ? '#c9a84c' : '#2e2a1e'
-                                }}
-                              >
-                                Ancien Testament
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setNavTestament('NT');
-                                  setNavBook(null);
-                                  setNavChapter(null);
-                                }}
-                                className="flex-1 py-2.5 rounded-xl text-center text-xs font-semibold tracking-wide border transition-all duration-300 cursor-pointer"
-                                style={{
-                                  backgroundColor: navTestament === 'NT' ? '#c9a84c' : 'transparent',
-                                  color: navTestament === 'NT' ? '#0d0b07' : '#6b6355',
-                                  borderColor: navTestament === 'NT' ? '#c9a84c' : '#2e2a1e'
-                                }}
-                              >
-                                Nouveau Testament
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* ÉTAPE 2 — Sélection du Livre */}
-                          <div className="space-y-3">
-                            <div className="flex justify-between items-center">
-                              <span className="text-[9px] font-mono tracking-[0.12em] text-[#6b6355] uppercase font-bold">
-                                Étape 2 · Livre Sacré
-                              </span>
-                              {selectedBook && (
-                                <button
-                                  onClick={() => {
-                                    setNavBook(selectedBook);
-                                    setNavChapter(selectedChapter);
-                                    setNavTestament(selectedBook.testament);
-                                    setIsNavigating(false);
-                                  }}
-                                  className="text-[9px] font-mono text-[#c9a84c] hover:underline uppercase tracking-wide cursor-pointer"
-                                >
-                                  Fermer &times;
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Grouped books by categories */}
-                            <div className="space-y-4 text-left">
-                              {(() => {
-                                const filteredBooks = BOOKS.filter(b => b.testament === navTestament);
-                                const catsForTestament = navTestament === 'AT' 
-                                  ? ['pentateuque', 'historique', 'poetique', 'prophetique'] 
-                                  : ['evangile', 'epitre', 'apocalypse'];
-                                  
-                                return catsForTestament.map(cat => {
-                                  const booksInCat = filteredBooks.filter(b => b.category === cat);
-                                  if (booksInCat.length === 0) return null;
-                                  
-                                  return (
-                                    <div key={cat} className="space-y-2">
-                                      {/* Catégories de livre en uppercase */}
-                                      <div className="text-[9px] font-mono tracking-[0.15em] text-[#6b6355] uppercase border-b border-[#2e2a1e]/50 pb-1.5 pt-1">
-                                        {categoryTitles[cat] || cat.toUpperCase()}
-                                      </div>
-                                      
-                                      <div className="grid grid-cols-2 gap-2">
-                                        {booksInCat.map(b => {
-                                          const isSelected = navBook?.id === b.id;
-                                          return (
-                                            <button
-                                              key={b.id}
-                                              onClick={() => {
-                                                setNavBook(b);
-                                                setNavChapter(null); // Reset chapter selection
-                                              }}
-                                              className="bg-[#1a1712] p-2.5 rounded-lg text-left transition-all duration-200 cursor-pointer overflow-hidden"
-                                              style={{
-                                                border: isSelected ? '1px solid #c9a84c' : '1px solid #2e2a1e'
-                                              }}
-                                            >
-                                              <p 
-                                                className="font-serif text-xs font-bold truncate transition-colors duration-150"
-                                                style={{
-                                                  color: isSelected ? '#c9a84c' : '#e8e0d0'
-                                                }}
-                                              >
-                                                {b.name}
-                                              </p>
-                                              <p className="text-[9px] font-mono text-[#6b6355] mt-0.5">
-                                                {b.chapters_count} cap.
-                                              </p>
-                                            </button>
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              })()}
-                            </div>
-                          </div>
-
-                          {/* ÉTAPE 3 — Sélection du Chapitre */}
-                          {navBook && (
-                            <div className="space-y-3 pt-2 animate-fade-slide-up text-left">
-                              <span className="block text-[9px] font-mono tracking-[0.12em] text-[#6b6355] uppercase font-bold">
-                                Étape 3 · Numéro du Chapitre
-                              </span>
-                              
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {Array.from({ length: navBook.chapters_count }, (_, i) => i + 1).map(ch => {
-                                  const isSelected = navChapter === ch;
-                                  return (
-                                    <button
-                                      key={ch}
-                                      onClick={() => setNavChapter(ch)}
-                                      className="w-9 h-9 rounded-md flex items-center justify-center text-xs font-mono font-bold border transition-all duration-200 cursor-pointer"
-                                      style={{
-                                        backgroundColor: isSelected ? '#c9a84c' : '#1a1712',
-                                        borderColor: isSelected ? '#c9a84c' : '#2e2a1e',
-                                        color: isSelected ? '#0d0b07' : '#6b6355'
-                                      }}
-                                    >
-                                      {ch}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </div>
+                  {/* High-Fidelity Audio Reader Controls */}
+                  {!loadingVerses && chapterVerses.length > 0 && (
+                    <div className="bg-[#0f0d09] border border-[#2e2a1e] rounded-2xl p-4.5 flex flex-col md:flex-row items-center justify-between gap-4 select-none">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-10 h-10 rounded-full bg-[#1a1712] border border-[#c9a84c]/20 flex items-center justify-center text-[#c9a84c]">
+                          {isSpeaking && !isPaused ? (
+                            <Volume2 className="w-5 h-5 animate-pulse text-[#c9a84c]" />
+                          ) : (
+                            <VolumeX className="w-5 h-5 text-[#6b6355]" />
                           )}
-
                         </div>
-
-                        {/* Confirmation Confirm Call-to-action button */}
-                        {navBook && navChapter && (
-                          <div className="p-4 bg-[#12100c] border-t border-[#221e16] shrink-0">
-                            <button
-                              onClick={() => {
-                                const currentBookIndex = BOOKS.findIndex(b => b.id === selectedBook.id);
-                                const targetBookIndex = BOOKS.findIndex(b => b.id === navBook.id);
-                                let dir: 'forward' | 'backward' = 'forward';
-                                if (targetBookIndex < currentBookIndex) {
-                                  dir = 'backward';
-                                } else if (targetBookIndex === currentBookIndex && navChapter < selectedChapter) {
-                                  dir = 'backward';
-                                }
-                                setSlideDirection(dir);
-                                setSelectedBook(navBook);
-                                setSelectedChapter(navChapter);
-                                setIsNavigating(false);
-                              }}
-                              className="w-full h-12 bg-[#c9a84c] text-[#0d0b07] rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-[#dfba5a] transition active:scale-[0.98] duration-150 flex items-center justify-center gap-1.5 shadow-gold-glow cursor-pointer"
-                            >
-                              <BookOpenCheck className="w-4 h-4" />
-                              <span>Lire {navBook.name} — Chapitre {navChapter}</span>
-                            </button>
-                          </div>
-                        )}
-
+                        <div className="text-left">
+                          <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-widest block font-bold">SYNTHÈSE VOCALE</span>
+                          <p className="text-xs font-serif text-[#e8e0d0] font-bold">
+                            {isSpeaking 
+                              ? `Lecture : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
+                              : "Écouter la parole divine"
+                            }
+                          </p>
+                        </div>
                       </div>
-                    ) : (
-                      /* --- THE COMPREHENSIVE TEXT SCRIPTURE READER PANEL --- */
-                      <div className="flex-1 overflow-hidden flex flex-col">
-                        
-                        {/* Chapter Header Selection with dark theme arrows */}
-                        <div className="bg-[#1a1712] p-3 border-b border-[#2e2a1e] flex items-center justify-between gap-3 z-10 shrink-0">
-                          
-                          <button 
-                            onClick={() => {
-                              setSlideDirection('backward'); // Sets left-to-right page slide direction
-                              if (selectedChapter > 1) {
-                                setSelectedChapter(prev => prev - 1);
-                                setNavChapter(selectedChapter - 1);
-                              } else {
-                                const currentIndex = BOOKS.findIndex(b => b.id === selectedBook.id);
-                                if (currentIndex > 0) {
-                                  const prevBook = BOOKS[currentIndex - 1];
-                                  setSelectedBook(prevBook);
-                                  setSelectedChapter(prevBook.chapters_count);
-                                  setNavBook(prevBook);
-                                  setNavChapter(prevBook.chapters_count);
-                                  setNavTestament(prevBook.testament);
-                                }
-                              }
-                            }}
-                            className="p-1 px-2.5 bg-[#0d0b07] hover:bg-luxury-button-bg rounded-lg border border-[#2e2a1e] text-[#c9a84c] transition duration-200 cursor-pointer"
-                            title="Chapitre précédent"
-                          >
-                            <ChevronLeft className="w-4 h-4" />
-                          </button>
 
-                          {/* Unified Selection Button - opens the 3-Step Navigator */}
-                          <button
-                            onClick={() => {
-                              setNavBook(selectedBook);
-                              setNavChapter(selectedChapter);
-                              setNavTestament(selectedBook.testament);
-                              setIsNavigating(true);
-                            }}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 bg-[#0d0b07] hover:bg-[#1a1712] rounded-lg border border-[#2e2a1e] hover:border-[#c9a84c]/50 transition duration-200 cursor-pointer shadow-soft group text-ellipsis overflow-hidden animate-none"
-                            title="Ouvrir le sélécteur 3 étapes"
-                          >
-                            <span className="font-serif font-extrabold text-[#c9a84c] text-xs transition-colors group-hover:text-[#e8c97a]">
-                              {selectedBook.name} {selectedChapter}
-                            </span>
-                            <span className="text-[10px] text-[#6b6355] font-mono group-hover:text-[#c9a84c] transition-colors">
-                              ⌥ Navigation
-                            </span>
-                          </button>
-
-                          <button 
-                            onClick={() => {
-                              setSlideDirection('forward'); // Sets right-to-left page slide direction
-                              if (selectedChapter < selectedBook.chapters_count) {
-                                setSelectedChapter(prev => prev + 1);
-                                setNavChapter(selectedChapter + 1);
-                              } else {
-                                const currentIndex = BOOKS.findIndex(b => b.id === selectedBook.id);
-                                if (currentIndex < BOOKS.length - 1) {
-                                  const nextBook = BOOKS[currentIndex + 1];
-                                  setSelectedBook(nextBook);
-                                  setSelectedChapter(1);
-                                  setNavBook(nextBook);
-                                  setNavChapter(1);
-                                  setNavTestament(nextBook.testament);
-                                }
-                              }
-                            }}
-                            className="p-1 px-2.5 bg-[#0d0b07] hover:bg-luxury-button-bg rounded-lg border border-[#2e2a1e] text-[#c9a84c] transition duration-200 cursor-pointer"
-                            title="Chapitre suivant"
-                          >
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-
-                        </div>
-
-                        {/* Ribbon Category Banner - Hidden in Focus Mode for absolute distraction-free reading */}
-                        {!isActualFocusMode && (
-                          <div className="px-4 py-2 bg-[#1a1712]/40 flex items-center justify-between border-b border-[#2e2a1e] text-[10px] font-semibold text-[#6b6355] shrink-0">
-                            <span className={`px-2 py-0.5 rounded border ${getCategoryColor(selectedBook.category)}`}>
-                              {getCategoryLabel(selectedBook.category)} · {selectedBook.testament}
-                            </span>
-                            
-                            <button 
-                              onClick={handleChapterSummarize}
-                              className="flex items-center gap-1.5 text-[#c9a84c] hover:text-[#e8c97a] hover:underline cursor-pointer"
-                              title="Résumer ce chapitre avec l'IA"
-                            >
-                              <FileText className="w-3 h-3" />
-                              <span>SYNTHÈSE IA</span>
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Verses Scroll List - Expanded with premium spacing in Focus Mode with page sliding transition */}
-                        <div 
-                          onClick={() => setSelectedVerseNum(null)}
-                          className={`flex-1 overflow-y-auto scrollbar-thin text-left cursor-default select-none transition-all duration-300 ${
-                            isActualFocusMode 
-                              ? 'px-6 py-6 md:px-14 md:py-10 space-y-4' 
-                              : 'px-4 py-2 space-y-1'
-                          }`}
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        {/* Skip Back */}
+                        <button
+                          onClick={() => {
+                            if (currentSpeakingVerseIndex > 0) {
+                              speakVerse(currentSpeakingVerseIndex - 1);
+                            } else {
+                              speakVerse(0);
+                            }
+                          }}
+                          disabled={!isSpeaking}
+                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                          title="Verset précédent"
                         >
-                          <AnimatePresence mode="wait" initial={false}>
-                            <motion.div
-                              key={`${selectedBook.id}-${selectedChapter}`}
-                              custom={slideDirection}
-                              variants={{
-                                enter: (dir: 'forward' | 'backward') => ({
-                                  x: dir === 'forward' ? '40px' : '-40px',
-                                  opacity: 0
-                                }),
-                                center: {
-                                  x: 0,
-                                  opacity: 1
-                                },
-                                exit: (dir: 'forward' | 'backward') => ({
-                                  x: dir === 'forward' ? '-40px' : '40px',
-                                  opacity: 0
-                                })
-                              }}
-                              initial="enter"
-                              animate="center"
-                              exit="exit"
-                              transition={{
-                                type: 'spring',
-                                stiffness: 350,
-                                damping: 32
-                              }}
-                              className="w-full"
-                            >
-                              {loadingVerses ? (
-                                <div className="py-24 text-center space-y-4">
-                                  <div className="w-8 h-8 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                  <p className="text-[11px] text-[#6b6355] tracking-widest font-mono">
-                                    CHARGEMENT DES SAINTES ÉCRITURES...
-                                  </p>
-                                </div>
-                              ) : verseError ? (
-                                <div className="my-10 text-center p-5 bg-[#1a1712] border border-[#2e2a1e] rounded-xl space-y-3">
-                                  <p className="text-xs text-rose-400 font-bold">{verseError}</p>
-                                  <button
-                                    onClick={() => loadChapterVerses(selectedBook, selectedChapter)}
-                                    className="text-xs px-4 py-2 bg-[#c9a84c] text-[#0d0b07] font-serif font-bold rounded-lg hover:bg-opacity-80 cursor-pointer"
-                                  >
-                                    Réessayer
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="space-y-1">
-                                  {verses.map((verse, index) => {
-                                    const isFav = !!favorites.find(f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse);
-                                    const noteEntry = notes.find(n => n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse);
-                                    const hasNote = !!noteEntry;
-                                    const noteText = noteEntry ? noteEntry.note : "";
-
-                                    return (
-                                      <div key={verse.verse} className={currentlySpeakingVerseIndex === index ? "bg-[#1a1712]/60 rounded-lg shadow-gold-glow" : ""}>
-                                        <VerseItem
-                                          verse={verse}
-                                          isFavorite={isFav}
-                                          onToggleFavorite={handleToggleFavorite}
-                                          onExplain={handleExplainVerse}
-                                          onStrongClick={handleStrongLookup}
-                                          textSize={textSize}
-                                          lineHeight={textSize + 8}
-                                          isSelected={selectedVerseNum === verse.verse}
-                                          onTap={() => {
-                                            setSelectedVerseNum(prev => prev === verse.verse ? null : verse.verse);
-                                          }}
-                                          hasNote={hasNote}
-                                          noteText={noteText}
-                                          onSaveNote={handleSaveNote}
-                                        />
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </motion.div>
-                          </AnimatePresence>
-                        </div>
-
-                        {/* Audio Player and Settings bottom navigation */}
-                        <div className="bg-luxury-surface border-t border-luxury-border p-3 flex items-center justify-between gap-2 shrink-0 transition-colors duration-300">
-                          <div className="flex items-center gap-1.5 flex-1 justify-between">
-                            <div className="flex items-center gap-1.5 bg-luxury-bg/30 p-0.5 rounded-lg border border-luxury-border/40">
-                              <button 
-                                onClick={() => {
-                                  const size = Math.max(14, textSize - 1);
-                                  setTextSize(size);
-                                  localStorage.setItem('bible_text_size', String(size));
-                                }}
-                                className="w-7 h-7 bg-luxury-bg hover:bg-luxury-surface text-luxury-text-primary rounded border border-luxury-border flex items-center justify-center text-[10px] font-bold cursor-pointer transition-all duration-200"
-                                title="Réduire"
-                              >
-                                A-
-                              </button>
-                              <span className="text-[10px] font-mono text-luxury-text-muted px-1 min-w-[32px] text-center">{textSize}px</span>
-                              <button 
-                                onClick={() => {
-                                  const size = Math.min(24, textSize + 1);
-                                  setTextSize(size);
-                                  localStorage.setItem('bible_text_size', String(size));
-                                }}
-                                className="w-7 h-7 bg-luxury-bg hover:bg-luxury-surface text-luxury-text-primary rounded border border-luxury-border flex items-center justify-center text-xs font-bold cursor-pointer transition-all duration-200"
-                                title="Agrandir"
-                              >
-                                A+
-                              </button>
-
-                              <div className="w-[1px] h-4 bg-luxury-border/60 mx-1"></div>
-
-                              <button
-                                onClick={toggleFocusMode}
-                                className={`w-7 h-7 rounded flex items-center justify-center transition-all duration-300 border cursor-pointer ${
-                                  isFocusMode 
-                                    ? 'bg-luxury-gold border-luxury-gold text-luxury-bg shadow-gold-glow animate-pulse' 
-                                    : 'bg-luxury-bg border-luxury-border hover:bg-luxury-surface text-luxury-text-primary'
-                                }`}
-                                title={isFocusMode ? "Désactiver le Mode Focus (lecture immersive)" : "Activer le Mode Focus (lecture sans distraction)"}
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  const nextVal = !isContinuousAudio;
-                                  setIsContinuousAudio(nextVal);
-                                  localStorage.setItem('bible_continuous_audio', String(nextVal));
-                                }}
-                                className={`w-7 h-7 rounded flex items-center justify-center transition-all duration-300 border cursor-pointer ${
-                                  isContinuousAudio 
-                                    ? 'bg-luxury-gold border-luxury-gold text-luxury-bg shadow-gold-glow' 
-                                    : 'bg-luxury-bg border-luxury-border hover:bg-[#252018]/50 text-luxury-text-muted hover:text-luxury-text-primary'
-                                }`}
-                                title={isContinuousAudio ? "Lecture continue activée (passe automatiquement au chapitre suivant)" : "Lecture continue désactivée"}
-                              >
-                                <Repeat className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-
-                            {/* Mini Theme Switcher */}
-                            <div className="flex bg-luxury-bg p-0.5 rounded-lg border border-luxury-border text-[9px] font-mono transition-colors duration-300">
-                              <button
-                                onClick={() => {
-                                  setThemeMode('auto');
-                                  localStorage.setItem('bible_theme_mode', 'auto');
-                                }}
-                                className={`px-1.5 py-0.5 rounded transition font-bold cursor-pointer whitespace-nowrap ${
-                                  themeMode === 'auto' ? 'bg-luxury-gold text-luxury-bg font-extrabold' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                                }`}
-                                title="Automatique"
-                              >
-                                Auto
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setThemeMode('sepia');
-                                  localStorage.setItem('bible_theme_mode', 'sepia');
-                                }}
-                                className={`px-1.5 py-0.5 rounded transition font-bold cursor-pointer ${
-                                  themeMode === 'sepia' ? 'bg-luxury-gold text-luxury-bg font-extrabold' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                                }`}
-                                title="Thème Sépia"
-                              >
-                                Sép
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setThemeMode('night');
-                                  localStorage.setItem('bible_theme_mode', 'night');
-                                }}
-                                className={`px-1.5 py-0.5 rounded transition font-bold cursor-pointer ${
-                                  themeMode === 'night' ? 'bg-luxury-gold text-luxury-bg font-extrabold' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                                }`}
-                                title="Thème Nuit"
-                              >
-                                Nuit
-                              </button>
-                            </div>
-
-                            {/* TTS Play controls */}
-                            <div className="flex items-center gap-1">
-                              {isPlayingAudio ? (
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[9px] font-mono text-[#c9a84c] animate-pulse">
-                                    {isContinuousAudio ? 'LECTURE CONTINUE' : 'LECTURE AUDIO'}
-                                  </span>
-                                  <button
-                                    onClick={handleStopTTS}
-                                    className="px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 border border-rose-900/30 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <VolumeX className="w-3 h-3" />
-                                    <span>ARRÊTER</span>
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={handlePlayTTS}
-                                  disabled={verses.length === 0 || loadingVerses}
-                                  className="px-3 py-1.5 bg-[#c9a84c]/10 border border-[#c9a84c]/40 hover:border-[#c9a84c] text-[#c9a84c] rounded-lg text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
-                                >
-                                  <Volume2 className="w-3 h-3 text-[#c9a84c]" />
-                                  <span>ÉCOUTER</span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                        </div>
-
-                      </div>
-                    )}
-
-                  </div>
-                )}
-
-                {/* --------------------------------------------------- */}
-                {/* 3. SEARCH TAB                                       */}
-                {/* --------------------------------------------------- */}
-                {activeTab === 'search' && (
-                  <div className="flex-1 overflow-hidden flex flex-col p-4 space-y-4">
-                    <h2 className="text-lg font-serif font-extrabold text-luxury-text-verse">Concordance Sacrée</h2>
-                    
-                    <div className="relative">
-                      <input 
-                        type="text"
-                        placeholder="Rechercher (ex: 'berger', 'alliance', 'amour')..."
-                        value={searchQuery}
-                        onChange={(e) => handleSearch(e.target.value)}
-                        className="w-full bg-luxury-surface border border-luxury-border rounded-lg py-2 px-3 pl-9 text-xs focus:border-luxury-gold focus:outline-none text-luxury-text-primary font-serif italic"
-                      />
-                      <Search className="w-3.5 h-3.5 text-luxury-text-muted absolute left-3 top-3" />
-                      {searchQuery && (
-                        <button 
-                          onClick={() => handleSearch("")}
-                          className="absolute right-3 top-2.5 text-luxury-text-muted hover:text-luxury-text-primary"
-                        >
-                          <X className="w-3.5 h-3.5" />
+                          <SkipBack className="w-4 h-4" />
                         </button>
-                      )}
-                    </div>
 
-                    <div className="flex-1 overflow-y-auto space-y-2 pb-2">
-                      {searchResults.length === 0 ? (
-                        <div className="py-24 text-center space-y-2 text-luxury-text-muted">
-                          <p className="text-xs">
-                            {searchQuery ? "Aucune concordance scripturale locale trouvée." : "Recherchez un terme pour parcourir les chapitres d'études."}
-                          </p>
-                          <p className="text-[9px] max-w-[260px] mx-auto italic opacity-80">
-                            (Indexation locale: Genèse 1-2, Psaumes 23, 91, Matthieu 5, Jean 1, 3, Apocalypse 21)
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="text-[9px] font-mono tracking-[0.1em] text-luxury-gold uppercase mb-1">
-                            {searchResults.length} OCCURRENCES TROUVÉES
-                          </div>
-                          {searchResults.map((verse) => (
-                            <div 
-                              key={`${verse.book_id}_${verse.chapter}_${verse.verse}`} 
-                              className="p-3.5 bg-luxury-surface rounded-lg border border-luxury-border hover:border-luxury-gold/40 transition text-left cursor-pointer"
-                              onClick={() => navigateToVerse(verse.book_id, verse.chapter)}
+                        {/* Play / Pause Toggle */}
+                        <button
+                          onClick={handlePlayPause}
+                          className="h-9 px-4 rounded-xl bg-gold-gradient text-[#0d0b07] font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-1.5 transition cursor-pointer hover:opacity-95 shadow-md"
+                        >
+                          {isSpeaking && !isPaused ? (
+                            <>
+                              <Pause className="w-4 h-4" />
+                              <span>Pause</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-4 h-4" />
+                              <span>Lecture</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Stop */}
+                        <button
+                          onClick={stopSpeaking}
+                          disabled={!isSpeaking}
+                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                          title="Arrêter la lecture"
+                        >
+                          <Square className="w-4 h-4" />
+                        </button>
+
+                        {/* Skip Forward */}
+                        <button
+                          onClick={() => {
+                            if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
+                              speakVerse(currentSpeakingVerseIndex + 1);
+                            }
+                          }}
+                          disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
+                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                          title="Verset suivant"
+                        >
+                          <SkipForward className="w-4 h-4" />
+                        </button>
+
+                        {/* Rate speed multipliers selection */}
+                        <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
+                          {[0.8, 1.0, 1.25, 1.5].map((rate) => (
+                            <button
+                              key={rate}
+                              onClick={() => {
+                                setPlaybackRate(rate);
+                                if (isSpeaking && !isPaused) {
+                                  // Speak using the new rate
+                                  speakVerse(currentSpeakingVerseIndex);
+                                }
+                              }}
+                              className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all ${
+                                playbackRate === rate 
+                                  ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                                  : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                              }`}
                             >
-                              <div className="flex justify-between items-center mb-1 text-[10px] font-bold text-luxury-gold">
-                                <span>{verse.book_name} {verse.chapter}:{verse.verse}</span>
-                                <span className="text-[8px] bg-luxury-button-bg px-1.5 py-0.5 rounded uppercase font-mono tracking-wider">
-                                  OUVRIR (cap. {verse.chapter})
-                                </span>
-                              </div>
-                              <p className="font-serif italic text-xs leading-relaxed text-luxury-text-primary">
-                                "{verse.text.replace(/\[\w+\]/g, '')}"
-                              </p>
-                            </div>
+                              {rate}x
+                            </button>
                           ))}
                         </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* --------------------------------------------------- */}
-                {/* 4. AI CHAT BOT TAB                                  */}
-                {/* --------------------------------------------------- */}
-                {activeTab === 'ai' && (
-                  <div className="flex-1 overflow-hidden flex flex-col pt-3">
-                    <div className="px-4 pb-2 border-b border-luxury-border flex items-center justify-between">
-                      <div>
-                        <h2 className="text-xs font-serif font-extrabold text-luxury-text-verse flex items-center gap-1.5 uppercase tracking-wider">
-                          <Sparkles className="w-3.5 h-3.5 text-luxury-gold" />
-                          <span>Sanctuaire Dogmatique</span>
-                        </h2>
-                        <span className="text-[8px] text-emerald-500 flex items-center gap-1 font-mono tracking-widest mt-0.5">
-                          <span className="w-1 h-1 bg-emerald-400 rounded-full animate-ping"></span>
-                          <span>COMPAGNON EXÉGÉTIQUE GEMINI ACTIVÉ</span>
-                        </span>
                       </div>
-                      <button 
-                        onClick={() => setChatHistory([{ role: 'model', content: 'Historique effacé. De quoi souhaiteriez-vous vous entretenir mon frère ?' }])}
-                        className="text-[9px] text-luxury-text-muted hover:text-rose-400 hover:underline"
-                      >
-                        EFFACER
-                      </button>
                     </div>
+                  )}
+                </div>
 
-                    {/* Chat Messages */}
-                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-                      {chatHistory.map((item, index) => (
-                        <div 
-                          key={index} 
-                          className={`flex ${item.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div className={`max-w-[85%] rounded-lg p-3 text-xs leading-relaxed border ${
-                            item.role === 'user' 
-                              ? 'bg-luxury-surface text-luxury-text-primary border-luxury-gold/20 rounded-tr-none font-serif italic' 
-                              : 'bg-luxury-surface/50 text-luxury-text-primary border-luxury-border rounded-tl-none font-sans'
-                          }`}>
-                            {item.content}
-                          </div>
-                        </div>
-                      ))}
-
-                      {chatLoading && (
-                        <div className="flex justify-start">
-                          <div className="bg-luxury-surface rounded-lg p-3 border border-luxury-border flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 bg-luxury-gold rounded-full animate-bounce"></span>
-                            <span className="w-1.5 h-1.5 bg-luxury-gold rounded-full animate-bounce delay-75"></span>
-                            <span className="w-1.5 h-1.5 bg-luxury-gold rounded-full animate-bounce delay-150"></span>
-                          </div>
-                        </div>
-                      )}
+                {loadingVerses ? (
+                  <div className="py-20 flex flex-col items-center justify-center space-y-3 select-none">
+                    <div className="w-8 h-8 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
+                    <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Mise au jour du papyrus...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {chapterVerses.map((item, idx) => {
+                      const noteInfo = getVerseHasNote(item);
+                      const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
                       
-                      <div ref={chatBottomRef}></div>
-                    </div>
-
-                    {/* Quick helper triggers */}
-                    <div className="px-3 py-1 flex gap-1.5 overflow-x-auto bg-luxury-surface/50 border-t border-luxury-border pb-2 class pt-2">
-                      <button 
-                        onClick={() => setChatMessage("Qui a inspiré la rédaction de la Genèse et du Pentateuque ?")}
-                        className="bg-luxury-bg hover:bg-luxury-button-bg text-[9px] px-2.5 py-1 rounded-full border border-luxury-border text-luxury-text-primary shrink-0"
-                      >
-                        Auteurs du Pentateuque ?
-                      </button>
-                      <button 
-                        onClick={() => setChatMessage("Quel est le rapport d'étymologie entre la Parole divine et le code Strong [G3056] Logos ?")}
-                        className="bg-luxury-bg hover:bg-luxury-button-bg text-[9px] px-2.5 py-1 rounded-full border border-luxury-border text-luxury-text-primary shrink-0"
-                      >
-                        Signification de Logos [G3056] ?
-                      </button>
-                      <button 
-                        onClick={() => setChatMessage("Explique la formule prophétique du Psaume 23 'L'Éternel est mon berger' ?")}
-                        className="bg-luxury-bg hover:bg-luxury-button-bg text-[9px] px-2.5 py-1 rounded-full border border-luxury-border text-luxury-text-primary shrink-0"
-                      >
-                        Psaume 23 : Berger ?
-                      </button>
-                    </div>
-
-                    {/* Send message form */}
-                    <form onSubmit={handleSendChatMessage} className="p-3 bg-luxury-surface border-t border-luxury-border flex gap-2">
-                      <input 
-                        type="text"
-                        placeholder="Poser un dilemme théologique ou historique..."
-                        value={chatMessage}
-                        onChange={(e) => setChatMessage(e.target.value)}
-                        className="flex-1 bg-luxury-bg border border-luxury-border rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-luxury-gold focus:outline-none text-luxury-text-primary font-serif italic"
-                      />
-                      <button
-                        type="submit"
-                        disabled={chatLoading || !chatMessage.trim()}
-                        className="w-10 h-10 bg-luxury-button-bg border border-[#c9a84c]/50 text-[#c9a84c] hover:border-[#c9a84c] rounded-lg flex items-center justify-center transition cursor-pointer"
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </form>
+                      return (
+                        <VerseItem 
+                          key={verseUniqueId}
+                          verse={item}
+                          isFavorite={getVerseHasBookmark(item)}
+                          onToggleFavorite={handleToggleFavorite}
+                          onExplain={handleExplainVerse}
+                          onStrongClick={handleStrongSelectionCode}
+                          textSize={textSize}
+                          lineHeight={textSize * 1.62}
+                          isSelected={selectedVerseId === verseUniqueId}
+                          onTap={() => {
+                            setSelectedVerseId(selectedVerseId === verseUniqueId ? null : verseUniqueId);
+                          }}
+                          hasNote={noteInfo.hasNote}
+                          noteText={noteInfo.text}
+                          noteAudio={noteInfo.audio}
+                          onSaveNote={handleSaveSpiritualNote}
+                          isCurrentSpoken={currentSpeakingVerseIndex === idx}
+                        />
+                      );
+                    })}
                   </div>
                 )}
-
-                {/* --------------------------------------------------- */}
-                {/* 5. FAVORITES & NOTES TAB                            */}
-                {/* --------------------------------------------------- */}
-                {activeTab === 'favorites' && (
-                  <div className="flex-1 overflow-hidden flex flex-col p-4 space-y-4">
-                    {/* Switcher between Favorites and Notes */}
-                    <div className="flex border-b border-luxury-border">
-                      <button
-                        onClick={() => setFavSubTab('favs')}
-                        className={`flex-1 pb-2.5 text-xs font-serif font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                          favSubTab === 'favs' ? 'text-luxury-gold border-b-2 border-luxury-gold' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                        }`}
-                      >
-                        <Heart className="w-3.5 h-3.5" fill={favSubTab === 'favs' ? 'currentColor' : 'none'} />
-                        <span>Favoris ({favorites.length})</span>
-                      </button>
-                      <button
-                        onClick={() => setFavSubTab('notes')}
-                        className={`flex-1 pb-2.5 text-xs font-serif font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                          favSubTab === 'notes' ? 'text-luxury-gold border-b-2 border-luxury-gold' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                        }`}
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        <span>Mes Notes ({notes.length})</span>
-                      </button>
+                
+                {/* Chapter study validation */}
+                {!loadingVerses && (
+                  <div className="mt-8 pt-5 border-t border-[#2e2a1e]/55 flex flex-col sm:flex-row items-center justify-between gap-4 select-none">
+                    <div className="text-left">
+                      <p className="text-[10px] font-serif font-bold text-[#c9a84c]">Avez-vous complété cette lecture ?</p>
+                      <p className="text-[9px] font-mono text-[#6b6355] uppercase">Marquer comme lu enregistre votre fidelité et vos streaks</p>
                     </div>
-
-                    <div className="flex-1 overflow-y-auto space-y-2.5 scrollbar-thin">
-                      {favSubTab === 'favs' ? (
-                        favorites.length === 0 ? (
-                          <div className="py-24 text-center space-y-2 text-luxury-text-muted">
-                            <p className="text-xs">Aucun verset mémorisé dans vos favoris d'études.</p>
-                            <p className="text-[10px] max-w-[220px] mx-auto italic">
-                              Appuyez sur le bouton "Sauver" sous un verset lors de vos séances de lecture.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-3 pb-2">
-                            {favorites.map((fav) => (
-                              <div 
-                                key={`${fav.book_id}_${fav.chapter}_${fav.verse}`}
-                                className="bg-luxury-surface p-4 rounded-xl border border-luxury-border shadow-soft relative group"
-                              >
-                                <div className="flex justify-between items-center mb-2">
-                                  <span 
-                                    onClick={() => navigateToVerse(fav.book_id, fav.chapter)}
-                                    className="text-xs font-serif font-bold text-luxury-gold hover:underline cursor-pointer"
-                                  >
-                                    {fav.book_name} {fav.chapter}:{fav.verse}
-                                  </span>
-                                  <button
-                                    onClick={() => {
-                                      const v: Verse = {
-                                        book_id: fav.book_id,
-                                        book_name: fav.book_name,
-                                        chapter: fav.chapter,
-                                        verse: fav.verse,
-                                        text: fav.text
-                                      };
-                                      handleToggleFavorite(v);
-                                    }}
-                                    className="text-luxury-text-muted hover:text-rose-400 transition cursor-pointer"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-
-                                <p className="font-serif italic text-xs leading-relaxed text-luxury-text-primary">
-                                  " {fav.text.replace(/\[\w+\]/g, '')} "
-                                </p>
-
-                                <div className="mt-3.5 flex justify-end gap-2.5">
-                                  <button
-                                    onClick={() => {
-                                      const v: Verse = {
-                                        book_id: fav.book_id,
-                                        book_name: fav.book_name,
-                                        chapter: fav.chapter,
-                                        verse: fav.verse,
-                                        text: fav.text
-                                      };
-                                      handleExplainVerse(v);
-                                    }}
-                                    className="px-3 py-1 bg-luxury-button-bg border border-luxury-gold/20 hover:border-luxury-gold/50 text-luxury-gold rounded text-[9px] font-bold flex items-center gap-1.5 cursor-pointer"
-                                  >
-                                    <Sparkles className="w-3 h-3 text-luxury-gold" />
-                                    <span>LIRE L'EXÉGÈSE</span>
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )
-                      ) : (
-                        notes.length === 0 ? (
-                          <div className="py-24 text-center space-y-2 text-luxury-text-muted">
-                            <p className="text-xs">Aucune note ou méditation enregistrée.</p>
-                            <p className="text-[10px] max-w-[220px] mx-auto italic font-sans">
-                              Sélectionnez un verset dans le lecteur et rédigez votre réflexion personnelle dans la boîte de note.
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-3 pb-2">
-                            {notes.map((note) => (
-                              <div 
-                                key={`${note.book_id}_${note.chapter}_${note.verse}`}
-                                className="bg-luxury-surface p-4 rounded-xl border border-luxury-border shadow-soft relative"
-                              >
-                                <div className="flex justify-between items-center mb-2">
-                                  <span 
-                                    onClick={() => navigateToVerse(note.book_id, note.chapter)}
-                                    className="text-xs font-serif font-bold text-luxury-gold hover:underline cursor-pointer"
-                                  >
-                                    {note.book_name} {note.chapter}:{note.verse}
-                                  </span>
-                                  <span className="text-[9px] font-mono text-luxury-text-muted">
-                                    Modifié le {note.updated_at}
-                                  </span>
-                                </div>
-
-                                <p className="font-serif italic text-xs leading-relaxed text-luxury-text-primary px-3 bg-[#12100c] border border-luxury-border/30 rounded-xl p-3 mb-3">
-                                  {note.note}
-                                </p>
-
-                                <div className="flex justify-between items-center">
-                                  <button
-                                    onClick={() => navigateToVerse(note.book_id, note.chapter)}
-                                    className="px-2.5 py-1 text-[9px] text-[#c9a84c] border border-[#c9a84c]/20 hover:border-[#c9a84c]/50 rounded font-bold font-mono transition cursor-pointer"
-                                  >
-                                    LIRE LE PASSAGE ➔
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      const v: Verse = {
-                                        book_id: note.book_id,
-                                        book_name: note.book_name,
-                                        chapter: note.chapter,
-                                        verse: note.verse,
-                                        text: ""
-                                      };
-                                      handleSaveNote(v, "");
-                                    }}
-                                    className="text-[10px] text-rose-400 hover:text-rose-300 font-mono cursor-pointer"
-                                  >
-                                    Effacer
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'lexicon' && (
-                  <div className="flex-1 overflow-hidden flex flex-col bg-[#0d0b07]">
-                    <StrongLexicon 
-                      highlightedCode={selectedStrong?.code}
-                      onClearHighlight={() => setSelectedStrong(null)}
-                      onNavigateToChapter={(bookId, chapterNum) => {
-                        const bk = BOOKS.find(b => b.id === bookId);
-                        if (bk) {
-                          setSelectedBook(bk);
-                          setSelectedChapter(chapterNum);
-                          setNavBook(bk);
-                          setNavChapter(chapterNum);
-                          setNavTestament(bk.testament);
-                          setIsNavigating(false);
-                          setActiveTab('read');
-                        }
-                      }}
-                      onExplainVerse={(verse) => handleExplainVerse(verse)}
-                    />
-                  </div>
-                )}
-
-              </div>
-
-              {/* Bottom Main Tab Bar - LUXURY CARVED BACKGROUND - Hidden in Focus Mode */}
-              {!isActualFocusMode && (
-                <div className="h-[74px] bg-[#12100c] border-t border-[#221e16] flex justify-around items-center px-2 rounded-b-[2.5rem] relative z-20">
-                  <button 
-                    onClick={() => setActiveTab('home')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'home' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <Home className="w-4 h-4" />
-                    <span className="text-[8.5px]">Accueil</span>
-                  </button>
-
-                  <button 
-                    onClick={() => setActiveTab('read')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'read' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <BookOpen className="w-4 h-4" />
-                    <span className="text-[8.5px]">Lecture</span>
-                  </button>
-
-                  <button 
-                    onClick={() => setActiveTab('lexicon')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'lexicon' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <BookOpenCheck className="w-4 h-4" />
-                    <span className="text-[8.5px]">Lexique</span>
-                  </button>
-
-                  <button 
-                    onClick={() => setActiveTab('search')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'search' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <Search className="w-4 h-4" />
-                    <span className="text-[8.5px]">Occurrences</span>
-                  </button>
-
-                  <button 
-                    onClick={() => setActiveTab('ai')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'ai' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <MessageSquare className="w-4 h-4" />
-                    <span className="text-[8.5px]">Exégèse IA</span>
-                  </button>
-
-                  <button 
-                    onClick={() => setActiveTab('favorites')}
-                    className={`flex flex-col items-center gap-1.5 px-1 py-1 rounded-lg transition ${
-                      activeTab === 'favorites' ? 'text-luxury-gold font-bold scale-105' : 'text-luxury-text-muted hover:text-luxury-text-primary'
-                    }`}
-                  >
-                    <Heart className="w-4 h-4" />
-                    <span className="text-[8.5px]">Mes Notes</span>
-                  </button>
-                </div>
-              )}
-
-            </div>
-          </div>
-        </div>
-
-        {/* ========================================================= */}
-        {/* RIGHT COLUMN: THE AI THEOLOGICAL DESK (DESKTOP EXTENSION)  */}
-        {/* ========================================================= */}
-        {!isActualFocusMode && (
-          <div className="lg:col-span-7 xl:col-span-7 space-y-6">
-          
-          {/* Main Workspace Headbanner */}
-          <div className="bg-luxury-surface border border-luxury-border p-6 rounded-2xl shadow-soft">
-            <h2 className="text-xl font-serif font-extrabold text-luxury-text-verse flex items-center gap-2.5">
-              <BookOpenCheck className="w-6 h-6 text-luxury-gold" />
-              <span>Pupitre d'Études Exégétiques & Philologiques</span>
-            </h2>
-            <p className="text-xs text-luxury-text-primary/75 mt-2.5 leading-relaxed">
-              Activez le simulateur mobile à gauche pour charger les analyses. 
-              Cliquez sur les annotations Strong de la version Louis Segond (p.ex. <span className="text-luxury-text-accent font-bold">[H7225]</span> ou <span className="text-luxury-text-accent font-bold">[G3056]</span>) pour explorer la racine des mots d'origine en grec hébreu, ou commandez l'élucidation de n'importe quel verset par l'IA.
-            </p>
-          </div>
-
-          {/* Active Workstation context displays */}
-          
-          {/* A. Strong Hebrew/Greek lookup result popup */}
-          {selectedStrong && (
-            <div className="bg-luxury-surface border-2 border-luxury-gold/50 p-6 rounded-2xl shadow-gold-glow space-y-4">
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-luxury-gold animate-ping"></span>
-                  <span className="font-mono text-[10px] tracking-widest font-extrabold text-luxury-gold uppercase">
-                    LEXIQUE DE TRANSLITÉRATION STRONG [{selectedStrong.code}]
-                  </span>
-                </div>
-                <button 
-                  onClick={() => setSelectedStrong(null)}
-                  className="p-1 text-luxury-text-muted hover:text-luxury-text-primary rounded-full transition"
-                  title="Fermer le lexique"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="flex items-center gap-4 py-1">
-                <div className="w-14 h-14 bg-luxury-bg border border-luxury-border rounded-xl flex items-center justify-center font-serif text-3xl font-extrabold text-luxury-text-verse shadow-soft">
-                  {selectedStrong.word}
-                </div>
-                <div>
-                  <h3 className="font-serif italic font-extrabold text-xl text-luxury-gold-light">
-                    {selectedStrong.transliteration}
-                  </h3>
-                  <span className="font-mono text-[9px] tracking-widest text-[#9ca3af] uppercase">
-                    Langue source : {selectedStrong.language === 'greek' ? 'Grec antique' : 'Hébreu biblique'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-4 text-xs font-serif leading-relaxed text-luxury-text-primary">
-                <div className="bg-luxury-bg p-4 rounded-xl border border-luxury-border">
-                  <span className="block font-mono text-[9px] text-[#9ca3af] tracking-wider uppercase mb-1.5">Définition & Explication théologique</span>
-                  <p className="italic text-sm">
-                    {selectedStrong.definition}
-                  </p>
-                </div>
-
-                {selectedStrong.usage && (
-                  <div className="p-3 bg-luxury-button-bg/40 rounded-xl border border-luxury-border/50">
-                    <span className="block font-mono text-[8px] text-luxury-gold tracking-wider uppercase mb-1">Occurrences et occurrences classiques</span>
-                    <p className="text-xs text-luxury-text-primary/90 italic font-mono">
-                      {selectedStrong.usage}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={() => {
-                    setChatMessage(`Fais-moi un exposé théologique profond sur le code Strong ${selectedStrong.code} (${selectedStrong.word}), sa translitération "${selectedStrong.transliteration}" et sa dimension symbolique dans les saintes écritures.`);
-                    setActiveTab('ai');
-                  }}
-                  className="px-4 py-2 bg-luxury-bg hover:bg-luxury-button-bg border border-luxury-gold/50 hover:border-luxury-gold text-luxury-gold rounded-lg text-xs font-bold font-serif tracking-wide transition flex items-center gap-1.5 shadow-gold-glow"
-                >
-                  <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-                  <span>Demander une étude doctrinale à Gemini</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* B. Synthesis of active chapter */}
-          {chapterSummary && (
-            <div className="bg-luxury-surface border border-luxury-border p-6 rounded-2xl shadow-soft relative overflow-hidden">
-              <div className="absolute top-3 right-3">
-                <button 
-                  onClick={() => setChapterSummary("")}
-                  className="p-1 text-luxury-text-muted hover:text-luxury-text-primary"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="flex items-center gap-2 mb-4">
-                <FileText className="w-5 h-5 text-luxury-gold" />
-                <h3 className="font-serif italic font-extrabold text-luxury-text-verse text-md">
-                  Synthèse thématique : {selectedBook.name} {selectedChapter}
-                </h3>
-              </div>
-
-              <div className="bg-luxury-bg p-5 rounded-xl border border-luxury-border whitespace-pre-line text-sm leading-relaxed text-luxury-text-primary font-serif">
-                {chapterSummary}
-              </div>
-            </div>
-          )}
-
-          {summaryLoading && (
-            <div className="bg-luxury-surface border border-luxury-gold/30 p-8 rounded-2xl text-center space-y-4 shadow-gold-glow">
-              <div className="w-8 h-8 border-2 border-luxury-gold border-t-transparent rounded-full animate-spin mx-auto"></div>
-              <p className="text-xs tracking-widest font-mono text-luxury-gold">GEMINI CONSTRUCTURE DE LA SYNTHÈSE DOCTRINALE DE {selectedBook.name.toUpperCase()} {selectedChapter}...</p>
-            </div>
-          )}
-
-          {/* C. Verse Analysis Window */}
-          <div className="bg-luxury-surface rounded-2xl border border-luxury-border shadow-soft overflow-hidden">
-            
-            <div className="p-4 bg-[#12100c] border-b border-luxury-border flex justify-between items-center px-6">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-luxury-gold animate-pulse" />
-                <h3 className="font-serif italic font-extrabold text-luxury-text-verse text-sm">Exégèse de passage herméneutique</h3>
-              </div>
-              
-              {selectedVerseForExplain && (
-                <button 
-                  onClick={() => setSelectedVerseForExplain(null)}
-                  className="text-xs text-luxury-text-muted hover:text-luxury-gold underline"
-                >
-                  Fermer l'étude
-                </button>
-              )}
-            </div>
-
-            <div className="p-6 space-y-4 text-left">
-              {explainLoading ? (
-                <div className="py-20 text-center space-y-4">
-                  <div className="w-8 h-8 border-2 border-luxury-gold border-t-transparent rounded-full animate-spin mx-auto"></div>
-                  <p className="text-xs font-mono text-luxury-gold tracking-widest">
-                    RECHERCHE EXÉGÉTIQUE DE {selectedVerseForExplain?.book_name.toUpperCase()} {selectedVerseForExplain?.chapter}:{selectedVerseForExplain?.verse}...
-                  </p>
-                  <p className="text-[10px] text-luxury-text-muted max-w-[340px] mx-auto italic">
-                    (Traduction de l'hébreu araméen/grec de la version Louis Segond, étude historique du temple et applications spirituelles doctrinales)
-                  </p>
-                </div>
-              ) : selectedVerseForExplain ? (
-                <div className="space-y-6">
-                  
-                  {/* Scripture focus display */}
-                  <div className="p-4 bg-luxury-bg border-l-4 border-luxury-gold rounded-r-lg">
-                    <span className="font-serif text-[10px] uppercase font-bold tracking-[0.2em] text-luxury-text-verse filter drop-shadow">
-                      {selectedVerseForExplain.book_name} {selectedVerseForExplain.chapter}:{selectedVerseForExplain.verse}
-                    </span>
-                    <p className="font-serif italic text-base sm:text-lg leading-relaxed text-luxury-text-primary mt-1.5">
-                      " {selectedVerseForExplain.text.replace(/\[\w+\]/g, '')} "
-                    </p>
-                  </div>
-
-                  {/* Extract words component if loaded */}
-                  <AnalysisCard 
-                    type="linguistic"
-                    title="Racines étymologiques & philologiques"
-                    content="Recherche des racines hébraïques ou grecques correspondant aux codes dictionnaire Strong associés à ce verset."
-                    strongWords={extractStrongWords()}
-                    onStrongPress={handleStrongLookup}
-                  />
-
-                  {/* Herméneutique text section */}
-                  <ContextSection 
-                    label={`EXÉGÈSE DÉTAILLÉE : ${selectedVerseForExplain.book_name.toUpperCase()} ${selectedVerseForExplain.chapter}:${selectedVerseForExplain.verse}`}
-                    content={explanationText || "Analyse en attente."}
-                  />
-
-                  <div className="flex gap-2.5 justify-end">
-                    <button
-                      onClick={() => {
-                        const copyTxt = `Exégèse de ${selectedVerseForExplain.book_name} ${selectedVerseForExplain.chapter}:${selectedVerseForExplain.verse}\n\n${explanationText}`;
-                        navigator.clipboard.writeText(copyTxt);
-                        alert("Analyse de l'assistant IA copiée dans le presse-papiers!");
-                      }}
-                      className="px-3 py-1.5 bg-luxury-bg hover:bg-luxury-button-bg text-luxury-text-primary rounded border border-luxury-border text-xs font-semibold flex items-center gap-1.5"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copier l'exégèse</span>
-                    </button>
                     
                     <button
-                      onClick={() => {
-                        setChatMessage(`Continuons d'analyser le verset ${selectedVerseForExplain.book_name} ${selectedVerseForExplain.chapter}:${selectedVerseForExplain.verse}. Pourriez-vous éduquer mon esprit sur la symbolique mystique de ce passage ?`);
-                        setActiveTab('ai');
-                      }}
-                      className="px-3.5 py-1.5 bg-luxury-button-bg border border-luxury-gold hover:border-luxury-gold-light text-luxury-gold rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-gold-glow"
+                      onClick={markCurrentChapterRead}
+                      disabled={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)}
+                      className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition duration-150 flex items-center gap-1.5 ${
+                        readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)
+                          ? 'bg-[#1a1712] border-[#2e2a1e] text-emerald-500'
+                          : 'bg-emerald-950/20 hover:bg-emerald-950/40 border-emerald-500/25 text-emerald-400'
+                      }`}
                     >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <span>S'entretenir avec l'IA</span>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'COMPLÉTÉ ET ENREGISTRÉ' : 'MARQUER LECTURE FAITE'}</span>
                     </button>
                   </div>
-
-                </div>
-              ) : (
-                <div className="py-24 text-center space-y-4">
-                  <div className="w-12 h-12 bg-luxury-button-bg text-luxury-gold rounded-full flex items-center justify-center mx-auto border border-luxury-gold/20 shadow-gold-glow">
-                    <BookMarked className="w-5.5 h-5.5" />
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-luxury-text-verse font-serif font-extrabold text-sm uppercase tracking-wide">PUPITRE D'EXÉGÈSE EN ATTENTE</p>
-                    <p className="text-xs text-luxury-text-muted max-w-[320px] mx-auto italic">
-                      Dans le simulateur mobile à gauche, appuyez sur <strong className="text-luxury-gold font-bold">Expliquer</strong> sous le verset de votre choix pour charger l'analyse.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-          </div>
-
-          {/* Quick Informational footer box */}
-          <div className="bg-luxury-surface border border-luxury-border p-6 rounded-2xl relative overflow-hidden">
-            <div className="absolute right-0 top-0 w-32 h-32 bg-luxury-gold/5 rounded-full blur-2xl"></div>
-            <h3 className="font-serif italic font-extrabold text-base text-luxury-text-verse mb-2 flex items-center gap-1.5">
-              <Activity className="w-5 h-5 text-luxury-gold" />
-              <span>Anatomie du Dictionnaire Strong Louis Segond</span>
-            </h3>
-            <p className="text-xs text-luxury-text-primary/70 font-serif leading-relaxed mb-4">
-              La traduction de 1910 de Louis Segond contient les codes grammaticaux universels indexés par James Strong en 1890. Notre dictionnaire analyse ces références directement du grec ancien (Nouveau Testament) et de l'hébreu ancien (Ancien Testament) en relation constante avec les explications érudites de Gemini pour préserver la vérité doctrinale originelle.
-            </p>
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-luxury-border/30 pt-4 mt-4">
-              <div className="flex flex-wrap gap-2">
-                <span className="bg-[#12100c] border border-luxury-border px-2.5 py-1 rounded text-[10px] text-luxury-gold font-bold uppercase">LOUIS SEGOND 1910</span>
-                <span className="bg-[#12100c] border border-luxury-border px-2.5 py-1 rounded text-[10px] text-luxury-gold font-bold uppercase">ASSISTANCE EXÉGÉTIQUE IA</span>
-                <span className="bg-[#12100c] border border-luxury-border px-2.5 py-1 rounded text-[10px] text-luxury-gold font-bold uppercase">SQLITE LOCAL OFFLINE</span>
+                )}
               </div>
-              <button
-                onClick={() => {
-                  resetSqliteDatabase();
-                  setSqliteDbReady(false);
-                  setSqliteProgress(0);
-                  setSqliteStatusText("Réinitialisation de la base...");
+
+              {/* Interactive Slide-Up panel / bottom tray for Single Verse Exegesis detailed exploration */}
+              <AnimatePresence>
+                {activeExplainVerse && (
+                  <div className="fixed inset-0 bg-black/85 flex items-center justify-center px-4 py-8 z-50 select-none animate-fade-in">
+                    <motion.div
+                      initial={{ scale: 0.94, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.94, opacity: 0 }}
+                      className="w-full max-w-3xl bg-[#12100c] border border-[#2e2a1e] p-6 rounded-[2.2rem] text-left space-y-4 shadow-gold-intense overflow-hidden max-h-[88vh] flex flex-col"
+                    >
+                      <div className="flex justify-between items-center pb-2 border-b border-[#2e2a1e] shrink-0">
+                        <div className="space-y-0.5">
+                          <span className="text-[8.5px] font-mono text-[#6b6355] uppercase tracking-widest font-black flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-[#c9a84c] animate-pulse" />
+                            Espace d'étude et d'Analyse
+                          </span>
+                          <h4 className="font-serif font-extrabold text-[#c9a84c] text-sm truncate uppercase pr-4">
+                            {activeExplainVerse.book_name} {activeExplainVerse.chapter}:{activeExplainVerse.verse}
+                          </h4>
+                        </div>
+                        <button 
+                          onClick={() => setActiveExplainVerse(null)}
+                          className="p-1.5 bg-[#1a1712] hover:bg-[#2e2a1e] border border-[#2e2a1e] hover:text-white rounded-lg transition text-[#6b6355] cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Studio Tab selectors */}
+                      <div className="flex border-b border-[#2e2a1e]/30 py-0.5 gap-2 shrink-0">
+                        <button
+                          onClick={() => setExegesisTab('exegesis')}
+                          className={`flex items-center gap-2 px-4 py-2 border-b-2 text-xs font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                            exegesisTab === 'exegesis'
+                              ? 'border-[#c9a84c] text-[#c9a84c]'
+                              : 'border-transparent text-[#6b3a1a]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                          }`}
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Exégèse IA</span>
+                        </button>
+                        <button
+                          onClick={() => setExegesisTab('compare')}
+                          className={`flex items-center gap-2 px-4 py-2 border-b-2 text-xs font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                            exegesisTab === 'compare'
+                              ? 'border-[#c9a84c] text-[#c9a84c]'
+                              : 'border-transparent text-[#6b6355] hover:text-[#e8e0d0]'
+                          }`}
+                        >
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span>Étude Comparative</span>
+                        </button>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto pr-1 scroller-thin space-y-4 select-text selection:bg-[#c9a84c]/20">
+                        {exegesisTab === 'exegesis' ? (
+                          <>
+                            <div className="bg-[#0f0d09] border border-[#2e2a1e] p-4.5 rounded-2xl italic font-reading text-[15.5px] text-luxury-text-primary leading-relaxed px-5">
+                              « {activeExplainVerse.text.replace(/\[[HG]\d+\]/g, '')} »
+                            </div>
+
+                            {loadingExplanation ? (
+                              <div className="py-16 flex flex-col items-center justify-center space-y-3">
+                                <div className="w-7 h-7 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
+                                <p className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider animate-pulse">Déchiffrement herméneutique...</p>
+                              </div>
+                            ) : (
+                              <div className="space-y-4 animate-fade-slide-up">
+                                {/* Analysis card container */}
+                                <AnalysisCard 
+                                  type="linguistic"
+                                  title="Analyse Exégétique IA"
+                                  content={verseExplanation || "Détails non fournis par Gemini."}
+                                  // Parse some strong codes from original text for interaction
+                                  strongWords={
+                                    activeExplainVerse.text.includes('[H') || activeExplainVerse.text.includes('[G')
+                                      ? (activeExplainVerse.text.match(/\[[HG]\d+\]/g) || []).map(code => {
+                                          const cleaned = code.replace('[', '').replace(']', '');
+                                          return { word: cleaned.startsWith('H') ? 'Racine Hébraïque' : 'Grec Originel', code: cleaned };
+                                        })
+                                      : []
+                                  }
+                                  onStrongPress={handleStrongSelectionCode}
+                                />
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <VerseComparison verse={activeExplainVerse} />
+                        )}
+                      </div>
+
+                      <div className="border-t border-[#2e2a1e]/60 pt-3 flex justify-end shrink-0">
+                        <button
+                          onClick={() => setActiveExplainVerse(null)}
+                          className="px-5 py-2 bg-[#0d0b07] border border-[#2e2a1e] text-[10px] uppercase tracking-wider font-mono font-bold hover:text-white rounded-lg transition cursor-pointer"
+                        >
+                          Fermer
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+
+          {/* B. CONCORDANCE AND STRONG LEXICON DICTIONARY TAB */}
+          {activeTab === 'dictionary' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <StrongLexicon 
+                onNavigateToChapter={handleNavigateChallengeToReader}
+                onExplainVerse={(verse) => {
+                  setSelectedBook(BOOKS.find(b => b.id === verse.book_id) || BOOKS[0]);
+                  setSelectedChapter(verse.chapter);
+                  setActiveTab('read');
+                  setSelectedVerseId(`${verse.book_id}_${verse.chapter}_${verse.verse}`);
                 }}
-                className="text-[10px] text-luxury-text-muted hover:text-luxury-gold transition font-mono uppercase tracking-wider flex items-center justify-center gap-1 bg-[#12100c] hover:bg-luxury-button-bg border border-luxury-border hover:border-luxury-gold/40 px-2.5 py-1.5 rounded-lg self-start sm:self-auto"
-                title="Rejouer l'onboarding d'import SQLite lors du premier lancement"
-              >
-                <Settings className="w-3 h-3 text-luxury-gold" />
-                <span>Réinitialiser SQLite</span>
-              </button>
-            </div>
-          </div>
+                highlightedCode={targetedStrongCode}
+                onClearHighlight={() => setTargetedStrongCode(null)}
+              />
+            </motion.div>
+          )}
+
+          {/* DYNAMIC BIBLE DICTIONARY / ENCYCLOPEDIA TAB */}
+          {activeTab === 'encyclopedia' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <BibleDictionary 
+                onSearchReference={(reference) => {
+                  // Reference looks like: "Exode 2:10" or "Genèse 15:1"
+                  const parts = reference.trim().split(' ');
+                  if (parts.length >= 2) {
+                    const lastPart = parts[parts.length - 1];
+                    const bookName = parts.slice(0, parts.length - 1).join(' ');
+                    
+                    const subParts = lastPart.split(':');
+                    const chapterNum = parseInt(subParts[0], 10) || 1;
+                    const verseNum = subParts[1] ? parseInt(subParts[1], 10) : null;
+
+                    const foundBook = BOOKS.find(b => b.name.toLowerCase() === bookName.toLowerCase() || b.slug.toLowerCase() === bookName.toLowerCase());
+                    if (foundBook) {
+                      setSelectedBook(foundBook);
+                      setSelectedChapter(chapterNum);
+                      setActiveTab('read');
+                      if (verseNum) {
+                        setSelectedVerseId(`${foundBook.id}_${chapterNum}_${verseNum}`);
+                      }
+                    } else {
+                      // Fallback try simple matching
+                      const partialBook = BOOKS.find(b => b.name.toLowerCase().includes(bookName.toLowerCase()));
+                      if (partialBook) {
+                        setSelectedBook(partialBook);
+                        setSelectedChapter(chapterNum);
+                        setActiveTab('read');
+                        if (verseNum) {
+                          setSelectedVerseId(`${partialBook.id}_${chapterNum}_${verseNum}`);
+                        }
+                      }
+                    }
+                  }
+                }}
+              />
+            </motion.div>
+          )}
+
+          {/* C. INTERACTIVE CONVERSATIONAL BIBLICAL CHATBOT COMPANION */}
+          {activeTab === 'assistant' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="flex-1 flex flex-col bg-[#12100c] border border-[#2e2a1e] rounded-[2.5rem] shadow-soft overflow-hidden h-[600px]"
+            >
+              <div className="bg-[#1a1712] border-b border-[#2e2a1e]/80 py-3.5 px-5 flex items-center justify-between shrink-0 select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8.5 h-8.5 rounded-full bg-luxury-button-bg border border-[#c9a84c]/20 flex items-center justify-center">
+                    <MessageSquare className="w-4 h-4 text-[#c9a84c]" />
+                  </div>
+                  <div className="text-left">
+                    <h3 className="font-serif font-extrabold text-sm text-[#e8e0d0] tracking-wide">Assistant Érudit</h3>
+                    <p className="text-[9.5px] font-mono text-[#c9a84c] uppercase font-bold tracking-wider">Guidage Théologique & Pastoral</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (window.confirm("Voulez-vous réinitialiser votre session d'étude chrétienne active ?")) {
+                      setChatMessages([
+                        { role: 'model', content: "Paix! Une nouvelle halte commence. Comment désirez-vous consolider votre théologie aujourd'hui ?" }
+                      ]);
+                    }
+                  }}
+                  className="px-2.5 py-1 hover:bg-red-500/10 hover:text-red-400 border border-[#2e2a1e] rounded-lg text-[10px] font-mono tracking-wider uppercase transition cursor-pointer text-[#6b6355]"
+                >
+                  Effacer
+                </button>
+              </div>
+
+              {/* Chat screen lists */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-4 scroller-thin text-left selection:bg-[#c9a84c]/20 select-text">
+                {chatMessages.map((msg, idx) => (
+                  <div 
+                    key={idx}
+                    className={`flex items-start gap-3.5 max-w-[85%] ${
+                      msg.role === 'user' ? 'ml-auto flex-row-reverse' : ''
+                    }`}
+                  >
+                    {/* Tiny avatar mark */}
+                    <div className={`w-7 h-7 rounded-xl shrink-0 flex items-center justify-center text-xs font-bold border ${
+                      msg.role === 'user' 
+                        ? 'bg-[#1a1712] border-[#2e2a1e] text-[#6b6355]' 
+                        : 'bg-luxury-button-bg border-[#c9a84c]/20 text-[#c9a84c]'
+                    }`}>
+                      {msg.role === 'user' ? 'P' : 'IA'}
+                    </div>
+
+                    <div className={`p-4 rounded-3xl text-[14.5px] leading-[23px] whitespace-pre-wrap ${
+                      msg.role === 'user'
+                        ? 'bg-[#1a1712] text-luxury-text-primary border border-[#2e2a1e] font-sans'
+                        : 'bg-[#0d0b07] text-luxury-text-primary/95 border border-[#2e2a1e]/45 rounded-tl-none font-reading'
+                    }`}>
+                      {msg.role === 'user' ? msg.content : cleanBibleMarkdown(msg.content)}
+                    </div>
+                  </div>
+                ))}
+                
+                {loadingChat && (
+                  <div className="flex items-start gap-4">
+                    <div className="w-7 h-7 rounded-xl bg-luxury-button-bg border border-[#c9a84c]/20 flex items-center justify-center text-xs font-bold shrink-0">
+                      IA
+                    </div>
+                    <div className="bg-[#000]/20 p-3 rounded-2xl flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-bounce delay-100"></div>
+                      <div className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-bounce delay-200"></div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Suggestions block helper */}
+              <div className="px-4 py-2 border-t border-[#2e2a1e]/30 bg-[#0f0e0b] overflow-x-auto flex gap-2 select-none scroller-none shrink-0">
+                {[
+                  "Explique le concept d'Alliance",
+                  "Conseille de la force contre l'anxiété",
+                  "Qui est l'auteur de l'Évangile de Jean ?",
+                  "Psaumes de reconnaissance"
+                ].map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setChatInput(s);
+                    }}
+                    className="shrink-0 px-3 py-1 bg-[#1a1712] hover:bg-[#c9a84c]/10 text-[#6b6355] hover:text-[#c9a84c] border border-[#2e2a1e] rounded-full text-[10px] font-sans transition cursor-pointer"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+
+              {/* Chat Input form shelf */}
+              <form onSubmit={handleSendChatMessage} className="bg-[#1a1712] border-t border-[#2e2a1e] p-3 flex gap-2.5 shrink-0 select-none">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Écrivez votre question théologique ou spirituelle..."
+                  className="bg-[#0d0b07] border border-[#2e2a1e] focus:border-[#c9a84c] text-xs text-[#e8e0d0] rounded-xl px-4 py-3 outline-none flex-1 placeholder:text-[#6b6355]"
+                />
+                
+                <button
+                  type="submit"
+                  disabled={loadingChat || !chatInput.trim()}
+                  className="px-5 py-3 bg-gold-gradient disabled:opacity-50 text-[#0d0b07] hover:opacity-95 font-serif font-extrabold text-[11px] tracking-widest uppercase rounded-xl transition duration-150 cursor-pointer shadow-md shrink-0 flex items-center justify-center gap-1"
+                >
+                  <ArrowRight className="w-3.5 h-3.5 text-[#0d0b07]" />
+                  <span>Poser</span>
+                </button>
+              </form>
+            </motion.div>
+          )}
+
+          {/* D. DISCOVER, READING PLANS, STATS AND REMINDERS TABS */}
+          {activeTab === 'challenges' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-5"
+            >
+              {/* Daily Reminder Scheduler widget */}
+              <DailyReminder />
+
+              {/* Weekly Study Activity AreaChart */}
+              <StudyStatsChart readingHistory={readingHistory} />
+
+              {/* Reading Plans Core challenges mapping module */}
+              <ReadingChallenges 
+                readingHistory={readingHistory} 
+                onNavigateToChapter={handleNavigateChallengeToReader}
+              />
+            </motion.div>
+          )}
 
         </div>
-        )}
+      </main>
 
-      </div>
+      {/* MOBILE BOTTOM NAVIGATION SHELF */}
+      <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-1 flex justify-around md:hidden z-40 select-none shadow-gold-glow">
+        <button
+          onClick={() => setActiveTab('read')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'read' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <BookOpen className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Étudier</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('dictionary'); setTargetedStrongCode(null); }}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'dictionary' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Search className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Lexique</span>
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('encyclopedia'); }}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'encyclopedia' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Library className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Dict. IA</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('assistant')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'assistant' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <MessageSquare className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Conseil</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('challenges')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'challenges' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Flame className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Défis</span>
+        </button>
+      </nav>
 
     </div>
   );

@@ -164,7 +164,7 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
 
       {/* RENDER LIST OF STRONG ENTRIES */}
       {!selectedEntry ? (
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2.5 scrollbar-thin">
+        <div className="flex-1 overflow-y-auto px-4 py-3 pb-16 space-y-2.5 no-scrollbar">
           <div className="flex justify-between items-center text-[9px] font-mono text-[#6b6355] border-b border-[#2e2a1e]/40 pb-1 px-1">
             <span>INDEX DES CODES DISPONIBLES</span>
             <span>{filteredEntries.length} MOTS CORRESPONDANTS</span>
@@ -216,7 +216,7 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
         </div>
       ) : (
         /* RENDER SELECTED LEXICAL DETAIL VIEW WITH CONCORDANCE SEARCH */
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 animate-fade-slide-up flex flex-col">
+        <div className="flex-1 overflow-y-auto p-4 pb-16 space-y-4 animate-fade-slide-up flex flex-col">
           
           {/* Header Action bar */}
           <div className="flex justify-between items-center border-b border-[#2e2a1e] pb-3 shrink-0">
@@ -262,18 +262,18 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
             <div className="w-12 h-[1px] bg-gradient-to-r from-transparent via-[#2e2a1e] to-transparent mx-auto"></div>
 
             {/* Definitions */}
-            <div className="space-y-3.5 text-left pt-1 px-1">
+            <div className="space-y-4 text-left pt-1 px-1">
               <div className="space-y-1">
-                <span className="text-[8px] font-mono tracking-wider text-[#6b6355] uppercase block">DÉFINITION SEMANTIQUE</span>
-                <p className="text-xs text-[#e8e0d0] leading-relaxed font-serif">
+                <span className="text-[8px] font-mono tracking-wider text-[#6b6355] uppercase block font-bold">DÉFINITION SÉMANTIQUE</span>
+                <p className="text-[14.5px] text-luxury-text-primary leading-relaxed font-reading">
                   {selectedEntry.definition}
                 </p>
               </div>
 
               {selectedEntry.usage && (
                 <div className="space-y-1">
-                  <span className="text-[8px] font-mono tracking-wider text-[#6b6355] uppercase block">USAGE TRADUCTIONNEL</span>
-                  <p className="text-[10px] text-[#60c49f] leading-normal italic bg-[#60c49f]/5 border border-[#60c49f]/10 p-2 rounded-lg">
+                  <span className="text-[8px] font-mono tracking-wider text-[#6b6355] uppercase block font-bold">USAGE TRADUCTIONNEL</span>
+                  <p className="text-[12.5px] text-[#60c49f] leading-relaxed italic bg-[#60c49f]/5 border border-[#60c49f]/15 p-2.5 rounded-xl font-reading">
                     {selectedEntry.usage}
                   </p>
                 </div>
@@ -293,11 +293,11 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
 
             {concordanceVerses.length === 0 ? (
               <div className="py-8 bg-[#12100c]/45 border border-dashed border-[#2e2a1e] rounded-xl text-center text-[#6b6355] px-4 space-y-1 my-auto">
-                <p className="text-[11px] font-serif italic">Pas d'occurrence directe dans les versets d'évangiles chargés.</p>
-                <p className="text-[9px] leading-relaxed max-w-[220px] mx-auto">Ce mot fait partie du dictionnaire de référence général sans être pré-mappé aux fragments offline.</p>
+                <p className="text-[11.5px] font-reading italic">Pas d'occurrence directe dans les versets d'évangiles chargés.</p>
+                <p className="text-[9.5px] leading-relaxed max-w-[220px] mx-auto font-sans">Ce mot fait partie du dictionnaire de référence général sans être pré-mappé aux fragments offline.</p>
               </div>
             ) : (
-              <div className="space-y-2 overflow-y-auto flex-1 max-h-[300px] pr-1 scrollbar-thin">
+              <div className="space-y-2 overflow-y-auto flex-1 max-h-[300px] pr-1 no-scrollbar">
                 {concordanceVerses.map((v, index) => {
                   return (
                     <div 
@@ -305,7 +305,7 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
                       className="bg-[#12100c]/85 border border-[#2e2a1e] rounded-xl p-3 space-y-2 text-left hover:border-[#c9a84c]/20 transition"
                     >
                       <div className="flex justify-between items-center">
-                        <span className="font-serif font-bold text-[10px] text-[#c9a84c]">
+                        <span className="font-serif font-bold text-[10.5px] text-[#c9a84c]">
                           {v.book_name} {v.chapter}:{v.verse}
                         </span>
                         
@@ -319,12 +319,12 @@ export const StrongLexicon: React.FC<StrongLexiconProps> = ({
                         </button>
                       </div>
 
-                      <p className="text-[11px] text-[#e8e0d0] leading-relaxed font-serif italic text-left">
+                      <p className="text-[13.5px] text-luxury-text-primary leading-relaxed font-reading italic text-left">
                         {/* Highlights the code inside bracket */}
                         {v.text.split(/(\[[HG]\d+\])/).map((p, idx) => {
                           const isMatch = p.toLowerCase().includes(selectedEntry.code.toLowerCase());
                           return isMatch ? (
-                            <strong key={idx} className="bg-[#c9a84c]/15 text-[#c9a84c] px-0.5 rounded border border-[#c9a84c]/30 font-mono text-[9px] whitespace-nowrap">
+                            <strong key={idx} className="bg-[#c9a84c]/15 text-[#c9a84c] px-1 rounded border border-[#c9a84c]/30 font-mono text-[9.5px] whitespace-nowrap">
                               {p}
                             </strong>
                           ) : p;

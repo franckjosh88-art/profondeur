@@ -1,6 +1,6 @@
 {
   "name": "Bible Mobile",
-  "description": "Une application biblique moderne avec navigation simple, recherche intégrée, lexique Strong et compagnon d'apprentissage propulsé par Gemini.",
+  "description": "Application majeure d'étude de la Bible Louis Segond 1910 avec dictionnaire d'origines Strong, exégèse IA, notes spirituelles, signets, défis de lecture et mode hors-ligne.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

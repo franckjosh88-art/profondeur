@@ -365,7 +365,7 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                 INDEX DES CHAPITRES DU PLAN
               </span>
 
-              <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+              <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 no-scrollbar">
                 {planBooks.map(b => {
                   const isExpanded = expandedBookId === b.id;
                   

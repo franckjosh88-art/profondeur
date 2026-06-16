@@ -1,4 +1,5 @@
 import React from 'react';
+import { cleanBibleMarkdown } from '../lib/bibleFormatter';
 
 interface ContextSectionProps {
   content: string;
@@ -20,7 +21,7 @@ export const ContextSection: React.FC<ContextSectionProps> = ({
       
       {/* Body text on luxury text primary, size 14px */}
       <p className="font-sans text-[14px] leading-relaxed text-luxury-text-primary/95 whitespace-pre-line select-text">
-        {content}
+        {cleanBibleMarkdown(content)}
       </p>
     </div>
   );
