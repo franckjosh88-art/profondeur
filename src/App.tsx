@@ -1345,7 +1345,13 @@ export default function App() {
                     <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Mise au jour du papyrus...</p>
                   </div>
                 ) : (
-                  <div className="space-y-1">
+                  <motion.div 
+                    key={`${selectedBook.id}_${selectedChapter}_${selectedTranslation}`}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+                    className="space-y-1"
+                  >
                     {chapterVerses.map((item, idx) => {
                       const noteInfo = getVerseHasNote(item);
                       const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
@@ -1372,7 +1378,7 @@ export default function App() {
                         />
                       );
                     })}
-                  </div>
+                  </motion.div>
                 )}
                 
                 {/* Chapter study validation */}
