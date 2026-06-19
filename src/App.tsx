@@ -9,14 +9,14 @@ import {
   auth, db, googleProvider, handleFirestoreError, OperationType 
 } from './lib/firebase';
 import { 
-  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse 
+  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult 
 } from './types/bible';
 import { 
   BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter 
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -27,6 +27,7 @@ import { StrongLexicon } from './components/StrongLexicon';
 import { ReadingChallenges } from './components/ReadingChallenges';
 import { StudyStatsChart } from './components/StudyStatsChart';
 import { DailyReminder } from './components/DailyReminder';
+import { DailyReadingGoal } from './components/DailyReadingGoal';
 import { AnalysisCard } from './components/AnalysisCard';
 import { ContextSection } from './components/ContextSection';
 import { VerseQuote } from './components/VerseQuote';
@@ -34,6 +35,7 @@ import { RevelationBadge } from './components/RevelationBadge';
 import { cleanBibleMarkdown } from './lib/bibleFormatter';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
+import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
 
 export default function App() {
   // Authentication states
@@ -74,6 +76,10 @@ export default function App() {
   const [loadingVerses, setLoadingVerses] = useState<boolean>(false);
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null); // formatted as "bookId_chapter_verse"
   const [searchKeyword, setSearchKeyword] = useState<string>('');
+  
+  // Continuous scroll states
+  const [isContinuousScroll, setIsContinuousScroll] = useState<boolean>(false);
+  const [loadedChapters, setLoadedChapters] = useState<number[]>([1]);
 
   // AI Chapter Summary Cache state
   const [chapterSummary, setChapterSummary] = useState<string | null>(null);
@@ -127,9 +133,30 @@ export default function App() {
         setAuthError(null);
         setupUserSnapshotListeners(firebaseUser.uid);
       } else {
-        setFavorites([]);
-        setNotes([]);
-        setReadingHistory([]);
+        try {
+          const offlineFavs = localStorage.getItem('offline_bookmarks');
+          setFavorites(offlineFavs ? JSON.parse(offlineFavs) : []);
+        } catch (e) {
+          setFavorites([]);
+        }
+
+        try {
+          const offlineNotes = localStorage.getItem('offline_notes');
+          setNotes(offlineNotes ? JSON.parse(offlineNotes) : []);
+        } catch (e) {
+          setNotes([]);
+        }
+
+        try {
+          const offlineHistory = localStorage.getItem('offline_reading_history');
+          if (offlineHistory) {
+            setReadingHistory(JSON.parse(offlineHistory));
+          } else {
+            setReadingHistory([]);
+          }
+        } catch (e) {
+          setReadingHistory([]);
+        }
       }
     });
 
@@ -147,7 +174,85 @@ export default function App() {
     }
   }, [themeMode]);
 
-  // Load and cache chapter verses on Book or Chapter selector changes
+  // In-memory cache to store fetched chapters and speed up navigation/continuous scroll massively
+  const versesCache = useRef<Record<string, Promise<Verse[]> | Verse[]>>({});
+
+  // Helper to load a single chapter with in-memory cache
+  const loadSingleChapterVerses = (chapterNum: number): Promise<Verse[]> => {
+    const cacheKey = `${selectedTranslation}_${selectedBook.id}_${chapterNum}`;
+    
+    // If we have a cached value (promise or array), return it
+    if (versesCache.current[cacheKey]) {
+      const cached = versesCache.current[cacheKey];
+      if (Array.isArray(cached)) {
+        return Promise.resolve(cached);
+      }
+      return cached;
+    }
+
+    const fetchPromise = (async (): Promise<Verse[]> => {
+      try {
+        if (selectedTranslation === 'local') {
+          const isPreloaded = (selectedBook.id === 1 && (chapterNum === 1 || chapterNum === 2)) || 
+                              (selectedBook.id === 19 && chapterNum === 23);
+          
+          if (isPreloaded) {
+            return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+          } else {
+            try {
+              const response = await fetch('/api/gemini/fetch-verses', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bookName: selectedBook.name, chapterNum: chapterNum })
+              });
+              if (!response.ok) {
+                throw new Error("HTTP error " + response.status);
+              }
+              const data = await response.json();
+              if (data && data.verses && Array.isArray(data.verses) && data.verses.length > 0) {
+                return data.verses.map((v: any) => ({
+                  book_id: selectedBook.id,
+                  book_name: selectedBook.name,
+                  chapter: chapterNum,
+                  verse: v.verse,
+                  text: v.text
+                }));
+              } else {
+                throw new Error("Format de réponse invalide.");
+              }
+            } catch (err) {
+              console.warn("API dynamic verses fetch failed, using offline fallback:", err);
+              return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+            }
+          }
+        } else {
+          return await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, selectedTranslation);
+        }
+      } catch (err) {
+        console.warn("Failed to load scriptures, using offline fallback:", err);
+        return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+      }
+    })();
+
+    // Store the promise in cache
+    versesCache.current[cacheKey] = fetchPromise;
+
+    // Replace with resolved array once done
+    fetchPromise.then(v => {
+      versesCache.current[cacheKey] = v;
+    }).catch(() => {
+      delete versesCache.current[cacheKey];
+    });
+
+    return fetchPromise;
+  };
+
+  // Synchronize loadedChapters state on book or chapter transitions
+  useEffect(() => {
+    setLoadedChapters([selectedChapter]);
+  }, [selectedBook, selectedChapter]);
+
+  // Load and cache chapter verses on Book, Chapter, Mode, or scroll page changes
   useEffect(() => {
     if (!sqliteDbReady) return;
     
@@ -155,21 +260,51 @@ export default function App() {
     setLoadingVerses(true);
     setSelectedVerseId(null);
     setChapterSummary(null); // Clear active summary cache
+    
+    // Quick synchronous check to see if everything in loadedChapters is already fully loaded in cache
+    const allCachedAndArray = loadedChapters.every(ch => {
+      const key = `${selectedTranslation}_${selectedBook.id}_${ch}`;
+      return Array.isArray(versesCache.current[key]);
+    });
+
+    // If completely cached in memory as resolved arrays, skip showing active loading spinners
+    if (allCachedAndArray) {
+      const allVerses: Verse[] = [];
+      loadedChapters.forEach(ch => {
+        const key = `${selectedTranslation}_${selectedBook.id}_ch_${ch}`;
+        const keyAlt = `${selectedTranslation}_${selectedBook.id}_${ch}`;
+        const cached = (versesCache.current[keyAlt] || versesCache.current[key]) as Verse[];
+        if (cached) {
+          allVerses.push(...cached);
+        }
+      });
+      if (allVerses.length > 0) {
+        setChapterVerses(allVerses);
+        setLoadingVerses(false);
+      }
+    }
 
     const loadVerses = async () => {
       try {
-        if (selectedTranslation === 'local') {
-          const verses = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
-          if (active) setChapterVerses(verses);
+        if (isContinuousScroll) {
+          // Load all chapters currently in loadedChapters list
+          const allVersesPromises = loadedChapters.map(ch => loadSingleChapterVerses(ch));
+          const allChaptersVersesArrays = await Promise.all(allVersesPromises);
+          
+          // Concatenate them all in original numeric order
+          const merged = allChaptersVersesArrays.flat();
+          if (active) {
+            setChapterVerses(merged);
+          }
         } else {
-          const verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, selectedChapter, selectedTranslation);
-          if (active) setChapterVerses(verses);
+          // Standard single chapter load
+          const verses = await loadSingleChapterVerses(selectedChapter);
+          if (active) {
+            setChapterVerses(verses);
+          }
         }
       } catch (err) {
-        console.warn("Failed to load online chapter scriptures, falling back to local:", err);
-        // Fallback to local offline verses
-        const verses = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
-        if (active) setChapterVerses(verses);
+        console.error("Critical loader issue:", err);
       } finally {
         if (active) setLoadingVerses(false);
       }
@@ -180,7 +315,57 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation]);
+  }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation, isContinuousScroll, loadedChapters]);
+
+  // Background Prefetching: predictively loads the next 2 chapters to make scrolling and clicking completely instant
+  useEffect(() => {
+    if (!sqliteDbReady) return;
+
+    const prefetchAhead = async () => {
+      const currentHighest = isContinuousScroll ? Math.max(...loadedChapters) : selectedChapter;
+      
+      // Prefetch the next 2 chapters silently in the background
+      for (let offset = 1; offset <= 2; offset++) {
+        const targetChapter = currentHighest + offset;
+        if (targetChapter <= selectedBook.chapters_count) {
+          loadSingleChapterVerses(targetChapter).catch(() => {});
+        }
+      }
+    };
+
+    // Delay background activity slightly to let key UI rendering finish first
+    const timer = setTimeout(() => {
+      prefetchAhead();
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [selectedBook, selectedChapter, loadedChapters, isContinuousScroll, sqliteDbReady, selectedTranslation]);
+
+  // Infinite Scroll Trigger via IntersectionObserver
+  useEffect(() => {
+    if (!isContinuousScroll) return;
+    
+    const trigger = document.getElementById('continuous-scroll-trigger');
+    if (!trigger) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      const first = entries[0];
+      if (first.isIntersecting) {
+        const maxCh = Math.max(...loadedChapters);
+        if (maxCh < selectedBook.chapters_count) {
+          setLoadedChapters(prev => {
+            if (prev.includes(maxCh + 1)) return prev;
+            return [...prev, maxCh + 1];
+          });
+        }
+      }
+    }, {
+      rootMargin: '250px', // trigger 250px before screen bottom
+    });
+
+    observer.observe(trigger);
+    return () => observer.disconnect();
+  }, [isContinuousScroll, loadedChapters, selectedBook]);
 
   // Read subcollections reactively from Firestore
   const setupUserSnapshotListeners = (uid: string) => {
@@ -325,42 +510,71 @@ export default function App() {
 
   // Synchronize reading log state, marking current chapter as completed
   const markCurrentChapterRead = async () => {
-    if (!user) return;
-    
     // Check if already exist
     const isAlreadyRead = readingHistory.some(
       h => h.book_id === selectedBook.id && h.chapter === selectedChapter
     );
     if (isAlreadyRead) return;
 
-    try {
-      const historyItem: ReadingHistory = {
-        book_id: selectedBook.id,
-        book_name: selectedBook.name,
-        chapter: selectedChapter,
-        timestamp: new Date().toISOString()
-      };
-      
-      const docId = `history_${selectedBook.id}_${selectedChapter}`;
-      await setDoc(doc(db, 'users', user.uid, 'history', docId), historyItem);
-    } catch (error) {
-      console.error("Error saving reading progress record:", error);
+    const historyItem: ReadingHistory = {
+      book_id: selectedBook.id,
+      book_name: selectedBook.name,
+      chapter: selectedChapter,
+      timestamp: new Date().toISOString()
+    };
+
+    if (user) {
+      try {
+        const docId = `history_${selectedBook.id}_${selectedChapter}`;
+        await setDoc(doc(db, 'users', user.uid, 'history', docId), historyItem);
+      } catch (error) {
+        console.error("Error saving reading progress record:", error);
+      }
+    } else {
+      // Offline fallback
+      try {
+        const nextHistory = [...readingHistory, historyItem];
+        setReadingHistory(nextHistory);
+        localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
+      } catch (e) {
+        console.error("Error saving offline reading progress record:", e);
+      }
     }
   };
 
   // Bookmark toggling helper
   const handleToggleFavorite = async (verse: Verse) => {
-    if (!user) return;
-    
-    const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
     const favorited = favorites.some(
       f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse
     );
 
-    try {
-      const docRef = doc(db, 'users', user.uid, 'bookmarks', docId);
+    if (user) {
+      const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+      try {
+        const docRef = doc(db, 'users', user.uid, 'bookmarks', docId);
+        if (favorited) {
+          await deleteDoc(docRef);
+        } else {
+          const favoriteItem: FavoriteVerse = {
+            book_id: verse.book_id,
+            book_name: verse.book_name,
+            chapter: verse.chapter,
+            verse: verse.verse,
+            text: verse.text,
+            added_at: new Date().toISOString()
+          };
+          await setDoc(docRef, favoriteItem);
+        }
+      } catch (error) {
+        console.error("Could not toggle favorite status:", error);
+      }
+    } else {
+      // Offline mode
+      let nextFavs;
       if (favorited) {
-        await deleteDoc(docRef);
+        nextFavs = favorites.filter(
+          f => !(f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse)
+        );
       } else {
         const favoriteItem: FavoriteVerse = {
           book_id: verse.book_id,
@@ -370,32 +584,60 @@ export default function App() {
           text: verse.text,
           added_at: new Date().toISOString()
         };
-        await setDoc(docRef, favoriteItem);
+        nextFavs = [...favorites, favoriteItem];
       }
-    } catch (error) {
-      console.error("Could not toggle favorite status:", error);
+      setFavorites(nextFavs);
+      localStorage.setItem('offline_bookmarks', JSON.stringify(nextFavs));
     }
   };
 
   // Save Verse Note helper
-  const handleSaveSpiritualNote = async (verse: Verse, textNote: string, audioBase64?: string) => {
-    if (!user) return;
+  const handleSaveSpiritualNote = async (verse: Verse, textNote: string, audioBase64?: string, emotionAnalysis?: EmotionAnalysisResult) => {
+    const existingNote = notes.find(n => n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse);
+    let targetAudio = existingNote?.audio;
 
-    const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
-    const docRef = doc(db, 'users', user.uid, 'notes', docId);
+    if (audioBase64 === '') {
+      targetAudio = undefined;
+    } else if (audioBase64) {
+      targetAudio = audioBase64;
+    }
 
-    try {
-      const existingNote = notes.find(n => n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse);
-      let targetAudio = existingNote?.audio;
+    const isDelete = textNote.trim() === '' && !targetAudio;
 
-      if (audioBase64 === '') {
-        targetAudio = undefined;
-      } else if (audioBase64) {
-        targetAudio = audioBase64;
+    if (user) {
+      const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+      const docRef = doc(db, 'users', user.uid, 'notes', docId);
+
+      try {
+        if (isDelete) {
+          await deleteDoc(docRef);
+        } else {
+          const noteItem: VerseNote = {
+            book_id: verse.book_id,
+            book_name: verse.book_name,
+            chapter: verse.chapter,
+            verse: verse.verse,
+            note: textNote,
+            updated_at: new Date().toISOString()
+          };
+          if (targetAudio) {
+            noteItem.audio = targetAudio;
+          }
+          if (emotionAnalysis) {
+            noteItem.emotion_analysis = emotionAnalysis;
+          } else if (existingNote?.emotion_analysis) {
+            noteItem.emotion_analysis = existingNote.emotion_analysis;
+          }
+          await setDoc(docRef, noteItem);
+        }
+      } catch (error) {
+        console.error("Could not save note:", error);
       }
-
-      if (textNote.trim() === '' && !targetAudio) {
-        await deleteDoc(docRef);
+    } else {
+      // Offline mode
+      let nextNotes;
+      if (isDelete) {
+        nextNotes = notes.filter(n => !(n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse));
       } else {
         const noteItem: VerseNote = {
           book_id: verse.book_id,
@@ -408,10 +650,20 @@ export default function App() {
         if (targetAudio) {
           noteItem.audio = targetAudio;
         }
-        await setDoc(docRef, noteItem);
+        if (emotionAnalysis) {
+          noteItem.emotion_analysis = emotionAnalysis;
+        } else if (existingNote?.emotion_analysis) {
+          noteItem.emotion_analysis = existingNote.emotion_analysis;
+        }
+        
+        if (existingNote) {
+          nextNotes = notes.map(n => (n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse) ? noteItem : n);
+        } else {
+          nextNotes = [...notes, noteItem];
+        }
       }
-    } catch (error) {
-      console.error("Could not save note:", error);
+      setNotes(nextNotes);
+      localStorage.setItem('offline_notes', JSON.stringify(nextNotes));
     }
   };
 
@@ -492,7 +744,51 @@ export default function App() {
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const [voiceGender, setVoiceGender] = useState<'auto' | 'male' | 'female'>(() => {
+    try {
+      const g = localStorage.getItem('bible_voice_gender');
+      return (g as 'auto' | 'male' | 'female') || 'auto';
+    } catch (_) {
+      return 'auto';
+    }
+  });
   const currentVerseToSpeakRef = useRef<number>(-1);
+
+  // Background Ambient Melody States
+  const [isMelodyEnabled, setIsMelodyEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_melody_enabled') === 'true';
+    } catch (_) {
+      return false; // dynamic default off to preserve energy
+    }
+  });
+  const [melodyVolume, setMelodyVolume] = useState<number>(() => {
+    try {
+      const vol = localStorage.getItem('bible_melody_volume');
+      return vol ? Number(vol) : 0.15;
+    } catch (_) {
+      return 0.15;
+    }
+  });
+  const [melodyStyle, setMelodyStyle] = useState<MelodyStyle>(() => {
+    try {
+      const stored = localStorage.getItem('bible_melody_style');
+      return (stored as MelodyStyle) || 'warm_pad';
+    } catch (_) {
+      return 'warm_pad';
+    }
+  });
+
+  // Synchronize background ambient melody with TTS reading states
+  useEffect(() => {
+    if (isMelodyEnabled && isSpeaking && !isPaused) {
+      ambientMelody.setStyle(melodyStyle);
+      ambientMelody.start();
+      ambientMelody.setVolume(melodyVolume);
+    } else {
+      ambientMelody.stop();
+    }
+  }, [isMelodyEnabled, isSpeaking, isPaused, melodyVolume, melodyStyle]);
 
   // Clean up speech synthesis when navigating away or selecting another chapter
   useEffect(() => {
@@ -500,6 +796,7 @@ export default function App() {
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+      ambientMelody.stop();
     };
   }, [selectedBook, selectedChapter, activeTab]);
 
@@ -524,11 +821,80 @@ export default function App() {
     utterance.lang = 'fr-FR';
     utterance.rate = playbackRate;
 
-    // Dynamically look up French voice for Louis Segond French reading
+    // Dynamically look up French voice for Louis Segond French reading with gender support
     const voices = window.speechSynthesis.getVoices();
-    const frenchVoice = voices.find(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR')) || null;
-    if (frenchVoice) {
-      utterance.voice = frenchVoice;
+    const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
+    
+    // Sort French voices: prioritize higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
+    const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
+      const aLower = a.name.toLowerCase();
+      const bLower = b.name.toLowerCase();
+      
+      const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
+      const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
+      
+      if (aIsPremium && !bIsPremium) return -1;
+      if (!aIsPremium && bIsPremium) return 1;
+      
+      // Also prefer voices that are not localService when available on some platforms (though browser-dependent)
+      if (a.localService === false && b.localService === true) return -1;
+      if (a.localService === true && b.localService === false) return 1;
+      
+      return 0;
+    });
+    
+    let selectedVoice: SpeechSynthesisVoice | null = null;
+    const lowerMaleNames = [
+      'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
+      'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri'
+    ];
+    const lowerFemaleNames = [
+      'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
+      'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
+      'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
+      'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
+      'zira', 'google français'
+    ];
+
+    if (voiceGender === 'male') {
+      // 1. Try exact male names from sorted high quality voices first
+      selectedVoice = sortedFrenchVoices.find(voice => 
+        lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+      ) || null;
+      // 2. Try excluding female named voices
+      if (!selectedVoice) {
+        selectedVoice = sortedFrenchVoices.find(voice => 
+          !lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+        ) || null;
+      }
+      
+      // Pitch adjustment for male: make it warmer, deeper, and more pastoral
+      utterance.pitch = 0.88;
+    } else if (voiceGender === 'female') {
+      // 1. Try exact female names from sorted high quality voices first
+      selectedVoice = sortedFrenchVoices.find(voice => 
+        lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+      ) || null;
+      // 2. Try excluding male named voices
+      if (!selectedVoice) {
+        selectedVoice = sortedFrenchVoices.find(voice => 
+          !lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+        ) || null;
+      }
+      
+      // Pitch adjustment for female: make it slightly lighter and clear
+      utterance.pitch = 1.02;
+    } else {
+      utterance.pitch = 1.0;
+    }
+
+    // Fallback if no specific gender voice was found or selected gender is 'auto'
+    if (!selectedVoice && sortedFrenchVoices.length > 0) {
+      selectedVoice = sortedFrenchVoices.find(voice => voice.lang.includes('FR')) || sortedFrenchVoices[0];
+    }
+
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
     }
 
     utterance.onend = () => {
@@ -548,6 +914,11 @@ export default function App() {
     window.speechSynthesis.speak(utterance);
     setIsSpeaking(true);
     setIsPaused(false);
+
+    // Synchronisation : Débute chaque verset par un carillon ou pincement de harpe céleste en harmonie
+    if (isMelodyEnabled) {
+      ambientMelody.triggerTransitPluck();
+    }
   };
 
   const pauseSpeaking = () => {
@@ -649,12 +1020,13 @@ export default function App() {
     return favorites.some(f => f.book_id === v.book_id && f.chapter === v.chapter && f.verse === v.verse);
   };
 
-  const getVerseHasNote = (v: Verse): { hasNote: boolean; text: string; audio?: string } => {
+  const getVerseHasNote = (v: Verse): { hasNote: boolean; text: string; audio?: string; emotionAnalysis?: EmotionAnalysisResult } => {
     const found = notes.find(n => n.book_id === v.book_id && n.chapter === v.chapter && n.verse === v.verse);
     return {
       hasNote: found !== undefined,
       text: found ? found.note : '',
-      audio: found ? found.audio : undefined
+      audio: found ? found.audio : undefined,
+      emotionAnalysis: found ? found.emotion_analysis : undefined
     };
   };
 
@@ -1054,6 +1426,9 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Daily Chapter Reading Goal & Progress Bar widget */}
+              <DailyReadingGoal readingHistory={readingHistory} />
+
               {/* Dynamic Scripture Selector and Chapter Nav Box */}
               <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -1091,6 +1466,37 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Mode Selector Pill Swapper */}
+                  <div className="flex flex-col text-left">
+                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Périmètre de lecture</label>
+                    <div className="flex bg-[#0d0b07] border border-[#2e2a1e] rounded-xl p-0.5 h-9 items-center">
+                      <button
+                        onClick={() => setIsContinuousScroll(false)}
+                        className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                          !isContinuousScroll 
+                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                            : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                        }`}
+                        title="Lire chapitre par chapitre"
+                      >
+                        <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                        <span>Chapitre</span>
+                      </button>
+                      <button
+                        onClick={() => setIsContinuousScroll(true)}
+                        className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                          isContinuousScroll 
+                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                            : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                        }`}
+                        title="Défilement continu de tout le livre"
+                      >
+                        <ScrollText className="w-3.5 h-3.5 shrink-0" />
+                        <span>Livre Entier</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1206,8 +1612,18 @@ export default function App() {
                 <div className="flex flex-col gap-4 pb-3 border-b border-[#2e2a1e]/50 mb-4">
                   <div className="flex items-center justify-between select-none">
                     <h3 className="font-serif font-extrabold text-[#c9a84c] text-sm uppercase flex items-center gap-1.5">
-                      <BookOpen className="w-4.5 h-4.5" />
-                      <span>{selectedBook.name} · Chapitre {selectedChapter}</span>
+                      {isContinuousScroll ? (
+                        <>
+                          <ScrollText className="w-4.5 h-4.5 text-[#c9a84c]" />
+                          <span>{selectedBook.name} · Livre Entier</span>
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 uppercase rounded leading-none ml-1">Continu</span>
+                        </>
+                      ) : (
+                        <>
+                          <BookOpen className="w-4.5 h-4.5" />
+                          <span>{selectedBook.name} · Chapitre {selectedChapter}</span>
+                        </>
+                      )}
                     </h3>
                     
                     <div className="flex items-center gap-1.5">
@@ -1233,107 +1649,215 @@ export default function App() {
 
                   {/* High-Fidelity Audio Reader Controls */}
                   {!loadingVerses && chapterVerses.length > 0 && (
-                    <div className="bg-[#0f0d09] border border-[#2e2a1e] rounded-2xl p-4.5 flex flex-col md:flex-row items-center justify-between gap-4 select-none">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-10 h-10 rounded-full bg-[#1a1712] border border-[#c9a84c]/20 flex items-center justify-center text-[#c9a84c]">
-                          {isSpeaking && !isPaused ? (
-                            <Volume2 className="w-5 h-5 animate-pulse text-[#c9a84c]" />
-                          ) : (
-                            <VolumeX className="w-5 h-5 text-[#6b6355]" />
-                          )}
+                    <div className="bg-[#0f0d09] border border-[#2e2a1e] rounded-2xl p-4.5 flex flex-col gap-4 select-none">
+                      <div className="flex flex-col md:flex-row items-center justify-between gap-4 w-full">
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-10 h-10 rounded-full bg-[#1a1712] border border-[#c9a84c]/20 flex items-center justify-center text-[#c9a84c]">
+                            {isSpeaking && !isPaused ? (
+                              <Volume2 className="w-5 h-5 animate-pulse text-[#c9a84c]" />
+                            ) : (
+                              <VolumeX className="w-5 h-5 text-[#6b6355]" />
+                            )}
+                          </div>
+                          <div className="text-left">
+                            <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-widest block font-bold">SYNTHÈSE VOCALE</span>
+                            <p className="text-xs font-serif text-[#e8e0d0] font-bold">
+                              {isSpeaking 
+                                ? `Lecture : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
+                                : "Écouter la parole divine"
+                              }
+                            </p>
+                          </div>
                         </div>
-                        <div className="text-left">
-                          <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-widest block font-bold">SYNTHÈSE VOCALE</span>
-                          <p className="text-xs font-serif text-[#e8e0d0] font-bold">
-                            {isSpeaking 
-                              ? `Lecture : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
-                              : "Écouter la parole divine"
-                            }
-                          </p>
+
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          {/* Skip Back */}
+                          <button
+                            onClick={() => {
+                              if (currentSpeakingVerseIndex > 0) {
+                                speakVerse(currentSpeakingVerseIndex - 1);
+                              } else {
+                                speakVerse(0);
+                              }
+                            }}
+                            disabled={!isSpeaking}
+                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                            title="Verset précédent"
+                          >
+                            <SkipBack className="w-4 h-4" />
+                          </button>
+
+                          {/* Play / Pause Toggle */}
+                          <button
+                            onClick={handlePlayPause}
+                            className="h-9 px-4 rounded-xl bg-gold-gradient text-[#0d0b07] font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-1.5 transition cursor-pointer hover:opacity-95 shadow-md"
+                          >
+                            {isSpeaking && !isPaused ? (
+                              <>
+                                <Pause className="w-4 h-4" />
+                                <span>Pause</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-4 h-4" />
+                                <span>Lecture</span>
+                              </>
+                            )}
+                          </button>
+
+                          {/* Stop */}
+                          <button
+                            onClick={stopSpeaking}
+                            disabled={!isSpeaking}
+                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                            title="Arrêter la lecture"
+                          >
+                            <Square className="w-4 h-4" />
+                          </button>
+
+                          {/* Skip Forward */}
+                          <button
+                            onClick={() => {
+                              if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
+                                speakVerse(currentSpeakingVerseIndex + 1);
+                              }
+                            }}
+                            disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
+                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
+                            title="Verset suivant"
+                          >
+                            <SkipForward className="w-4 h-4" />
+                          </button>
+
+                          {/* Rate speed multipliers selection */}
+                          <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
+                            {[0.8, 1.0, 1.25, 1.5].map((rate) => (
+                              <button
+                                key={rate}
+                                onClick={() => {
+                                  setPlaybackRate(rate);
+                                  if (isSpeaking && !isPaused) {
+                                    // Speak using the new rate
+                                    speakVerse(currentSpeakingVerseIndex);
+                                  }
+                                }}
+                                className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all ${
+                                  playbackRate === rate 
+                                    ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                                    : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                                }`}
+                              >
+                                {rate}x
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Selector for voice selection (Auto, Male, Female) */}
+                          <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
+                            {[
+                              { label: 'Auto', value: 'auto' },
+                              { label: 'Homme ♂', value: 'male' },
+                              { label: 'Femme ♀', value: 'female' }
+                            ].map((genderOption) => (
+                              <button
+                                key={genderOption.value}
+                                onClick={() => {
+                                  setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
+                                  try {
+                                    localStorage.setItem('bible_voice_gender', genderOption.value);
+                                  } catch (_) {}
+                                  if (isSpeaking && !isPaused) {
+                                    // Speak using the new voice selection
+                                    speakVerse(currentSpeakingVerseIndex);
+                                  }
+                                }}
+                                className={`px-2.5 py-1 text-[9px] font-sans font-bold rounded-lg transition-all ${
+                                  voiceGender === genderOption.value 
+                                    ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                                    : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                                }`}
+                                title={`Lecteur vocal : ${genderOption.label}`}
+                              >
+                                {genderOption.label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        {/* Skip Back */}
-                        <button
-                          onClick={() => {
-                            if (currentSpeakingVerseIndex > 0) {
-                              speakVerse(currentSpeakingVerseIndex - 1);
-                            } else {
-                              speakVerse(0);
-                            }
-                          }}
-                          disabled={!isSpeaking}
-                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                          title="Verset précédent"
-                        >
-                          <SkipBack className="w-4 h-4" />
-                        </button>
+                      {/* Ethereal melody soundtrack integration line */}
+                      <div className="h-[1px] bg-[#2e2a1e]/40 w-full my-1"></div>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 w-full">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            onClick={() => {
+                              const nextVal = !isMelodyEnabled;
+                              setIsMelodyEnabled(nextVal);
+                              try {
+                                localStorage.setItem('bible_melody_enabled', String(nextVal));
+                              } catch (_) {}
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                              isMelodyEnabled 
+                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                            title="Activer la mélodie sacrée de fond"
+                          >
+                            <Music className={`w-3.5 h-3.5 ${isMelodyEnabled ? 'animate-pulse text-[#c9a84c]' : ''}`} />
+                            <span>Mélodie Sacrée : {isMelodyEnabled ? 'Activée ✓' : 'Désactivée'}</span>
+                          </button>
 
-                        {/* Play / Pause Toggle */}
-                        <button
-                          onClick={handlePlayPause}
-                          className="h-9 px-4 rounded-xl bg-gold-gradient text-[#0d0b07] font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-1.5 transition cursor-pointer hover:opacity-95 shadow-md"
-                        >
-                          {isSpeaking && !isPaused ? (
-                            <>
-                              <Pause className="w-4 h-4" />
-                              <span>Pause</span>
-                            </>
-                          ) : (
-                            <>
-                              <Play className="w-4 h-4" />
-                              <span>Lecture</span>
-                            </>
+                          {isMelodyEnabled && (
+                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 items-center gap-0.5 animate-fade-in">
+                              {MELODY_STYLES.map((styleOption) => (
+                                <button
+                                  key={styleOption.id}
+                                  onClick={() => {
+                                    setMelodyStyle(styleOption.id);
+                                    try {
+                                      localStorage.setItem('bible_melody_style', styleOption.id);
+                                    } catch (_) {}
+                                  }}
+                                  className={`px-2.5 py-1 text-[9px] font-sans font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
+                                    melodyStyle === styleOption.id
+                                      ? 'bg-[#c9a84c] text-[#0d0b07]'
+                                      : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                                  }`}
+                                  title={styleOption.description}
+                                >
+                                  <span>{styleOption.icon}</span>
+                                  <span>{styleOption.name}</span>
+                                </button>
+                              ))}
+                            </div>
                           )}
-                        </button>
-
-                        {/* Stop */}
-                        <button
-                          onClick={stopSpeaking}
-                          disabled={!isSpeaking}
-                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                          title="Arrêter la lecture"
-                        >
-                          <Square className="w-4 h-4" />
-                        </button>
-
-                        {/* Skip Forward */}
-                        <button
-                          onClick={() => {
-                            if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
-                              speakVerse(currentSpeakingVerseIndex + 1);
-                            }
-                          }}
-                          disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
-                          className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                          title="Verset suivant"
-                        >
-                          <SkipForward className="w-4 h-4" />
-                        </button>
-
-                        {/* Rate speed multipliers selection */}
-                        <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
-                          {[0.8, 1.0, 1.25, 1.5].map((rate) => (
-                            <button
-                              key={rate}
-                              onClick={() => {
-                                setPlaybackRate(rate);
-                                if (isSpeaking && !isPaused) {
-                                  // Speak using the new rate
-                                  speakVerse(currentSpeakingVerseIndex);
-                                }
-                              }}
-                              className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all ${
-                                playbackRate === rate 
-                                  ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                                  : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                              }`}
-                            >
-                              {rate}x
-                            </button>
-                          ))}
                         </div>
+
+                        {isMelodyEnabled && (
+                          <div className="flex items-center gap-3 animate-fade-in self-end sm:self-auto">
+                            <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Volume fond</span>
+                            <input
+                              type="range"
+                              min="0"
+                              max="0.4"
+                              step="0.02"
+                              value={melodyVolume}
+                              onChange={(e) => {
+                                const vol = Number(e.target.value);
+                                setMelodyVolume(vol);
+                                try {
+                                  localStorage.setItem('bible_melody_volume', String(vol));
+                                } catch (_) {}
+                              }}
+                              className="w-24 accent-[#c9a84c] bg-[#1a1712] rounded-lg appearance-none h-1 cursor-pointer"
+                              title="Ajuster le volume de la mélodie céleste"
+                            />
+                            <span className="text-[9.5px] font-mono text-[#c9a84c] w-9 text-right font-bold">
+                              {Math.round(melodyVolume * 250)}%
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1373,11 +1897,43 @@ export default function App() {
                           hasNote={noteInfo.hasNote}
                           noteText={noteInfo.text}
                           noteAudio={noteInfo.audio}
+                          emotionAnalysis={noteInfo.emotionAnalysis}
                           onSaveNote={handleSaveSpiritualNote}
                           isCurrentSpoken={currentSpeakingVerseIndex === idx}
                         />
                       );
                     })}
+
+                    {isContinuousScroll && (
+                      <div className="mt-6 p-5 rounded-2xl bg-[#0d0b07] border border-[#2e2a1e] text-center space-y-3 shadow-inner select-none animate-fade-in">
+                        {Math.max(...loadedChapters) < selectedBook.chapters_count ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-center gap-2">
+                              <div className="w-3.5 h-3.5 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
+                              <span className="text-[10px] font-mono font-medium text-[#c9a84c] uppercase tracking-wider">Défilement continu · Chapitre {Math.max(...loadedChapters) + 1} se prépare...</span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                const maxCh = Math.max(...loadedChapters);
+                                if (maxCh < selectedBook.chapters_count) {
+                                  setLoadedChapters(prev => [...prev, maxCh + 1]);
+                                }
+                              }}
+                              className="px-4 py-2 bg-[#1a1712] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 hover:border-[#c9a84c]/40 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150 cursor-pointer"
+                            >
+                              📖 Charger le Chapitre {Math.max(...loadedChapters) + 1} manuellement
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="py-2">
+                            <Sparkles className="w-5 h-5 text-[#c9a84c]/60 mx-auto mb-1 animate-pulse" />
+                            <p className="font-serif italic text-xs text-[#c9a84c]/80 font-bold">« Fin du Livre Saint de {selectedBook.name} »</p>
+                            <p className="text-[8px] font-mono text-[#6b6355] uppercase mt-1">Tous les {selectedBook.chapters_count} chapitres ont été chargés dans ce défilement continu.</p>
+                          </div>
+                        )}
+                        <div id="continuous-scroll-trigger" className="h-[2px] w-full mt-2"></div>
+                      </div>
+                    )}
                   </motion.div>
                 )}
                 
@@ -1701,6 +2257,9 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-5"
             >
+              {/* Daily Chapter Reading Goal & Progress Bar widget */}
+              <DailyReadingGoal readingHistory={readingHistory} />
+
               {/* Daily Reminder Scheduler widget */}
               <DailyReminder />
 

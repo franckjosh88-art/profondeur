@@ -54,6 +54,17 @@ export interface ReadingHistory {
   timestamp: string;
 }
 
+export interface EmotionAnalysisResult {
+  detectedEmotion: string;
+  emotionalSummary: string;
+  pastoralEncouragement: string;
+  suggestedVerses: {
+    reference: string;
+    text: string;
+    reason: string;
+  }[];
+}
+
 export interface VerseNote {
   book_id: number;
   book_name: string;
@@ -62,4 +73,5 @@ export interface VerseNote {
   note: string;
   audio?: string;
   updated_at: string;
+  emotion_analysis?: EmotionAnalysisResult;
 }

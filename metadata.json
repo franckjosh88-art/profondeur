@@ -1,6 +1,6 @@
 {
   "name": "Bible Mobile",
   "description": "Application majeure d'étude de la Bible Louis Segond 1910 avec dictionnaire d'origines Strong, exégèse IA, notes spirituelles, signets, défis de lecture et mode hors-ligne.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

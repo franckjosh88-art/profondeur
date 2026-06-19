@@ -27,6 +27,63 @@ if (apiKey) {
   console.warn("⚠️ Warning: GEMINI_API_KEY is not defined in the environment. AI features will require configuration.");
 }
 
+// Resilient wrapper to handle model rate limits or transient load issues (503)
+async function generateGeminiContent(params: {
+  contents: any;
+  config?: any;
+}) {
+  if (!ai) {
+    throw new Error("L'API Gemini n'est pas configurée.");
+  }
+  
+  const originalConfig = params.config || {};
+  let systemInstruction = originalConfig.systemInstruction || "";
+  
+  if (systemInstruction) {
+    // Inject conciseness instruction to reduce tokens and speed up generation
+    systemInstruction = `${systemInstruction} Écris de manière très concise, synthétique et directe, sans phrase introductive ni conclusion facultative, pour assurer un temps de réponse ultra-rapide.`;
+  } else {
+    systemInstruction = "Écris de manière claire, concise et structurée en français pour un temps de réponse rapide.";
+  }
+
+  const optimizedConfig = {
+    ...originalConfig,
+    systemInstruction
+  };
+  
+  try {
+    // Attempt the fast lite model (gemini-3.1-flash-lite) for ultra-low latency which is highly responsive
+    return await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents: params.contents,
+      config: optimizedConfig
+    });
+  } catch (error: any) {
+    const errorStr = String(error?.message || error || "");
+    const isTransientError = 
+      errorStr.includes("503") || 
+      errorStr.includes("UNAVAILABLE") || 
+      errorStr.includes("demand") || 
+      errorStr.includes("Resource has been exhausted") ||
+      errorStr.includes("429");
+
+    if (isTransientError) {
+      console.warn("⚠️ model gemini-3.1-flash-lite busy or unavailable (503), falling back to robust gemini-flash-latest...");
+      try {
+        return await ai.models.generateContent({
+          model: "gemini-flash-latest",
+          contents: params.contents,
+          config: optimizedConfig
+        });
+      } catch (fallbackError: any) {
+        console.error("❌ Fallback model also failed:", fallbackError);
+        throw fallbackError;
+      }
+    }
+    throw error;
+  }
+}
+
 // -------------------------------------------------------------
 // API Endpoints
 // -------------------------------------------------------------
@@ -61,8 +118,7 @@ Explique ce verset en détail avec le plan suivant:
 
 Reste toujours constructif, bienveillant et respectueux des différentes perspectives chrétiennes. Réponds en français de manière claire et bien structurée.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         systemInstruction: "Tu es un assistant biblique érudit, sage et bienveillant. Tu aides à comprendre la Bible Louis Segond en français.",
@@ -99,8 +155,7 @@ ${versesContent}
 
 Explique les thèmes majeurs abordés dans ce chapitre, les personnages principaux et comment ce chapitre s'insère dans le reste du plan biblique. Rédige en français sous forme de points clés faciles à lire.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         systemInstruction: "Tu es un théologien spécialiste de la Bible en français. Tu synthétises des chapitres de manière claire, concise et inspirante.",
@@ -143,8 +198,7 @@ Effectue une analyse spirituelle, théologique et pastorale de ces notes sous la
 
 Sois inspirant, érudit et profondément réconfortant.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         systemInstruction: "Tu es un guide spirituel, mentor de théologie et pasteur bienveillant. Tu aides à synthétiser et encourager les croyants dans leur étude approfondie des écritures.",
@@ -183,8 +237,7 @@ Fournis un approfondissement théologique et philologique approfondi en françai
 
 Reste rigoureux, érudit et encourageant.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         systemInstruction: "Tu es un assistant universitaire en théologie et langues bibliques. Tu aides à enrichir et approfondir les pensées des étudiants.",
@@ -195,6 +248,73 @@ Reste rigoureux, érudit et encourageant.`;
   } catch (error: any) {
     console.error("Error in deepen-note endpoint:", error);
     res.status(500).json({ error: error.message || "Erreur lors de l'approfondissement de la note." });
+  }
+});
+
+// Analyze emotional tone of oral or written spiritual note and suggest custom verses/Psalms
+app.post("/api/gemini/analyze-emotion", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée pour l'analyse émotionnelle." });
+      return;
+    }
+    const { noteText, verseReference } = req.body;
+    if (!noteText || !noteText.trim()) {
+      res.status(400).json({ error: "Texte de la note ou de la transcription vocale requis." });
+      return;
+    }
+
+    const referenceContext = verseReference ? `associée au verset "${verseReference}"` : "";
+    const prompt = `Voici une note ou réflexion spirituelle (écrite ou transcrite par dictée vocale) d'un utilisateur ${referenceContext} :
+    
+"${noteText}"
+
+Analyse avec sensibilité, empathie et profondeur spirituelle le ton émotionnel qui s'en dégage.
+Tu dois renvoyer STRICTEMENT un objet JSON structuré en français contenant :
+1. "detectedEmotion" : Un titre court décrivant l'ambiance émotionnelle repérée (p.ex. "Frustration & Doute", "Gratitude & Joie pure", "Recherche de paix & Inquiétude", "Sérénité & Contemplation").
+2. "emotionalSummary" : Un résumé de 1 à 2 phrases compatissantes sur ce qui touche l'utilisateur dans sa réflexion.
+3. "pastoralEncouragement" : Un paragraphe d'accompagnement spirituel fraternel, pastoral et inspirant pour fortifier et élever l'esprit de l'utilisateur.
+4. "suggestedVerses" : Un tableau d'exactement 2 ou 3 passages bibliques (de préférence des PSAUMES pour l'expression de l'âme, ou d'autres versets d'encouragement clairs), contenant pour chacun :
+   - reference : la référence biblique (ex : "Psaumes 34:18")
+   - text : le verset ou la citation clé en français Louis Segond
+   - reason : une phrase expliquant pourquoi cette parole guérit, console ou répond précisément à sa situation d'âme.
+
+Assure-toi de l'authenticité des écritures de la Bible Segond sans aucune invention.`;
+
+    const response = await generateGeminiContent({
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            detectedEmotion: { type: Type.STRING },
+            emotionalSummary: { type: Type.STRING },
+            pastoralEncouragement: { type: Type.STRING },
+            suggestedVerses: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  reference: { type: Type.STRING },
+                  text: { type: Type.STRING },
+                  reason: { type: Type.STRING }
+                },
+                required: ["reference", "text", "reason"]
+              }
+            }
+          },
+          required: ["detectedEmotion", "emotionalSummary", "pastoralEncouragement", "suggestedVerses"]
+        },
+        systemInstruction: "Tu es un directeur d'âme, conseiller pastoral et bibliste doté d'une profonde empathie chrétienne. Tu analyses les écrits intimes pour réconforter par la Parole sainte.",
+      }
+    });
+
+    const outputText = response.text || "{}";
+    res.json(JSON.parse(outputText));
+  } catch (error: any) {
+    console.error("Error in analyze-emotion endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de l'analyse émotionnelle de votre réflexion." });
   }
 });
 
@@ -236,8 +356,7 @@ app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> 
       parts: [{ text: message }]
     });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: contents,
       config: {
         systemInstruction: systemInstruction,
@@ -269,8 +388,7 @@ Tu dois générer le texte intégral et fidèle, verset par verset, sans coupure
 Tu DOIS retourner le résultat STRICTEMENT sous forme de tableau JSON d'objets, chaque objet ayant deux propriétés: "verse" (nombre représentant le numéro du verset) et "text" (chaîne de caractères représentant le texte exact).
 Ne mets aucune explication avant ou après le JSON. Rends uniquement le JSON brut.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -338,8 +456,7 @@ Tu dois renvoyer STRICTEMENT un objet JSON contenant:
 
 Génère des traductions très exactes caractéristiques des écritures sacrées sans approximation.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -405,8 +522,7 @@ Tu dois renvoyer STRICTEMENT un objet JSON structuré contenant:
 
 Sois rigoureux intellectuellement et respectueux de la théologie chrétienne et de l'histoire du texte.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+    const response = await generateGeminiContent({
       contents: prompt,
       config: {
         responseMimeType: "application/json",

@@ -15,11 +15,13 @@ import {
   BookOpenCheck,
   Check,
   ChevronDown,
-  X
+  X,
+  Share2
 } from 'lucide-react';
 import { Book as BibleBook, ReadingHistory } from '../types/bible';
 import { ReadingPlan, PlanUserProgress } from '../types/challenges';
 import { BOOKS } from '../data/bibleData';
+import { ChallengeShareModal } from './ChallengeShareModal';
 
 interface ReadingChallengesProps {
   readingHistory: ReadingHistory[];
@@ -106,6 +108,9 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
   // Succesful tracking Toast/notification when a chapter is auto-completed
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // State to control visual challenge share modal
+  const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
 
   // Load from localStorage
   useEffect(() => {
@@ -340,24 +345,36 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
               </div>
             </div>
 
-            {/* "Continuer la lecture" direct action button */}
-            {nextToRead ? (
-              <button
-                onClick={() => onNavigateToChapter(nextToRead.book.id, nextToRead.chapterNum)}
-                className="w-full py-2.5 bg-[#c9a84c] text-[#0d0b07] font-bold text-xs rounded-xl hover:bg-[#dfba5a] active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer outline-none shadow-gold-glow"
-              >
-                <Play className="w-3.5 h-3.5 fill-[#0d0b07]" />
-                <span>LIRE CHAP. SUIVANT : {nextToRead.book.name} {nextToRead.chapterNum}</span>
-              </button>
-            ) : (
-              <div className="bg-[#c9a84c]/10 rounded-xl p-3 border border-[#c9a84c]/20 flex items-center gap-3">
-                <Award className="w-8 h-8 text-[#c9a84c] shrink-0" />
-                <div>
-                  <h4 className="font-serif font-extrabold text-[#c9a84c] text-xs">Félicitations pour votre fidélité !</h4>
-                  <p className="text-[9px] text-[#6b6355] mt-0.5">Vous avez lu l'ensemble des {totalChapters} chapitres de ce plan.</p>
+            {/* "Continuer la lecture" direct action and visual sharing card generation buttons */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              {nextToRead ? (
+                <button
+                  onClick={() => onNavigateToChapter(nextToRead.book.id, nextToRead.chapterNum)}
+                  className="flex-1 py-2.5 bg-[#c9a84c] text-[#0d0b07] font-bold text-xs rounded-xl hover:bg-[#dfba5a] active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer outline-none shadow-gold-glow"
+                >
+                  <Play className="w-3.5 h-3.5 fill-[#0d0b07]" />
+                  <span>LIRE CHAP. SUIVANT : {nextToRead.book.name} {nextToRead.chapterNum}</span>
+                </button>
+              ) : (
+                <div className="flex-1 bg-[#c9a84c]/10 rounded-xl p-3 border border-[#c9a84c]/20 flex items-center gap-3">
+                  <Award className="w-8 h-8 text-[#c9a84c] shrink-0" />
+                  <div>
+                    <h4 className="font-serif font-extrabold text-[#c9a84c] text-xs">Félicitations pour votre fidélité !</h4>
+                    <p className="text-[9px] text-[#6b6355] mt-0.5">Vous avez lu l'ensemble des {totalChapters} chapitres de ce plan.</p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+
+              {/* Beautiful custom vector card generator */}
+              <button
+                onClick={() => setIsShareModalOpen(true)}
+                className="py-2.5 px-4 bg-[#1a1712] hover:bg-[#c9a84c]/15 text-[#c9a84c] hover:text-[#e8e0d0] border border-[#c9a84c]/20 hover:border-[#c9a84c] text-xs font-bold rounded-xl active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer outline-none"
+                title="Générer une magnifique image souvenir de ce défi"
+              >
+                <Share2 className="w-3.5 h-3.5 text-[#c9a84c]" />
+                <span>Partager ma Réussite 🎨</span>
+              </button>
+            </div>
 
             {/* Collapsible Books & Chapters Grid */}
             <div className="space-y-2">
@@ -621,6 +638,25 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
           </div>
         )}
+
+      {/* SUCCESS CARD GENERATOR MODAL */}
+      {isShareModalOpen && selectedPlanId && (() => {
+        const plan = DEFAULT_PLANS.find(p => p.id === selectedPlanId);
+        const progress = userProgresses.find(p => p.planId === selectedPlanId);
+        if (!plan || !progress) return null;
+
+        const totalChapters = getPlanTotalChapters(plan.category);
+        const completedCount = progress.completedChapters.length;
+
+        return (
+          <ChallengeShareModal
+            plan={plan}
+            completedChaptersCount={completedCount}
+            totalChaptersCount={totalChapters}
+            onClose={() => setIsShareModalOpen(false)}
+          />
+        );
+      })()}
 
     </div>
   );
