@@ -16,7 +16,7 @@ import {
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -36,6 +36,7 @@ import { cleanBibleMarkdown } from './lib/bibleFormatter';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
+import { MemorizeModule } from './components/MemorizeModule';
 
 export default function App() {
   // Authentication states
@@ -61,8 +62,8 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
   // App Navigation Tabs
-  // 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary
-  const [activeTab, setActiveTab] = useState<'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia'>('read');
+  // 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary, 'memorize' -> Memorization of verses
+  const [activeTab, setActiveTab] = useState<'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize'>('read');
 
   // Local database initialization
   const [sqliteDbReady, setSqliteDbReady] = useState<boolean>(false);
@@ -1015,6 +1016,16 @@ export default function App() {
     }
   };
 
+  const handleNavigateVerseToReader = (bookId: number, chapterNum: number, verseNum: number) => {
+    const targetBook = BOOKS.find(b => b.id === bookId);
+    if (targetBook) {
+      setSelectedBook(targetBook);
+      setSelectedChapter(chapterNum);
+      setSelectedVerseId(`${bookId}_${chapterNum}_${verseNum}`);
+      setActiveTab('read');
+    }
+  };
+
   // Check if a specific verse ID matches notes and bookmarks
   const getVerseHasBookmark = (v: Verse) => {
     return favorites.some(f => f.book_id === v.book_id && f.chapter === v.chapter && f.verse === v.verse);
@@ -1374,6 +1385,16 @@ export default function App() {
           >
             <Flame className="w-4.5 h-4.5 text-[#c9a84c]" />
             <span>Défis & Fidélité</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('memorize')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'memorize' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <Brain className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Mémorisation</span>
           </button>
 
           <div className="pt-4 border-t border-[#2e2a1e]/40 mt-2 px-3">
@@ -2274,6 +2295,20 @@ export default function App() {
             </motion.div>
           )}
 
+          {/* E. MEMORIZATION SACRED MODULE TAB */}
+          {activeTab === 'memorize' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <MemorizeModule 
+                favorites={favorites}
+                onNavigateToVerse={handleNavigateVerseToReader}
+              />
+            </motion.div>
+          )}
+
         </div>
       </main>
 
@@ -2327,6 +2362,16 @@ export default function App() {
         >
           <Flame className="w-5 h-5 shrink-0" />
           <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Défis</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('memorize')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'memorize' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Brain className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Mém.</span>
         </button>
       </nav>
 

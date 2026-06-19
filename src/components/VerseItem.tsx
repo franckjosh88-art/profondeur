@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Sparkles, Heart, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2 } from 'lucide-react';
+import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Verse, EmotionAnalysisResult } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
@@ -526,6 +526,25 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
             </div>
           )}
         </div>
+
+        {/* Quick bookmark/favorite immediate action button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFavorite(verse);
+          }}
+          className={`flex-shrink-0 p-1.5 rounded bg-white/[0.01] hover:bg-white/[0.08] transition duration-150 cursor-pointer self-start ${
+            isFavorite 
+              ? 'text-[#c9a84c] opacity-100' 
+              : 'text-[#6b6355] hover:text-[#c9a84c] opacity-0 group-hover:opacity-100 max-md:opacity-30 focus:opacity-100'
+          }`}
+          title={isFavorite ? "Retirer des favoris" : "Ajout rapide aux favoris"}
+        >
+          <Star 
+            className="w-3.5 h-3.5" 
+            fill={isFavorite ? "#c9a84c" : "transparent"} 
+          />
+        </button>
 
         {/* Quick copy-to-clipboard option directly in the interface */}
         <button
