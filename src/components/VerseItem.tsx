@@ -414,6 +414,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
 
   return (
     <motion.div 
+      id={`verse-${verse.book_id}-${verse.chapter}-${verse.verse}`}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: "easeOut" }}

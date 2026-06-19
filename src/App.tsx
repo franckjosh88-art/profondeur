@@ -755,6 +755,11 @@ export default function App() {
   });
   const currentVerseToSpeakRef = useRef<number>(-1);
 
+  // Auto-scrolling state variables
+  const [isAutoScrollWithSpeech, setIsAutoScrollWithSpeech] = useState<boolean>(true);
+  const [isFluidAutoScrolling, setIsFluidAutoScrolling] = useState<boolean>(false);
+  const [fluidScrollSpeed, setFluidScrollSpeed] = useState<number>(15); // pixels per second (speed variable)
+
   // Background Ambient Melody States
   const [isMelodyEnabled, setIsMelodyEnabled] = useState<boolean>(() => {
     try {
@@ -965,6 +970,41 @@ export default function App() {
       speakVerse(startIndex);
     }
   };
+
+  // 1. Follow / scroll-into-view during active TTS audio reading
+  useEffect(() => {
+    if (!isAutoScrollWithSpeech || currentSpeakingVerseIndex === -1) return;
+    const currentVerse = chapterVerses[currentSpeakingVerseIndex];
+    if (!currentVerse) return;
+    const element = document.getElementById(`verse-${currentVerse.book_id}-${currentVerse.chapter}-${currentVerse.verse}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [currentSpeakingVerseIndex, isAutoScrollWithSpeech, chapterVerses]);
+
+  // 2. Continuous fluid automatic scrolling loop using high precision delta time
+  useEffect(() => {
+    if (!isFluidAutoScrolling) return;
+
+    let lastTime = performance.now();
+    let animationFrameId: number;
+
+    const scrollStep = (time: number) => {
+      const delta = (time - lastTime) / 1000; // in seconds
+      lastTime = time;
+
+      // Scroll amount is pixels per second
+      const scrollAmount = fluidScrollSpeed * delta;
+      window.scrollBy(0, scrollAmount);
+
+      animationFrameId = requestAnimationFrame(scrollStep);
+    };
+
+    animationFrameId = requestAnimationFrame(scrollStep);
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isFluidAutoScrolling, fluidScrollSpeed]);
 
   // Conversational Assistant Handler
   const handleSendChatMessage = async (e: React.FormEvent) => {
@@ -1239,18 +1279,18 @@ export default function App() {
             exit={{ opacity: 0, height: 0 }}
             className="w-full bg-[#12100c] border-b border-[#2e2a1e] py-5 px-4"
           >
-            <div className="max-w-4xl mx-auto space-y-4">
+            <div className="max-w-6xl mx-auto space-y-4">
               <div className="flex justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
                 <h4 className="font-serif text-[#c9a84c] text-sm font-bold uppercase tracking-widest flex items-center gap-1.5 animate-pulse">
                   <Settings className="w-4 h-4 text-[#c9a84c]" />
                   <span>Ma Cabine d'Études & Préférences</span>
                 </h4>
-                <button onClick={() => setIsSettingsOpen(false)} className="text-[#6b6355] hover:text-white transition">
+                <button onClick={() => setIsSettingsOpen(false)} className="text-[#6b6355] hover:text-white transition cursor-pointer">
                   <X className="w-4.5 h-4.5" />
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                 {/* 1. Profile information */}
                 <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl flex flex-col justify-between">
                   <div className="space-y-1">
@@ -1271,7 +1311,7 @@ export default function App() {
 
                 {/* 2. Style Adjustments (textSize & Theme) */}
                 <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-3 text-left">
-                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">PASTAGE VISUEL</span>
+                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">PARTAGE VISUEL</span>
                   
                   {/* Slider size font */}
                   <div className="space-y-1">
@@ -1295,7 +1335,7 @@ export default function App() {
                     <div className="flex gap-2">
                       <button 
                         onClick={() => setThemeMode('dark')}
-                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition ${
+                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition cursor-pointer ${
                           themeMode === 'dark' ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]' : 'text-[#6b6355] border-[#2e2a1e]'
                         }`}
                       >
@@ -1303,7 +1343,7 @@ export default function App() {
                       </button>
                       <button 
                         onClick={() => setThemeMode('sepia')}
-                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition ${
+                        className={`flex-1 py-1.5 text-[9px] font-mono uppercase border rounded-lg transition cursor-pointer ${
                           themeMode === 'sepia' ? 'bg-[#8e6812]/20 text-[#8e6812] border-[#8e6812]' : 'text-[#6b6355] border-[#2e2a1e]'
                         }`}
                       >
@@ -1314,15 +1354,85 @@ export default function App() {
                 </div>
 
                 {/* 3. Sync and database statistics */}
-                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-2 text-left">
-                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">SAISIE DE CONFIANCE</span>
-                  <div className="space-y-1 text-xs">
-                    <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
-                    <p className="text-[#6b6355]">Notes d'études : <span className="font-mono text-[#e8e0d0] font-bold">{notes.length}</span></p>
-                    <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-2 text-left flex flex-col justify-between">
+                  <div>
+                    <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">STATISTIQUES SACRÉES</span>
+                    <div className="space-y-1 text-xs mt-1">
+                      <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
+                      <p className="text-[#6b6355]">Notes d'études : <span className="font-mono text-[#e8e0d0] font-bold">{notes.length}</span></p>
+                      <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
+                    </div>
                   </div>
                   <div className="text-[8.5px] text-[#6b6355] italic leading-relaxed pt-1.5 border-t border-[#2e2a1e]/40">
-                    * Toutes vos données sont sauvegardées en temps réel sur Firestore cloud.
+                    * Sauvegardé en temps réel sur Firestore.
+                  </div>
+                </div>
+
+                {/* 4. System Settings (Paramètres Système) */}
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-3 text-left">
+                  <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">PARAMÈTRES SYSTÈME</span>
+                  
+                  {/* Voice Gender selection */}
+                  <div className="space-y-1.5">
+                    <span className="text-[8.5px] font-mono text-[#6b6355] uppercase block">Voix de lecture</span>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['auto', 'male', 'female'] as const).map((genderVal) => (
+                        <button
+                          key={genderVal}
+                          onClick={() => {
+                            setVoiceGender(genderVal);
+                            try {
+                              localStorage.setItem('bible_voice_gender', genderVal);
+                            } catch (_) {}
+                          }}
+                          className={`py-1 text-[8px] font-mono uppercase border rounded transition cursor-pointer ${
+                            voiceGender === genderVal 
+                              ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]' 
+                              : 'text-[#6b6355] border-[#2e2a1e]/60'
+                          }`}
+                        >
+                          {genderVal === 'auto' ? 'Auto' : genderVal === 'male' ? 'Homme' : 'Femme'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Playback rate speed */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] font-mono">
+                      <span className="text-[#6b6355]">Vitesse de parole</span>
+                      <span className="text-[#c9a84c] font-bold">{playbackRate}x</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.7" 
+                      max="1.5" 
+                      step="0.1"
+                      value={playbackRate}
+                      onChange={(e) => setPlaybackRate(Number(e.target.value))}
+                      className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1 appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Melody Toggle */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]">Mélodie Ambiante</span>
+                    <button
+                      onClick={() => {
+                        const nextVal = !isMelodyEnabled;
+                        setIsMelodyEnabled(nextVal);
+                        try {
+                          localStorage.setItem('bible_melody_enabled', String(nextVal));
+                        } catch (_) {}
+                      }}
+                      className={`px-2 py-0.5 text-[8px] font-semibold uppercase rounded border cursor-pointer transition ${
+                        isMelodyEnabled 
+                          ? 'bg-[#c9a84c]/10 text-[#c9a84c] border-[#c9a84c]/30' 
+                          : 'text-[#6b6355] border-[#2e2a1e]/40 hover:text-white'
+                      }`}
+                    >
+                      {isMelodyEnabled ? 'Oui' : 'Non'}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1879,6 +1989,71 @@ export default function App() {
                             </span>
                           </div>
                         )}
+                      </div>
+
+                      {/* Ligne d'intégration Défilement automatique */}
+                      <div className="h-[1px] bg-[#2e2a1e]/40 w-full my-1"></div>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 w-full">
+                        <div className="flex flex-wrap items-center gap-3">
+                          {/* Switch/Button for auto-scrolling vocal synchronization */}
+                          <button
+                            onClick={() => setIsAutoScrollWithSpeech(prev => !prev)}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                              isAutoScrollWithSpeech 
+                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                            title="Centrer automatiquement sur l'écran les versets lors de la lecture audio"
+                          >
+                            <span className="relative flex h-2 w-2">
+                              {isAutoScrollWithSpeech && (
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
+                              )}
+                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isAutoScrollWithSpeech ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
+                            </span>
+                            <span>Suivi vocal actif : {isAutoScrollWithSpeech ? 'Oui' : 'Non'}</span>
+                          </button>
+
+                          {/* Fluid auto-scroll button */}
+                          <button
+                            onClick={() => {
+                              const nextVal = !isFluidAutoScrolling;
+                              setIsFluidAutoScrolling(nextVal);
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                              isFluidAutoScrolling 
+                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                            title="Faire défiler lentement et en continu la page sans intervention humaine"
+                          >
+                            <span className={`w-3.5 h-3.5 flex items-center justify-center ${isFluidAutoScrolling ? 'text-[#c9a84c] animate-bounce font-sans font-bold' : 'text-[#6b6355]'}`}>
+                              ⇅
+                            </span>
+                            <span>Défilement continu : {isFluidAutoScrolling ? 'Défilé ✓' : 'Arrêté'}</span>
+                          </button>
+                        </div>
+
+                        {/* Speed control slider */}
+                        <div className="flex items-center gap-3 self-end sm:self-auto">
+                          <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Vitesse défilement</span>
+                          <input
+                            type="range"
+                            min="5"
+                            max="60"
+                            step="5"
+                            value={fluidScrollSpeed}
+                            disabled={!isFluidAutoScrolling}
+                            onChange={(e) => {
+                              setFluidScrollSpeed(Number(e.target.value));
+                            }}
+                            className="w-28 accent-[#c9a84c] bg-[#1a1712] rounded-lg appearance-none h-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            title="Ajuster la vitesse de glissement automatique de la page des Écritures"
+                          />
+                          <span className={`text-[9.5px] font-mono w-14 text-right font-bold ${isFluidAutoScrolling ? 'text-[#c9a84c]' : 'text-[#6b6355]'}`}>
+                            {fluidScrollSpeed} px/s
+                          </span>
+                        </div>
                       </div>
                     </div>
                   )}
