@@ -22,6 +22,7 @@ interface VerseItemProps {
   emotionAnalysis?: EmotionAnalysisResult;
   onSaveNote: (verse: Verse, noteText: string, audioBase64?: string, emotionAnalysis?: EmotionAnalysisResult) => void;
   isCurrentSpoken?: boolean;
+  index?: number;
 }
 
 export const VerseItem: React.FC<VerseItemProps> = React.memo(({
@@ -40,7 +41,8 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
   noteAudio,
   emotionAnalysis,
   onSaveNote,
-  isCurrentSpoken = false
+  isCurrentSpoken = false,
+  index = 0
 }) => {
   const [copied, setCopied] = useState(false);
   const [copiedShareText, setCopiedShareText] = useState(false);
@@ -418,7 +420,11 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
       id={`verse-${verse.book_id}-${verse.chapter}-${verse.verse}`}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
+      transition={{ 
+        duration: 0.35, 
+        delay: Math.min(index, 20) * 0.012, 
+        ease: [0.215, 0.610, 0.355, 1.000] 
+      }}
       onClick={(e) => {
         e.stopPropagation();
         onTap();
