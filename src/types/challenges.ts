@@ -3,8 +3,10 @@ export interface ReadingPlan {
   title: string;
   description: string;
   durationDays: number;
-  category: 'nt' | 'poetique' | 'pentateuque' | 'bible';
+  category: 'nt' | 'poetique' | 'pentateuque' | 'bible' | 'custom';
   targetCategoryName?: string;
+  isCustom?: boolean;
+  bookIds?: number[]; // list of included book IDs for custom plans
 }
 
 export interface ReadingHistoryItem {
