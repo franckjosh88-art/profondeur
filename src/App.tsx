@@ -16,7 +16,7 @@ import {
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -33,10 +33,13 @@ import { ContextSection } from './components/ContextSection';
 import { VerseQuote } from './components/VerseQuote';
 import { RevelationBadge } from './components/RevelationBadge';
 import { cleanBibleMarkdown } from './lib/bibleFormatter';
+import { SpiritualNotesManager } from './components/SpiritualNotesManager';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
 import { MemorizeModule } from './components/MemorizeModule';
+import { audioPurifier } from './utils/audioProcessor';
+import { explainCache, CachedExplanation } from './utils/indexedDBCache';
 
 export default function App() {
   // Authentication states
@@ -62,8 +65,8 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
 
   // App Navigation Tabs
-  // 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary, 'memorize' -> Memorization of verses
-  const [activeTab, setActiveTab] = useState<'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize'>('read');
+  // 'home' -> Dashboard, 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary, 'memorize' -> Memorization of verses, 'notes' -> Spiritual notes card list
+  const [activeTab, setActiveTab] = useState<'home' | 'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize' | 'notes'>('home');
 
   // Local database initialization
   const [sqliteDbReady, setSqliteDbReady] = useState<boolean>(false);
@@ -91,6 +94,8 @@ export default function App() {
   const [verseExplanation, setVerseExplanation] = useState<string | null>(null);
   const [loadingExplanation, setLoadingExplanation] = useState<boolean>(false);
   const [exegesisTab, setExegesisTab] = useState<'exegesis' | 'compare'>('exegesis');
+  const [isExplanationCached, setIsExplanationCached] = useState<boolean>(false);
+  const [popularExplanations, setPopularExplanations] = useState<CachedExplanation[]>([]);
 
   // Interactive dictionary linking state
   const [targetedStrongCode, setTargetedStrongCode] = useState<string | null>(null);
@@ -122,6 +127,39 @@ export default function App() {
         setSqliteDbReady(true);
       });
     }
+  }, []);
+
+  const refreshPopularExplanations = async () => {
+    try {
+      const popular = await explainCache.getMostPopular(8);
+      setPopularExplanations(popular);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const [localDailyGoal, setLocalDailyGoal] = useState<number>(3);
+  useEffect(() => {
+    const savedGoal = localStorage.getItem('bible_daily_goal');
+    if (savedGoal) {
+      setLocalDailyGoal(parseInt(savedGoal, 10) || 3);
+    }
+  }, [readingHistory, activeTab]);
+
+  const todayStrStr = new Date().toDateString();
+  const todayReadingsCount = readingHistory.filter(h => {
+    if (!h.timestamp) return false;
+    try {
+      return new Date(h.timestamp).toDateString() === todayStrStr;
+    } catch (e) {
+      return false;
+    }
+  }).length;
+
+  const goalPercent = Math.min(100, Math.round((todayReadingsCount / localDailyGoal) * 100));
+
+  useEffect(() => {
+    refreshPopularExplanations();
   }, []);
 
   // Listen to Auth State
@@ -674,6 +712,24 @@ export default function App() {
     setExegesisTab(tab);
     setVerseExplanation(null);
     setLoadingExplanation(true);
+    setIsExplanationCached(false);
+    
+    const cacheKey = `verse:${verse.book_name}:${verse.chapter}:${verse.verse}:${tab}`;
+    const referenceStr = `${verse.book_name} ${verse.chapter}:${verse.verse}`;
+    
+    // Check IndexedDB cache first
+    try {
+      const cached = await explainCache.get(cacheKey);
+      if (cached) {
+        setVerseExplanation(cached.content);
+        setIsExplanationCached(true);
+        setLoadingExplanation(false);
+        refreshPopularExplanations();
+        return;
+      }
+    } catch (cacheErr) {
+      console.warn("Error looking up explanation cache:", cacheErr);
+    }
     
     try {
       const response = await fetch('/api/gemini/explain', {
@@ -681,7 +737,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verseText: verse.text,
-          reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
+          reference: referenceStr,
           bookName: verse.book_name
         })
       });
@@ -689,10 +745,31 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Impossible de joindre l'interlocuteur d'étude.");
       
-      setVerseExplanation(data.explanation || "Exégèse non générée par le modèle théologique.");
+      const explanationResult = data.explanation || "Exégèse non générée par le modèle théologique.";
+      setVerseExplanation(explanationResult);
+
+      // Save to IndexedDB Cache
+      try {
+        await explainCache.set(cacheKey, 'verse', referenceStr, explanationResult, { tab });
+        refreshPopularExplanations();
+      } catch (saveErr) {
+        console.warn("Failed to save explanation cache:", saveErr);
+      }
     } catch (err: any) {
       console.error("Bible Explanation query fails:", err);
-      setVerseExplanation(`Échec d'exégèse : ${err.message || 'Problème de connexion réseau.'}`);
+      // Try to fallback to alternate cached view if any
+      try {
+        const altTab = tab === 'exegesis' ? 'compare' : 'exegesis';
+        const altCacheKey = `verse:${verse.book_name}:${verse.chapter}:${verse.verse}:${altTab}`;
+        const altCached = await explainCache.get(altCacheKey);
+        if (altCached) {
+          setVerseExplanation(altCached.content + "\n\n*(Note : Affiché depuis le cache local car la connexion réseau a échoué)*");
+          setIsExplanationCached(true);
+          return;
+        }
+      } catch (_) {}
+      
+      setVerseExplanation(`Échec d'exégèse : ${err.message || 'Problème de connexion réseau.'}\n\n*Conseil : l'étude en ligne requiert une connexion internet active.*`);
     } finally {
       setLoadingExplanation(false);
     }
@@ -702,6 +779,23 @@ export default function App() {
   const handleSummarizeChapter = async () => {
     setLoadingSummary(true);
     setChapterSummary(null);
+
+    const cacheKey = `chapter:${selectedBook.name}:${selectedChapter}`;
+    const referenceStr = `${selectedBook.name} ${selectedChapter}`;
+
+    // Check IndexedDB Cache first
+    try {
+      const cached = await explainCache.get(cacheKey);
+      if (cached) {
+        setChapterSummary(cached.content);
+        setLoadingSummary(false);
+        refreshPopularExplanations();
+        markCurrentChapterRead();
+        return;
+      }
+    } catch (cacheErr) {
+      console.warn("Error looking up chapter summary cache:", cacheErr);
+    }
 
     try {
       // Format current chapter payload
@@ -723,7 +817,17 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erreur réseau.");
 
-      setChapterSummary(data.summary || "Aucun résumé n'a pu être structuré.");
+      const summaryResult = data.summary || "Aucun résumé n'a pu être structuré.";
+      setChapterSummary(summaryResult);
+
+      // Save to IndexedDB Cache
+      try {
+        await explainCache.set(cacheKey, 'chapter', referenceStr, summaryResult);
+        refreshPopularExplanations();
+      } catch (saveErr) {
+        console.warn("Failed to write chapter summary cache:", saveErr);
+      }
+
       // Auto log progress of study when summarized
       markCurrentChapterRead();
     } catch (err: any) {
@@ -740,11 +844,77 @@ export default function App() {
     setActiveTab('dictionary'); // Quick redirect to Lexicon Lookup Tab
   };
 
+  // Loads offline cached explanation into active UI views
+  const handleLoadCachedExplanation = (cacheItem: CachedExplanation) => {
+    const parts = cacheItem.key.split(':');
+    const isVerse = cacheItem.type === 'verse';
+
+    if (isVerse) {
+      const bookName = parts[1] || cacheItem.reference.split(' ')[0];
+      const chapter = parseInt(parts[2]) || 1;
+      const verseNum = parseInt(parts[3]) || 1;
+      const tab = (parts[4] as 'exegesis' | 'compare') || 'exegesis';
+
+      const reconstitutedVerse: any = {
+        book_id: cacheItem.metadata?.book_id || 1,
+        book_name: bookName,
+        chapter: chapter,
+        verse: verseNum,
+        text: cacheItem.metadata?.verseText || `Étude sauvegardée de ${cacheItem.reference}`
+      };
+
+      // Set book and chapter safely so background is synced
+      const foundBook = BOOKS.find(b => b.name === bookName);
+      if (foundBook) {
+        setSelectedBook(foundBook);
+        setSelectedChapter(chapter);
+        setSelectedVerseId(`${foundBook.id}_${chapter}_${verseNum}`);
+      }
+
+      setActiveExplainVerse(reconstitutedVerse);
+      setExegesisTab(tab);
+      setVerseExplanation(cacheItem.content);
+      setIsExplanationCached(true);
+      setActiveTab('read'); // assure they are in the reader
+    } else {
+      // It's a chapter summary!
+      const bookName = parts[1] || '';
+      const chapterNum = parseInt(parts[2]) || 1;
+
+      const foundBook = BOOKS.find(b => b.name === bookName);
+      if (foundBook) {
+        setSelectedBook(foundBook);
+        setSelectedChapter(chapterNum);
+        setActiveTab('read');
+        setChapterSummary(cacheItem.content);
+        
+        // Open summary section or scroll to summary
+        setTimeout(() => {
+          const summaryElement = document.getElementById('chapter-summary-panel');
+          if (summaryElement) {
+            summaryElement.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 300);
+      }
+    }
+    
+    // Update popularity counters locally
+    refreshPopularExplanations();
+  };
+
   // Web Speech API Text-to-Speech (TTS) Integration
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const [voicePitch, setVoicePitch] = useState<number>(() => {
+    try {
+      const p = localStorage.getItem('bible_voice_pitch');
+      return p ? Number(p) : 1.0;
+    } catch (_) {
+      return 1.0;
+    }
+  });
   const [voiceGender, setVoiceGender] = useState<'auto' | 'male' | 'female'>(() => {
     try {
       const g = localStorage.getItem('bible_voice_gender');
@@ -753,6 +923,39 @@ export default function App() {
       return 'auto';
     }
   });
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>(() => {
+    try {
+      return localStorage.getItem('bible_preferred_voice_uri') || '';
+    } catch (_) {
+      return '';
+    }
+  });
+
+  // Load and listen to the exhaustive list of French voices
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    const updateVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      // Filter voices for French lang
+      const frVoices = voices.filter(v => v.lang.startsWith('fr') || v.lang.includes('FR'));
+      setAvailableVoices(frVoices);
+    };
+
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+    
+    // Periodically poll just in case onvoiceschanged does not fire initially in some browsers
+    const interval = setInterval(updateVoices, 1000);
+    return () => {
+      clearInterval(interval);
+      if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, []);
+
   const currentVerseToSpeakRef = useRef<number>(-1);
 
   // Auto-scrolling state variables
@@ -850,49 +1053,53 @@ export default function App() {
     });
     
     let selectedVoice: SpeechSynthesisVoice | null = null;
-    const lowerMaleNames = [
-      'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-      'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri'
-    ];
-    const lowerFemaleNames = [
-      'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
-      'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
-      'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
-      'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-      'zira', 'google français'
-    ];
-
-    if (voiceGender === 'male') {
-      // 1. Try exact male names from sorted high quality voices first
-      selectedVoice = sortedFrenchVoices.find(voice => 
-        lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
-      ) || null;
-      // 2. Try excluding female named voices
-      if (!selectedVoice) {
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          !lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-      }
-      
-      // Pitch adjustment for male: make it warmer, deeper, and more pastoral
-      utterance.pitch = 0.88;
-    } else if (voiceGender === 'female') {
-      // 1. Try exact female names from sorted high quality voices first
-      selectedVoice = sortedFrenchVoices.find(voice => 
-        lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
-      ) || null;
-      // 2. Try excluding male named voices
-      if (!selectedVoice) {
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          !lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-      }
-      
-      // Pitch adjustment for female: make it slightly lighter and clear
-      utterance.pitch = 1.02;
-    } else {
-      utterance.pitch = 1.0;
+    
+    // 1. Use manual voice choice if authorized and present
+    if (selectedVoiceURI) {
+      selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
     }
+
+    // 2. Fall back on automatic gender-matching lists if no manual voice is chosen
+    if (!selectedVoice) {
+      const lowerMaleNames = [
+        'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
+        'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri'
+      ];
+      const lowerFemaleNames = [
+        'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
+        'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
+        'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
+        'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
+        'zira', 'google français'
+      ];
+
+      if (voiceGender === 'male') {
+        // 1. Try exact male names from sorted high quality voices first
+        selectedVoice = sortedFrenchVoices.find(voice => 
+          lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+        ) || null;
+        // 2. Try excluding female named voices
+        if (!selectedVoice) {
+          selectedVoice = sortedFrenchVoices.find(voice => 
+            !lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+          ) || null;
+        }
+      } else if (voiceGender === 'female') {
+        // 1. Try exact female names from sorted high quality voices first
+        selectedVoice = sortedFrenchVoices.find(voice => 
+          lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+        ) || null;
+        // 2. Try excluding male named voices
+        if (!selectedVoice) {
+          selectedVoice = sortedFrenchVoices.find(voice => 
+            !lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+          ) || null;
+        }
+      }
+    }
+
+    // Standardize with dynamic pitch to prevent any Web Speech synthesis resampler artifacts/crackles (noise/debruil)
+    utterance.pitch = voicePitch;
 
     // Fallback if no specific gender voice was found or selected gender is 'auto'
     if (!selectedVoice && sortedFrenchVoices.length > 0) {
@@ -1359,7 +1566,16 @@ export default function App() {
                     <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">STATISTIQUES SACRÉES</span>
                     <div className="space-y-1 text-xs mt-1">
                       <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
-                      <p className="text-[#6b6355]">Notes d'études : <span className="font-mono text-[#e8e0d0] font-bold">{notes.length}</span></p>
+                      <button
+                        onClick={() => {
+                          setActiveTab('notes');
+                          setIsSettingsOpen(false);
+                        }}
+                        className="text-[#6b6355] hover:text-[#c9a84c] transition text-left flex items-center justify-between w-full cursor-pointer group"
+                      >
+                        <span>Notes d'études :</span>
+                        <span className="font-mono text-[#e8e0d0] group-hover:text-[#c9a84c] font-bold underline decoration-dashed decoration-[#c9a84c]/50 transition">{notes.length} 📓</span>
+                      </button>
                       <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
                     </div>
                   </div>
@@ -1374,7 +1590,7 @@ export default function App() {
                   
                   {/* Voice Gender selection */}
                   <div className="space-y-1.5">
-                    <span className="text-[8.5px] font-mono text-[#6b6355] uppercase block">Voix de lecture</span>
+                    <span className="text-[8.5px] font-mono text-[#6b6355] uppercase block">Mode de la voix</span>
                     <div className="grid grid-cols-3 gap-1">
                       {(['auto', 'male', 'female'] as const).map((genderVal) => (
                         <button
@@ -1397,6 +1613,62 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Exhaustive voice selector list */}
+                  <div className="space-y-1">
+                    <span className="text-[8.5px] font-mono text-[#6b6355] uppercase block">Choix précis de la voix</span>
+                    <div className="flex gap-1.5 items-stretch">
+                      <select
+                        value={selectedVoiceURI}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedVoiceURI(val);
+                          try {
+                            localStorage.setItem('bible_preferred_voice_uri', val);
+                          } catch (_) {}
+                        }}
+                        className="flex-1 text-[9px] bg-[#14120e] border border-[#2e2a1e]/80 text-[#e8e0d0] rounded p-1 focus:outline-none focus:border-[#c9a84c] min-w-0"
+                      >
+                        <option value="">-- Mode Automatique --</option>
+                        {availableVoices.map((voice) => {
+                          const isPremium = voice.name.toLowerCase().includes('google') || voice.name.toLowerCase().includes('natural') || voice.name.toLowerCase().includes('premium') || voice.name.toLowerCase().includes('high');
+                          return (
+                            <option key={voice.voiceURI} value={voice.voiceURI}>
+                              {isPremium ? '💎 ' : ''}{voice.name}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      
+                      {selectedVoiceURI && (
+                        <button
+                          onClick={() => {
+                            if (typeof window !== 'undefined' && window.speechSynthesis) {
+                              window.speechSynthesis.cancel();
+                              // Play the purifier test chime
+                              audioPurifier.playTestChime();
+
+                              // Speak sample
+                              const utterance = new SpeechSynthesisUtterance("Que la paix soit avec vous.");
+                              utterance.lang = 'fr-FR';
+                              utterance.pitch = voicePitch;
+                              utterance.rate = playbackRate * 0.9;
+                              
+                              const targetVoic = availableVoices.find(v => v.voiceURI === selectedVoiceURI);
+                              if (targetVoic) {
+                                utterance.voice = targetVoic;
+                              }
+                              window.speechSynthesis.speak(utterance);
+                            }
+                          }}
+                          className="px-1.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/35 rounded text-[8px] hover:bg-[#c9a84c]/20 cursor-pointer flex items-center justify-center font-mono uppercase font-bold"
+                          title="Tester la voix"
+                        >
+                          Test
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Playback rate speed */}
                   <div className="space-y-1">
                     <div className="flex justify-between text-[9px] font-mono">
@@ -1410,7 +1682,31 @@ export default function App() {
                       step="0.1"
                       value={playbackRate}
                       onChange={(e) => setPlaybackRate(Number(e.target.value))}
+                      className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1.5 appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Playback pitch tone to let user remove or adjust robotic resampler noise */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] font-mono">
+                      <span className="text-[#6b6355]">Hauteur (Pitch)</span>
+                      <span className="text-[#c9a84c] font-bold">{voicePitch === 1.0 ? 'Naturel (Clair)' : `${voicePitch}x`}</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.8" 
+                      max="1.2" 
+                      step="0.05"
+                      value={voicePitch}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        setVoicePitch(val);
+                        try {
+                          localStorage.setItem('bible_voice_pitch', String(val));
+                        } catch (_) {}
+                      }}
                       className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1 appearance-none cursor-pointer"
+                      title="Réglez à 1.0 pour une clarté optimale sans grésillements numériques additionnels"
                     />
                   </div>
 
@@ -1434,6 +1730,22 @@ export default function App() {
                       {isMelodyEnabled ? 'Oui' : 'Non'}
                     </button>
                   </div>
+
+                  {/* Purifier Status with Test Chime button */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355] flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Anti-Bruit Actif (HD)
+                    </span>
+                    <button
+                      onClick={() => {
+                        audioPurifier.playTestChime();
+                      }}
+                      className="px-1.5 py-0.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/40 rounded hover:bg-[#c9a84c]/20 transition cursor-pointer text-[8px] uppercase font-bold"
+                    >
+                      Calibrer 🎵
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1447,6 +1759,16 @@ export default function App() {
         <aside className="w-full md:w-60 shrink-0 hidden md:flex flex-col gap-1.5 text-left font-serif py-1">
           <span className="text-[10px] font-mono font-black uppercase text-[#6b6355] tracking-[0.24em] px-3 mb-2">Sanctuaire</span>
           
+          <button
+            onClick={() => setActiveTab('home')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'home' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <Home className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Accueil</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('read')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
@@ -1507,17 +1829,228 @@ export default function App() {
             <span>Mémorisation</span>
           </button>
 
+          <button
+            onClick={() => setActiveTab('notes')}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
+              activeTab === 'notes' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+            }`}
+          >
+            <ScrollText className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <span>Notes Spirituelles</span>
+          </button>
+
           <div className="pt-4 border-t border-[#2e2a1e]/40 mt-2 px-3">
             <span className="text-[8.5px] font-mono uppercase text-[#6b6355] tracking-widest block">PASSAGE ACTUEL</span>
             <p className="text-xs font-serif italic text-[#c9a84c] font-bold mt-1">
               {selectedBook.name} · {selectedChapter}
             </p>
           </div>
+
+          {popularExplanations.length > 0 && (
+            <div className="pt-4 border-t border-[#2e2a1e]/40 mt-3 px-3 space-y-2">
+              <span className="text-[8.5px] font-mono uppercase text-[#6b6355] tracking-widest flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
+                Études Hors-ligne ({popularExplanations.length})
+              </span>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 scroller-thin">
+                {popularExplanations.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => handleLoadCachedExplanation(item)}
+                    className="w-full text-[#e8e0d0]/90 text-left p-1.5 bg-[#12100c]/80 hover:bg-[#1a1712] border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 rounded-lg transition duration-150 cursor-pointer text-[10px] space-y-0.5 group block select-none"
+                  >
+                    <div className="flex justify-between items-center">
+                      <span className="font-serif font-bold text-[#c9a84c] group-hover:text-white transition">
+                        {item.reference}
+                      </span>
+                      <span className="text-[8px] font-mono text-[#6b6355]">
+                        👁️ {item.viewCount}
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-[#6b6355] font-serif truncate">
+                      {item.content.replace(/[#*`_[\]]/g, '').slice(0, 45)}...
+                    </p>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={async () => {
+                  if (confirm("Voulez-vous vider tout le cache d'étude hors-ligne ?")) {
+                    await explainCache.clearAll();
+                    refreshPopularExplanations();
+                  }
+                }}
+                className="w-full text-center text-[8px] font-mono uppercase text-[#6b6355]/60 hover:text-red-400/90 transition cursor-pointer font-bold"
+              >
+                Vider le cache hors-ligne
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* CONTAINER SWITCH FOR THE POWERFUL ACTIVE TABS */}
         <div className="flex-1 flex flex-col min-h-[500px]">
           
+          {/* HOME / DASHBOARD GRAPHICAL HUB */}
+          {activeTab === 'home' && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="w-full max-w-sm mx-auto p-1.5 flex flex-col justify-between space-y-3 shrink-0"
+            >
+              {/* Top title and search brand bar */}
+              <div className="flex items-center justify-between px-1">
+                <span className="font-serif text-[#e8e0d0] font-black text-sm uppercase tracking-[0.24em] select-none">
+                  bible profonde
+                </span>
+                <button
+                  onClick={() => {
+                    setActiveTab('read');
+                    setTimeout(() => {
+                      const inputEl = document.getElementById('bible-search-input');
+                      if (inputEl) inputEl.focus();
+                    }, 100);
+                  }}
+                  className="p-1 hover:bg-[#1a1712] text-[#6b6355] hover:text-[#c9a84c] rounded-full transition cursor-pointer"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* FUSED VERSET DU JOUR HERO CARD */}
+              <div className="bg-[#12100c] border border-[#c9a84c]/15 p-4.5 rounded-2xl relative overflow-hidden flex flex-col justify-center items-center text-center space-y-2 shadow-gold-glow">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl pointer-events-none"></div>
+                
+                <span className="text-[8.5px] font-mono tracking-[0.2em] text-[#6b6355] uppercase font-bold">
+                  verset du jour
+                </span>
+                
+                <p className="font-serif italic text-xs leading-relaxed text-[#c9a84c] max-w-xs px-2 select-none">
+                  « {dailyVerseForCurrentDay.verse.text} »
+                </p>
+                <div className="font-mono text-[8.5px] tracking-widest text-[#6b6355] uppercase font-bold">
+                  {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
+                </div>
+              </div>
+
+              {/* COMPACT 2X2 GRID OF CONTROLS WITH SUBTLE GOLD BORDERS */}
+              <div className="grid grid-cols-2 gap-2">
+                {/* 1. LECTURE */}
+                <button
+                  onClick={() => setActiveTab('read')}
+                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
+                >
+                  <BookOpen className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
+                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
+                    lecture
+                  </span>
+                </button>
+
+                {/* 2. ASSISTANT */}
+                <button
+                  onClick={() => setActiveTab('assistant')}
+                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
+                >
+                  <MessageSquare className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
+                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
+                    assistant
+                  </span>
+                </button>
+
+                {/* 3. DEFIS */}
+                <button
+                  onClick={() => setActiveTab('challenges')}
+                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
+                >
+                  <Flame className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
+                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
+                    défis
+                  </span>
+                </button>
+
+                {/* 4. MEMORISER */}
+                <button
+                  onClick={() => setActiveTab('memorize')}
+                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
+                >
+                  <Brain className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition animate-pulse" />
+                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
+                    mémoriser
+                  </span>
+                </button>
+              </div>
+
+              {/* JOURNAL INTUITIF LINK */}
+              <button
+                onClick={() => setActiveTab('notes')}
+                className="w-full bg-[#12100c]/90 hover:bg-[#15130f] border border-[#c9a84c]/15 hover:border-[#c9a84c]/40 rounded-2xl p-3 flex items-center justify-between transition cursor-pointer select-none group shadow-soft"
+              >
+                <div className="flex items-center gap-2.5">
+                  <ScrollText className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-110 transition duration-150" />
+                  <div className="text-left">
+                    <span className="text-[9px] font-mono text-[#6b6355] uppercase block tracking-wider">
+                      journal d'harmonie
+                    </span>
+                    <span className="text-xs font-serif font-black text-[#e8e0d0]">
+                      Notes Spirituelles ({notes.length})
+                    </span>
+                  </div>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-[#c9a84c] opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition duration-150" />
+              </button>
+
+              {/* COMPACT DAILY READING GOAL WITH CIRCULAR PROGRESS INDICATOR */}
+              <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-2xl p-2.5 px-3.5 flex items-center justify-between select-none shadow-soft text-left relative overflow-hidden">
+                <div className="space-y-0.5">
+                  <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider block">
+                    objectif du jour
+                  </span>
+                  <span className="text-xs font-serif font-black text-[#e8e0d0]">
+                    {todayReadingsCount}/{localDailyGoal} <span className="text-[9px] text-[#6b6355] font-mono lowercase">chapitres</span>
+                  </span>
+                </div>
+
+                {/* Circular progress percentage graphic indicator */}
+                <div className="relative w-9 h-9 flex items-center justify-center">
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                    <path
+                      className="text-[#1a1712]"
+                      strokeWidth="3"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    <motion.path
+                      initial={{ strokeDashoffset: '100' }}
+                      animate={{ strokeDashoffset: `${100 - goalPercent}` }}
+                      transition={{ duration: 0.8, ease: "easeOut" }}
+                      className="text-[#c9a84c]"
+                      strokeWidth="3.2"
+                      strokeDasharray={`${goalPercent}, 100`}
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                  </svg>
+                  <span className="absolute text-[7.5px] font-mono font-bold text-[#c9a84c]">
+                    {goalPercent}%
+                  </span>
+                </div>
+              </div>
+
+              {/* FLOATING ACTION BOTTOM BUTTON : CONTINUER LA LECTURE */}
+              <div className="pt-1.5">
+                <button
+                  onClick={() => setActiveTab('read')}
+                  className="w-full py-2.5 bg-[#c9a84c] hover:bg-[#dbb858] active:bg-[#aa8b39] text-[#050403] font-serif text-[10px] font-bold tracking-[0.18em] uppercase rounded-xl transition duration-150 shadow-gold-glow flex items-center justify-center gap-1.5 focus:outline-none cursor-pointer"
+                >
+                  continuer la lecture
+                </button>
+              </div>
+            </motion.div>
+          )}
+
           {/* A. STUDY AND READING MODULE TAB */}
           {activeTab === 'read' && (
             <motion.div
@@ -2218,6 +2751,13 @@ export default function App() {
                               « {activeExplainVerse.text.replace(/\[[HG]\d+\]/g, '')} »
                             </div>
 
+                            {isExplanationCached && !loadingExplanation && (
+                              <div className="flex items-center gap-2 px-3.5 py-2 bg-[#0c2415]/75 border border-emerald-500/30 text-emerald-400 rounded-xl text-[10px] font-mono animate-fade-in-down">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                <span>Disponible hors-ligne • Cette étude est sécurisée localement dans votre cache d'explications IndexedDB.</span>
+                              </div>
+                            )}
+
                             {loadingExplanation ? (
                               <div className="py-16 flex flex-col items-center justify-center space-y-3">
                                 <div className="w-7 h-7 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
@@ -2484,11 +3024,36 @@ export default function App() {
             </motion.div>
           )}
 
+          {/* F. SPIRITUAL NOTES JOURNAL & MANAGEMENT TAB */}
+          {activeTab === 'notes' && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }} 
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <SpiritualNotesManager 
+                notes={notes}
+                onNavigateToVerse={handleNavigateVerseToReader}
+                onSaveNote={handleSaveSpiritualNote}
+              />
+            </motion.div>
+          )}
+
         </div>
       </main>
 
       {/* MOBILE BOTTOM NAVIGATION SHELF */}
       <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-1 flex justify-around md:hidden z-40 select-none shadow-gold-glow">
+        <button
+          onClick={() => setActiveTab('home')}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
+            activeTab === 'home' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Home className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Accueil</span>
+        </button>
+
         <button
           onClick={() => setActiveTab('read')}
           className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
@@ -2497,26 +3062,6 @@ export default function App() {
         >
           <BookOpen className="w-5 h-5 shrink-0" />
           <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Étudier</span>
-        </button>
-
-        <button
-          onClick={() => { setActiveTab('dictionary'); setTargetedStrongCode(null); }}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'dictionary' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Search className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Lexique</span>
-        </button>
-
-        <button
-          onClick={() => { setActiveTab('encyclopedia'); }}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'encyclopedia' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Library className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Dict. IA</span>
         </button>
 
         <button

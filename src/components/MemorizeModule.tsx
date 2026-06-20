@@ -250,7 +250,7 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
     if (preferredVoice) {
       utterance.voice = preferredVoice;
     }
-    utterance.pitch = 0.95;
+    utterance.pitch = 1.0;
     utterance.rate = 0.85;
 
     window.speechSynthesis.speak(utterance);

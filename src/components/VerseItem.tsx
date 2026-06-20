@@ -3,6 +3,7 @@ import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, M
 import { motion, AnimatePresence } from 'motion/react';
 import { Verse, EmotionAnalysisResult } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
+import { getEmotionMeta, renderEmotionIcon } from '../utils/emotionHelpers';
 
 interface VerseItemProps {
   verse: Verse;
@@ -440,9 +441,22 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         {/* Verse Number aligned elegant top-left superscript style with optional Note icon */}
         <div className="flex flex-col items-center gap-1 select-none font-mono text-[11px] font-extrabold text-[#c9a84c] mt-1 pr-0.5 flex-shrink-0">
           <span>{verse.verse}</span>
-          {hasNote && (
-            <FileText className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" title="Ce verset contient une note personnelle" />
-          )}
+          {hasNote && (() => {
+            if (emotionAnalysis?.detectedEmotion) {
+              const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
+              return (
+                <div 
+                  className={`p-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} animate-fade-in`}
+                  title={`Note spirituelle (${emotionAnalysis.detectedEmotion})`}
+                >
+                  {renderEmotionIcon(meta.iconName, "w-3 h-3")}
+                </div>
+              );
+            }
+            return (
+              <FileText className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" title="Ce verset contient une note personnelle" />
+            );
+          })()}
         </div>
 
         {/* Verse Content Text (crème color, elegant Lora screen-reading look) */}
@@ -482,7 +496,18 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
           {(hasNote || noteAudio) && !isSelected && (
             <div className="mt-2 flex flex-col gap-1.5 border-l border-[#c9a84c]/40 pl-3">
               {noteText && (
-                <p className="text-[11.5px] text-[#c9a84c]/85 italic">« {noteText} »</p>
+                <div className="space-y-1">
+                  <p className="text-[11.5px] text-[#c9a84c]/85 italic">« {noteText} »</p>
+                  {emotionAnalysis?.detectedEmotion && (() => {
+                    const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
+                    return (
+                      <div className={`inline-flex items-center gap-1.5 text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none animate-fade-in`}>
+                        {renderEmotionIcon(meta.iconName, "w-2.5 h-2.5")}
+                        <span>{emotionAnalysis.detectedEmotion}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
               )}
               {noteAudio && (
                 <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2 mt-0.5 select-none">
@@ -706,10 +731,18 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
                   </div>
                 ) : currentAnalysis ? (
                   <div className="bg-[#17140f] border border-[#2e2a1e]/60 rounded-lg p-3 space-y-2.5 animate-fade-in text-left">
-                    <div className="flex items-center gap-1.5">
-                      <span className="inline-block w-2 h-2 rounded-full bg-[#c9a84c]"></span>
-                      <p className="text-[11px] font-sans font-bold text-[#e8e0d0]">
-                        Climat spirituel détecté : <span className="text-[#c9a84c] font-black">{currentAnalysis.detectedEmotion}</span>
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const meta = getEmotionMeta(currentAnalysis.detectedEmotion);
+                        return (
+                          <div className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none`}>
+                            {renderEmotionIcon(meta.iconName, "w-3 h-3")}
+                            <span>{currentAnalysis.detectedEmotion}</span>
+                          </div>
+                        );
+                      })()}
+                      <p className="text-[10.5px] font-sans font-bold text-[#b8af9e]">
+                        détecté comme climat spirituel
                       </p>
                     </div>
 
