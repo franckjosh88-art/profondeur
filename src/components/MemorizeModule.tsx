@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Award, BookOpen, Star, RefreshCw, Eye, EyeOff, Sparkles, 
   ChevronRight, List, Brain, Sliders, CheckCircle2, AlertTriangle, 
-  Undo2, Volume2, HelpCircle
+  Undo2, Volume2, HelpCircle, Mic, MicOff
 } from 'lucide-react';
 import { FavoriteVerse } from '../types/bible';
 
@@ -96,6 +96,13 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
   // Success Celebration
   const [showCelebration, setShowCelebration] = useState<boolean>(false);
 
+  // Vocal/Voice recitation states
+  const [recitationMethod, setRecitationMethod] = useState<'write' | 'voice'>('write');
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [speechSupported, setSpeechSupported] = useState<boolean>(true);
+  const [interimTranscript, setInterimTranscript] = useState<string>('');
+  const [recognitionInstance, setRecognitionInstance] = useState<any | null>(null);
+
   // Tokenize the verse text into lists of words & punctuation
   const tokenizedWords = useMemo((): InteractiveWord[] => {
     if (!currentVerse) return [];
@@ -165,7 +172,91 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
     setUserAttemptText('');
     setTestResult(null);
     setShowCelebration(false);
+    setInterimTranscript('');
+    if (isRecording && recognitionInstance) {
+      try {
+        recognitionInstance.stop();
+      } catch (e) {}
+    }
   }, [selectedVerseIndex, mode]);
+
+  // Cleanup speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionInstance) {
+        try {
+          recognitionInstance.stop();
+        } catch (e) {}
+      }
+    };
+  }, [recognitionInstance]);
+
+  // Toggle voice recording
+  const toggleRecording = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      return;
+    }
+
+    if (isRecording) {
+      if (recognitionInstance) {
+        try {
+          recognitionInstance.stop();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      setIsRecording(false);
+    } else {
+      try {
+        const rec = new SpeechRecognition();
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = 'fr-FR';
+
+        rec.onstart = () => {
+          setIsRecording(true);
+          setInterimTranscript('');
+        };
+
+        rec.onresult = (event: any) => {
+          let finalTranscript = '';
+          let interim = '';
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interim += event.results[i][0].transcript;
+            }
+          }
+
+          if (finalTranscript) {
+            setUserAttemptText(prev => {
+              const prefix = prev.trim() ? prev.trim() + ' ' : '';
+              return prefix + finalTranscript;
+            });
+          }
+          setInterimTranscript(interim);
+        };
+
+        rec.onerror = (event: any) => {
+          console.error("Speech recognition error:", event.error);
+          setIsRecording(false);
+        };
+
+        rec.onend = () => {
+          setIsRecording(false);
+        };
+
+        setRecognitionInstance(rec);
+        rec.start();
+      } catch (e) {
+        console.error("Failed to start speech recognition:", e);
+      }
+    }
+  };
 
   // Auto-fill prompt if user switches to self-test
   const testWordCount = useMemo(() => {
@@ -525,19 +616,126 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
               <h3 className="text-xs font-mono font-bold text-[#c9a84c] uppercase flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Console de Récitation
               </h3>
-              <span className="text-[10px] text-[#6b6355]">Tapez de mémoire ci-dessous pour vous évaluer</span>
+              
+              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-lg p-0.5 text-[9px] font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecitationMethod('write');
+                    if (isRecording) toggleRecording();
+                  }}
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer ${
+                    recitationMethod === 'write' 
+                      ? 'bg-[#c9a84c] text-[#0d0b07] font-bold' 
+                      : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                  }`}
+                >
+                  Clavier
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecitationMethod('voice')}
+                  className={`px-2.5 py-1 rounded transition-all cursor-pointer flex items-center gap-1 ${
+                    recitationMethod === 'voice' 
+                      ? 'bg-[#c9a84c] text-[#0d0b07] font-bold' 
+                      : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                  }`}
+                >
+                  <Mic className="w-2.5 h-2.5" />
+                  Voix L'Écoute
+                </button>
+              </div>
             </div>
 
-            <textarea
-              className="w-full p-3 bg-[#12100c] border border-[#2e2a1e] focus:border-[#c9a84c]/50 text-xs sm:text-sm text-[#e8e0d0] rounded-xl outline-none transition font-serif italic"
-              rows={3}
-              value={userAttemptText}
-              onChange={(e) => {
-                setUserAttemptText(e.target.value);
-                if (testResult) setTestResult(null); // clear results on modification
-              }}
-              placeholder="Écrivez le verset fidèlement de mémoire ici..."
-            />
+            {recitationMethod === 'voice' ? (
+              <div className="space-y-4">
+                {!speechSupported ? (
+                  <div className="p-3 bg-red-950/20 border border-red-900/40 rounded-xl text-center text-xs text-red-400 font-sans">
+                    La reconnaissance vocale n'est pas prise en charge par ce navigateur ou nécessite une connexion sécurisée. Veuillez utiliser le mode Clavier.
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-6 bg-[#12100c] border border-[#2e2a1e]/80 rounded-xl space-y-4 text-center">
+                    {/* Pulsing micro button in golden style */}
+                    <button
+                      type="button"
+                      onClick={toggleRecording}
+                      className={`relative w-20 h-20 rounded-full flex items-center justify-center border transition-all duration-300 transform active:scale-95 cursor-pointer ${
+                        isRecording 
+                          ? 'bg-red-950/40 border-red-500 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse' 
+                          : 'bg-[#1c1913] border-[#c9a84c]/50 hover:border-[#c9a84c] text-[#c9a84c]'
+                      }`}
+                    >
+                      {isRecording ? (
+                        <MicOff className="w-8 h-8" />
+                      ) : (
+                        <Mic className="w-8 h-8" />
+                      )}
+
+                      {/* Visual sound rings */}
+                      {isRecording && (
+                        <>
+                          <span className="absolute -inset-2 border border-red-500/30 rounded-full animate-ping pointer-events-none" />
+                          <span className="absolute -inset-4 border border-red-500/10 rounded-full animate-pulse pointer-events-none" />
+                        </>
+                      )}
+                    </button>
+
+                    <div className="space-y-1">
+                      <p className="text-xs font-serif font-black text-[#e8e0d0]">
+                        {isRecording ? "L'application vous écoute..." : "Prêt pour la récitation vocale"}
+                      </p>
+                      <p className="text-[10px] text-[#6b6355] max-w-xs leading-normal">
+                        {isRecording 
+                          ? "Récitez le verset de mémoire de vive voix maintenant. Appuyez sur le bouton rouge pour terminer." 
+                          : "Cliquez sur le micro or, autorisez l'accès au micro et récitez le verset."}
+                      </p>
+                    </div>
+
+                    {/* LIVE TRANSCRIPT FEEDBACK */}
+                    {(userAttemptText || interimTranscript) && (
+                      <div className="w-full pt-3 border-t border-[#2e2a1e]/40 text-left space-y-1.5">
+                        <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider block">Transcription en temps réel :</span>
+                        <div className="p-3 bg-[#0d0b07] border border-[#2e2a1e]/50 rounded-lg min-h-[50px] font-serif italic text-xs leading-relaxed text-[#e8e0d0] text-wrap">
+                          {userAttemptText}
+                          {interimTranscript && (
+                            <span className="text-[#6b6355] selection:bg-transparent">
+                              {' '}{interimTranscript}
+                            </span>
+                          )}
+                        </div>
+                        {userAttemptText && (
+                          <div className="flex justify-between items-center text-[8.5px] font-mono text-[#6b6355]">
+                            <span>Vous pouvez modifier ce texte s'il y a des erreurs, puis l'évaluer ci-dessous.</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUserAttemptText('');
+                                setInterimTranscript('');
+                                if (testResult) setTestResult(null);
+                              }}
+                              className="text-[#c9a84c] hover:underline cursor-pointer"
+                            >
+                              Effacer
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <textarea
+                className="w-full p-3 bg-[#12100c] border border-[#2e2a1e] focus:border-[#c9a84c]/50 text-xs sm:text-sm text-[#e8e0d0] rounded-xl outline-none transition font-serif italic"
+                rows={3}
+                value={userAttemptText}
+                onChange={(e) => {
+                  setUserAttemptText(e.target.value);
+                  if (testResult) setTestResult(null); // clear results on modification
+                }}
+                placeholder="Écrivez le verset fidèlement de mémoire ici..."
+              />
+            )}
 
             {/* SUBMIT EVALUATION */}
             <div className="flex justify-end gap-3">

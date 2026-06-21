@@ -12,8 +12,9 @@ export interface CachedExplanation {
 }
 
 const DB_NAME = 'scripture_study_cache';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Bump version to 2 for the new verses store
 const STORE_NAME = 'explanations_cache';
+const VERSES_STORE_NAME = 'verses_cache';
 
 class IndexedExplainCache {
   private db: IDBDatabase | null = null;
@@ -35,6 +36,12 @@ class IndexedExplainCache {
             store.createIndex('viewCount', 'viewCount', { unique: false });
             store.createIndex('timestamp', 'timestamp', { unique: false });
             store.createIndex('type', 'type', { unique: false });
+          }
+          if (!db.objectStoreNames.contains(VERSES_STORE_NAME)) {
+            const store = db.createObjectStore(VERSES_STORE_NAME, { keyPath: 'key' });
+            store.createIndex('bookId', 'bookId', { unique: false });
+            store.createIndex('translation', 'translation', { unique: false });
+            store.createIndex('timestamp', 'timestamp', { unique: false });
           }
         };
 
@@ -228,8 +235,117 @@ class IndexedExplainCache {
     const db = await this.init();
     return new Promise((resolve) => {
       try {
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const store = transaction.objectStore(STORE_NAME);
+        const transaction1 = db.transaction(STORE_NAME, 'readwrite');
+        const store1 = transaction1.objectStore(STORE_NAME);
+        store1.clear();
+
+        const transaction2 = db.transaction(VERSES_STORE_NAME, 'readwrite');
+        const store2 = transaction2.objectStore(VERSES_STORE_NAME);
+        store2.clear();
+
+        resolve();
+      } catch (err) {
+        resolve();
+      }
+    });
+  }
+
+  /**
+   * Retrieves cached Bible verses for a chapter
+   */
+  public async getVerses(key: string): Promise<any[] | null> {
+    const db = await this.init();
+    return new Promise((resolve) => {
+      try {
+        const transaction = db.transaction(VERSES_STORE_NAME, 'readonly');
+        const store = transaction.objectStore(VERSES_STORE_NAME);
+        const req = store.get(key);
+
+        req.onsuccess = () => {
+          const result = req.result;
+          if (result && result.verses) {
+            resolve(result.verses);
+          } else {
+            resolve(null);
+          }
+        };
+
+        req.onerror = () => {
+          resolve(null);
+        };
+      } catch (err) {
+        console.error("IndexedDB getVerses failure:", err);
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Saves a chapter's verses to the IndexedDB local cache
+   */
+  public async setVerses(
+    key: string,
+    bookId: number,
+    chapter: number,
+    translation: string,
+    verses: any[]
+  ): Promise<void> {
+    const db = await this.init();
+    return new Promise((resolve) => {
+      try {
+        const transaction = db.transaction(VERSES_STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(VERSES_STORE_NAME);
+        const entry = {
+          key,
+          bookId,
+          chapter,
+          translation,
+          verses,
+          timestamp: Date.now()
+        };
+        store.put(entry);
+        resolve();
+      } catch (err) {
+        console.error("IndexedDB setVerses failure:", err);
+        resolve();
+      }
+    });
+  }
+
+  /**
+   * Returns statistics about cached chapters for display in the UI
+   */
+  public async getVersesCacheStats(): Promise<{ count: number; keys: string[] }> {
+    const db = await this.init();
+    return new Promise((resolve) => {
+      try {
+        const transaction = db.transaction(VERSES_STORE_NAME, 'readonly');
+        const store = transaction.objectStore(VERSES_STORE_NAME);
+        const req = store.getAllKeys();
+
+        req.onsuccess = () => {
+          const keys = (req.result as string[]) || [];
+          resolve({ count: keys.length, keys });
+        };
+
+        req.onerror = () => {
+          resolve({ count: 0, keys: [] });
+        };
+      } catch (err) {
+        resolve({ count: 0, keys: [] });
+      }
+    });
+  }
+
+  /**
+   * Clears the entire offline verses cache
+   */
+  public async clearVersesCache(): Promise<void> {
+    const db = await this.init();
+    return new Promise((resolve) => {
+      try {
+        const transaction = db.transaction(VERSES_STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(VERSES_STORE_NAME);
         const req = store.clear();
         req.onsuccess = () => resolve();
         req.onerror = () => resolve();

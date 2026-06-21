@@ -16,7 +16,7 @@ import {
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -38,6 +38,7 @@ import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
 import { MemorizeModule } from './components/MemorizeModule';
+import { ContemplativeHome } from './components/ContemplativeHome';
 import { audioPurifier } from './utils/audioProcessor';
 import { explainCache, CachedExplanation } from './utils/indexedDBCache';
 
@@ -55,6 +56,13 @@ export default function App() {
   // User Settings 
   const [textSize, setTextSize] = useState<number>(18);
   const [themeMode, setThemeMode] = useState<'dark' | 'sepia'>('dark');
+  const [autoTheme, setAutoTheme] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('auto_theme_enabled') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
   const [selectedTranslation, setSelectedTranslation] = useState<string>(() => {
     try {
       return localStorage.getItem('bible_translation') || 'local';
@@ -63,6 +71,11 @@ export default function App() {
     }
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isGlobalNotifOpen, setIsGlobalNotifOpen] = useState<boolean>(false);
+
+  // Cache stats and pre-downloading states
+  const [cachedChaptersCount, setCachedChaptersCount] = useState<number>(0);
+  const [preDownloadProgress, setPreDownloadProgress] = useState<{ bookName: string, chapter: number, total: number, active: boolean } | null>(null);
 
   // App Navigation Tabs
   // 'home' -> Dashboard, 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary, 'memorize' -> Memorization of verses, 'notes' -> Spiritual notes card list
@@ -137,6 +150,118 @@ export default function App() {
       console.error(e);
     }
   };
+
+  const refreshCacheStats = async () => {
+    try {
+      const stats = await explainCache.getVersesCacheStats();
+      setCachedChaptersCount(stats.count);
+    } catch (e) {
+      console.error("Error refreshing cache stats:", e);
+    }
+  };
+
+  const handlePreDownloadBooks = async (bookIds: number[]) => {
+    if (preDownloadProgress?.active) return;
+    
+    // We want to fetch all chapters for selected books
+    const booksToDownload = BOOKS.filter(b => bookIds.includes(b.id));
+    if (booksToDownload.length === 0) return;
+
+    // Calculate total chapters
+    let totalChapters = 0;
+    booksToDownload.forEach(b => {
+      totalChapters += b.chapters_count;
+    });
+
+    setPreDownloadProgress({
+      bookName: "Début...",
+      chapter: 0,
+      total: totalChapters,
+      active: true
+    });
+
+    let downloadedCount = 0;
+
+    for (const bk of booksToDownload) {
+      for (let ch = 1; ch <= bk.chapters_count; ch++) {
+        // Update progress status
+        setPreDownloadProgress({
+          bookName: bk.name,
+          chapter: ch,
+          total: totalChapters,
+          active: true
+        });
+
+        const cacheKey = `${selectedTranslation}_${bk.id}_${ch}`;
+        
+        try {
+          // Check if already in IndexedDB to avoid unnecessary queries
+          const cached = await explainCache.getVerses(cacheKey);
+          if (!cached || cached.length === 0) {
+            let verses: Verse[] = [];
+            if (selectedTranslation === 'local') {
+              const isPreloaded = (bk.id === 1 && (ch === 1 || ch === 2)) || 
+                                  (bk.id === 19 && ch === 23);
+              if (isPreloaded) {
+                verses = querySqliteChapter(bk.id, bk.name, ch);
+              } else {
+                try {
+                  const response = await fetch('/api/gemini/fetch-verses', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bookName: bk.name, chapterNum: ch })
+                  });
+                  if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.verses && Array.isArray(data.verses)) {
+                      verses = data.verses.map((v: any) => ({
+                        book_id: bk.id,
+                        book_name: bk.name,
+                        chapter: ch,
+                        verse: v.verse,
+                        text: v.text
+                      }));
+                    }
+                  }
+                } catch (e) {
+                  console.warn(e);
+                }
+              }
+            } else {
+              try {
+                verses = await fetchOnlineChapter(bk.id, bk.name, ch, selectedTranslation);
+              } catch (e) {
+                console.warn(e);
+              }
+            }
+
+            if (verses && verses.length > 0) {
+              await explainCache.setVerses(cacheKey, bk.id, ch, selectedTranslation, verses);
+            }
+          }
+        } catch (err) {
+          console.warn(`Pre-download failed for ${bk.name} ${ch}:`, err);
+        }
+
+        downloadedCount++;
+        // Smooth UI update
+        await new Promise(resolve => setTimeout(resolve, 80)); 
+      }
+    }
+
+    setPreDownloadProgress(null);
+    refreshCacheStats();
+
+    try {
+      audioPurifier.playTestChime();
+    } catch (e) {}
+  };
+
+  useEffect(() => {
+    if (isSettingsOpen) {
+      refreshCacheStats();
+    }
+  }, [isSettingsOpen]);
 
   const [localDailyGoal, setLocalDailyGoal] = useState<number>(3);
   useEffect(() => {
@@ -213,6 +338,27 @@ export default function App() {
     }
   }, [themeMode]);
 
+  // Automatic theme switching based on local time
+  useEffect(() => {
+    if (!autoTheme) return;
+
+    const checkAndApplyTheme = () => {
+      const hour = new Date().getHours();
+      // Day (7h00 to 18h59) -> sepia, Night (19h00 to 6h59) -> dark
+      const targetTheme = (hour >= 7 && hour < 19) ? 'sepia' : 'dark';
+      if (themeMode !== targetTheme) {
+        setThemeMode(targetTheme);
+      }
+    };
+
+    // Check immediately
+    checkAndApplyTheme();
+
+    // Check periodically (every minute)
+    const interval = setInterval(checkAndApplyTheme, 60000);
+    return () => clearInterval(interval);
+  }, [autoTheme, themeMode]);
+
   // In-memory cache to store fetched chapters and speed up navigation/continuous scroll massively
   const versesCache = useRef<Record<string, Promise<Verse[]> | Verse[]>>({});
 
@@ -231,12 +377,19 @@ export default function App() {
 
     const fetchPromise = (async (): Promise<Verse[]> => {
       try {
+        // --- CHECK INDEXEDDB OFFLINE VERSES CACHE FIRST ---
+        const dbCached = await explainCache.getVerses(cacheKey);
+        if (dbCached && Array.isArray(dbCached) && dbCached.length > 0) {
+          return dbCached;
+        }
+
+        let verses: Verse[] = [];
         if (selectedTranslation === 'local') {
           const isPreloaded = (selectedBook.id === 1 && (chapterNum === 1 || chapterNum === 2)) || 
                               (selectedBook.id === 19 && chapterNum === 23);
           
           if (isPreloaded) {
-            return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+            verses = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
           } else {
             try {
               const response = await fetch('/api/gemini/fetch-verses', {
@@ -249,7 +402,7 @@ export default function App() {
               }
               const data = await response.json();
               if (data && data.verses && Array.isArray(data.verses) && data.verses.length > 0) {
-                return data.verses.map((v: any) => ({
+                verses = data.verses.map((v: any) => ({
                   book_id: selectedBook.id,
                   book_name: selectedBook.name,
                   chapter: chapterNum,
@@ -261,12 +414,18 @@ export default function App() {
               }
             } catch (err) {
               console.warn("API dynamic verses fetch failed, using offline fallback:", err);
-              return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+              verses = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
             }
           }
         } else {
-          return await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, selectedTranslation);
+          verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, selectedTranslation);
         }
+
+        // --- SAVE TO INDEXEDDB OFFLINE CACHE FOR DURABLE OFFLINE RETRIEVAL ---
+        if (verses && verses.length > 0) {
+          await explainCache.setVerses(cacheKey, selectedBook.id, chapterNum, selectedTranslation, verses);
+        }
+        return verses;
       } catch (err) {
         console.warn("Failed to load scriptures, using offline fallback:", err);
         return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
@@ -1558,29 +1717,112 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+
+                  {/* Automatic theme toggle option based on local time */}
+                  <div className="pt-2 border-t border-[#2e2a1e]/45 flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-[9.5px] font-mono text-[#c9a84c] uppercase font-bold tracking-wider">Mode Automatique</span>
+                      <span className="text-[8px] text-[#6b6355]">Sépia (Jour 7h-19h) / Sombre (Nuit)</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !autoTheme;
+                        setAutoTheme(nextVal);
+                        localStorage.setItem('auto_theme_enabled', String(nextVal));
+                      }}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        autoTheme ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border-[#2e2a1e]'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-[#050403] shadow ring-0 transition duration-200 ease-in-out ${
+                          autoTheme ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
 
-                {/* 3. Sync and database statistics */}
-                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-2 text-left flex flex-col justify-between">
-                  <div>
-                    <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">STATISTIQUES SACRÉES</span>
-                    <div className="space-y-1 text-xs mt-1">
-                      <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
-                      <button
-                        onClick={() => {
-                          setActiveTab('notes');
-                          setIsSettingsOpen(false);
-                        }}
-                        className="text-[#6b6355] hover:text-[#c9a84c] transition text-left flex items-center justify-between w-full cursor-pointer group"
-                      >
-                        <span>Notes d'études :</span>
-                        <span className="font-mono text-[#e8e0d0] group-hover:text-[#c9a84c] font-bold underline decoration-dashed decoration-[#c9a84c]/50 transition">{notes.length} 📓</span>
-                      </button>
-                      <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
+                {/* 3. Sync, database statistics & Local Cache Optimizer */}
+                <div className="bg-[#0f0e0b] border border-[#2e2a1e]/60 p-4 rounded-xl space-y-3 text-left flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">STATISTIQUES SACRÉES</span>
+                      <div className="space-y-1 text-xs mt-1">
+                        <p className="text-[#6b6355]">Favoris / Signets : <span className="font-mono text-[#e8e0d0] font-bold">{favorites.length}</span></p>
+                        <button
+                          onClick={() => {
+                            setActiveTab('notes');
+                            setIsSettingsOpen(false);
+                          }}
+                          className="text-[#6b6355] hover:text-[#c9a84c] transition text-left flex items-center justify-between w-full cursor-pointer group"
+                        >
+                          <span>Notes d'études :</span>
+                          <span className="font-mono text-[#e8e0d0] group-hover:text-[#c9a84c] font-bold underline decoration-dashed decoration-[#c9a84c]/50 transition">{notes.length} 📓</span>
+                        </button>
+                        <p className="text-[#6b6355]">Chapitres lus : <span className="font-mono text-[#e8e0d0] font-bold">{readingHistory.length}</span></p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#2e2a1e]/40 space-y-2">
+                      <span className="text-[8px] font-mono uppercase tracking-wider text-[#c9a84c] block flex items-center gap-1">
+                        <Database className="w-3.5 h-3.5 text-[#c9a84c]" />
+                        OPTIMISATION CACHE HORS-LIGNE
+                      </span>
+                      <p className="text-[10px] text-[#807664] leading-normal font-sans">
+                        Fini les chargements. Vos chapitres consultés sont sauvegardés automatiquement sur votre appareil.
+                      </p>
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-[#6b6355]">Chapitres mis en cache :</span>
+                        <span className="font-mono text-[#e8e0d0] font-bold">{cachedChaptersCount}</span>
+                      </div>
+
+                      {/* Download progress UI */}
+                      {preDownloadProgress && preDownloadProgress.active ? (
+                        <div className="p-2 bg-[#c9a84c]/5 border border-[#c9a84c]/20 rounded-lg space-y-1 bg-[#14120e]">
+                          <div className="flex justify-between text-[8px] font-mono text-[#c9a84c]">
+                            <span className="truncate">TÉLÉCHARGEMENT: {preDownloadProgress.bookName} ch {preDownloadProgress.chapter}</span>
+                            <span className="shrink-0">{preDownloadProgress.chapter} ch.</span>
+                          </div>
+                          <div className="w-full bg-[#1a1712] h-1.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-[#c9a84c] h-full transition-all duration-300"
+                              style={{ width: `${Math.min(100, Math.round((preDownloadProgress.chapter / preDownloadProgress.total) * 100))}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-1.5 pt-1">
+                          <button
+                            onClick={() => handlePreDownloadBooks([43])} // Jean
+                            className="w-full py-1.5 text-[8.5px] font-mono uppercase bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/25 rounded hover:bg-[#c9a84c]/25 cursor-pointer text-center font-bold transition duration-200"
+                          >
+                            ⬇️ Sauvegarder l'Évangile de Jean (Offline)
+                          </button>
+                          <button
+                            onClick={() => handlePreDownloadBooks([40, 41, 42, 43])} // Les 4 Évangiles
+                            className="w-full py-1.5 text-[8.5px] font-mono uppercase bg-[#c9a84c]/5 text-[#c9a84c]/80 border border-[#c9a84c]/15 rounded hover:bg-[#c9a84c]/15 cursor-pointer text-center transition duration-200"
+                          >
+                            🔒 Pré-charger les 4 Évangiles
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (confirm("Voulez-vous vider tous les chapitres mis en cache localement ?")) {
+                                await explainCache.clearAll();
+                                refreshCacheStats();
+                              }
+                            }}
+                            className="w-full py-0.5 text-[8px] font-mono text-center text-red-400/70 hover:text-red-300 hover:underline transition cursor-pointer"
+                          >
+                            Vider les caches hors-ligne
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="text-[8.5px] text-[#6b6355] italic leading-relaxed pt-1.5 border-t border-[#2e2a1e]/40">
-                    * Sauvegardé en temps réel sur Firestore.
+                    * Sauvegardé sur Firestore & IndexedDB local.
                   </div>
                 </div>
 
@@ -1891,163 +2133,19 @@ export default function App() {
         {/* CONTAINER SWITCH FOR THE POWERFUL ACTIVE TABS */}
         <div className="flex-1 flex flex-col min-h-[500px]">
           
-          {/* HOME / DASHBOARD GRAPHICAL HUB */}
+          {/* HOME / DASHBOARD GRAPHICAL HUB - BREATHTAKING CONTEMPLATIVE APP HUB */}
           {activeTab === 'home' && (
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="w-full max-w-sm mx-auto p-1.5 flex flex-col justify-between space-y-3 shrink-0"
+              className="w-full max-w-sm mx-auto p-1 text-left shrink-0"
             >
-              {/* Top title and search brand bar */}
-              <div className="flex items-center justify-between px-1">
-                <span className="font-serif text-[#e8e0d0] font-black text-sm uppercase tracking-[0.24em] select-none">
-                  bible profonde
-                </span>
-                <button
-                  onClick={() => {
-                    setActiveTab('read');
-                    setTimeout(() => {
-                      const inputEl = document.getElementById('bible-search-input');
-                      if (inputEl) inputEl.focus();
-                    }, 100);
-                  }}
-                  className="p-1 hover:bg-[#1a1712] text-[#6b6355] hover:text-[#c9a84c] rounded-full transition cursor-pointer"
-                >
-                  <Search className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* FUSED VERSET DU JOUR HERO CARD */}
-              <div className="bg-[#12100c] border border-[#c9a84c]/15 p-4.5 rounded-2xl relative overflow-hidden flex flex-col justify-center items-center text-center space-y-2 shadow-gold-glow">
-                <div className="absolute top-0 right-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl pointer-events-none"></div>
-                
-                <span className="text-[8.5px] font-mono tracking-[0.2em] text-[#6b6355] uppercase font-bold">
-                  verset du jour
-                </span>
-                
-                <p className="font-serif italic text-xs leading-relaxed text-[#c9a84c] max-w-xs px-2 select-none">
-                  « {dailyVerseForCurrentDay.verse.text} »
-                </p>
-                <div className="font-mono text-[8.5px] tracking-widest text-[#6b6355] uppercase font-bold">
-                  {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
-                </div>
-              </div>
-
-              {/* COMPACT 2X2 GRID OF CONTROLS WITH SUBTLE GOLD BORDERS */}
-              <div className="grid grid-cols-2 gap-2">
-                {/* 1. LECTURE */}
-                <button
-                  onClick={() => setActiveTab('read')}
-                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
-                >
-                  <BookOpen className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
-                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
-                    lecture
-                  </span>
-                </button>
-
-                {/* 2. ASSISTANT */}
-                <button
-                  onClick={() => setActiveTab('assistant')}
-                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
-                >
-                  <MessageSquare className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
-                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
-                    assistant
-                  </span>
-                </button>
-
-                {/* 3. DEFIS */}
-                <button
-                  onClick={() => setActiveTab('challenges')}
-                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
-                >
-                  <Flame className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition" />
-                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
-                    défis
-                  </span>
-                </button>
-
-                {/* 4. MEMORISER */}
-                <button
-                  onClick={() => setActiveTab('memorize')}
-                  className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-2xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition group shadow-soft cursor-pointer relative"
-                >
-                  <Brain className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-105 transition animate-pulse" />
-                  <span className="text-[9.5px] font-mono uppercase tracking-[0.14em] text-[#6b6355] group-hover:text-[#e8e0d0] transition mt-2">
-                    mémoriser
-                  </span>
-                </button>
-              </div>
-
-              {/* JOURNAL INTUITIF LINK */}
-              <button
-                onClick={() => setActiveTab('notes')}
-                className="w-full bg-[#12100c]/90 hover:bg-[#15130f] border border-[#c9a84c]/15 hover:border-[#c9a84c]/40 rounded-2xl p-3 flex items-center justify-between transition cursor-pointer select-none group shadow-soft"
-              >
-                <div className="flex items-center gap-2.5">
-                  <ScrollText className="w-4.5 h-4.5 text-[#c9a84c] group-hover:scale-110 transition duration-150" />
-                  <div className="text-left">
-                    <span className="text-[9px] font-mono text-[#6b6355] uppercase block tracking-wider">
-                      journal d'harmonie
-                    </span>
-                    <span className="text-xs font-serif font-black text-[#e8e0d0]">
-                      Notes Spirituelles ({notes.length})
-                    </span>
-                  </div>
-                </div>
-                <ArrowRight className="w-3.5 h-3.5 text-[#c9a84c] opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition duration-150" />
-              </button>
-
-              {/* COMPACT DAILY READING GOAL WITH CIRCULAR PROGRESS INDICATOR */}
-              <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-2xl p-2.5 px-3.5 flex items-center justify-between select-none shadow-soft text-left relative overflow-hidden">
-                <div className="space-y-0.5">
-                  <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider block">
-                    objectif du jour
-                  </span>
-                  <span className="text-xs font-serif font-black text-[#e8e0d0]">
-                    {todayReadingsCount}/{localDailyGoal} <span className="text-[9px] text-[#6b6355] font-mono lowercase">chapitres</span>
-                  </span>
-                </div>
-
-                {/* Circular progress percentage graphic indicator */}
-                <div className="relative w-9 h-9 flex items-center justify-center">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                    <path
-                      className="text-[#1a1712]"
-                      strokeWidth="3"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                    <motion.path
-                      initial={{ strokeDashoffset: '100' }}
-                      animate={{ strokeDashoffset: `${100 - goalPercent}` }}
-                      transition={{ duration: 0.8, ease: "easeOut" }}
-                      className="text-[#c9a84c]"
-                      strokeWidth="3.2"
-                      strokeDasharray={`${goalPercent}, 100`}
-                      strokeLinecap="round"
-                      stroke="currentColor"
-                      fill="none"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    />
-                  </svg>
-                  <span className="absolute text-[7.5px] font-mono font-bold text-[#c9a84c]">
-                    {goalPercent}%
-                  </span>
-                </div>
-              </div>
-
-              {/* FLOATING ACTION BOTTOM BUTTON : CONTINUER LA LECTURE */}
-              <div className="pt-1.5">
-                <button
-                  onClick={() => setActiveTab('read')}
-                  className="w-full py-2.5 bg-[#c9a84c] hover:bg-[#dbb858] active:bg-[#aa8b39] text-[#050403] font-serif text-[10px] font-bold tracking-[0.18em] uppercase rounded-xl transition duration-150 shadow-gold-glow flex items-center justify-center gap-1.5 focus:outline-none cursor-pointer"
-                >
-                  continuer la lecture
-                </button>
-              </div>
+              <ContemplativeHome 
+                onNavigateToTab={(tab) => setActiveTab(tab)}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+                notesCount={notes.length}
+                goalPercent={goalPercent}
+              />
             </motion.div>
           )}
 
@@ -3043,12 +3141,16 @@ export default function App() {
         </div>
       </main>
 
-      {/* MOBILE BOTTOM NAVIGATION SHELF */}
-      <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-1 flex justify-around md:hidden z-40 select-none shadow-gold-glow">
+      {/* GLOBAL FIXED BOTTOM NAVIGATION BAR */}
+      {/* "Il ne doit y avoir qu'une seule barre de navigation en bas, fixe (sticky/fixed), avec ces éléments : [Accueil, Étudier, Bibliothèque, Notifications]" */}
+      <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex justify-around z-40 select-none shadow-gold-glow">
         <button
-          onClick={() => setActiveTab('home')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'home' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          onClick={() => {
+            setActiveTab('home');
+            setIsGlobalNotifOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+            activeTab === 'home' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
           }`}
         >
           <Home className="w-5 h-5 shrink-0" />
@@ -3056,9 +3158,12 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => setActiveTab('read')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'read' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          onClick={() => {
+            setActiveTab('read');
+            setIsGlobalNotifOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+            activeTab === 'read' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
           }`}
         >
           <BookOpen className="w-5 h-5 shrink-0" />
@@ -3066,35 +3171,94 @@ export default function App() {
         </button>
 
         <button
-          onClick={() => setActiveTab('assistant')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'assistant' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          onClick={() => {
+            setActiveTab('notes');
+            setIsGlobalNotifOpen(false);
+          }}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+            activeTab === 'notes' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
           }`}
         >
-          <MessageSquare className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Conseil</span>
+          <Library className="w-5 h-5 shrink-0" />
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Bibliothèque</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('challenges')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'challenges' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          onClick={() => setIsGlobalNotifOpen(prev => !prev)}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+            isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
           }`}
         >
-          <Flame className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Défis</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('memorize')}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all ${
-            activeTab === 'memorize' ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Brain className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Mém.</span>
+          <div className="relative">
+            <Bell className="w-5 h-5 shrink-0" />
+            <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-pulse" />
+          </div>
+          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Notifs</span>
         </button>
       </nav>
+
+      {/* GLOBAL NOTIFICATIONS PANEL BOTTOM DRAWER */}
+      <AnimatePresence>
+        {isGlobalNotifOpen && (
+          <div className="fixed inset-0 z-50 flex flex-col justify-end pointer-events-none">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsGlobalNotifOpen(false)}
+              className="absolute inset-0 bg-black/85 backdrop-blur-xs pointer-events-auto cursor-pointer"
+            />
+            
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              className="relative bg-[#0d0b07] border-t border-[#c9a84c]/30 rounded-t-2xl p-5 pb-24 space-y-4 max-h-[80%] overflow-y-auto no-scrollbar pointer-events-auto max-w-xl mx-auto w-full shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-[#2e2a1e] pb-2.5">
+                <div className="flex items-center gap-1.5">
+                  <Bell className="w-5 h-5 text-[#c9a84c] animate-bounce" />
+                  <span className="font-serif font-black text-xs text-[#c9a84c] uppercase tracking-wider">Messages de Grâce & Rappels</span>
+                </div>
+                <button 
+                  onClick={() => setIsGlobalNotifOpen(false)}
+                  className="w-7 h-7 rounded-full bg-[#12100c] flex items-center justify-center text-[#6b6355] hover:text-[#e8e0d0] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Notification list layout */}
+              <div className="space-y-2.5">
+                {[
+                  { id: 1, title: "Méditation Matinale", text: "Prenez 3 minutes de respiration sacrée avant votre lecture quotidienne.", time: "Aujourd'hui, 8h00" },
+                  { id: 2, title: "Plan de Lecture", text: "Félicitations pour votre fidélité sur votre plan d'étude spirituel.", time: "Hier" },
+                  { id: 3, title: "Sagesse d'en Haut", text: "La Parole de Dieu est une lampe à vos pieds, et une lumière sur votre sentier.", time: "Il y a 2 jours" }
+                ].map(item => (
+                  <div 
+                    key={item.id} 
+                    className="p-3.5 bg-[#12100c]/80 border border-[#2e2a1e]/60 rounded-xl space-y-1 text-left"
+                  >
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-serif font-extrabold text-[11px] text-[#e8e0d0]">{item.title}</h4>
+                      <span className="text-[8px] font-mono text-[#6b6355]">{item.time}</span>
+                    </div>
+                    <p className="text-[10.5px] text-[#807664] leading-relaxed">{item.text}</p>
+                  </div>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setIsGlobalNotifOpen(false)}
+                className="w-full py-2.5 bg-[#c9a84c]/10 text-xs font-mono uppercase text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl hover:bg-[#c9a84c]/20 cursor-pointer"
+              >
+                Fermer le sanctuaire
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

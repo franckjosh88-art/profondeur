@@ -4,6 +4,7 @@ import {
   Search, BookOpen, Sparkles, AlertCircle, Compass, MapPin, 
   User, Bookmark, HelpCircle, ArrowRight, ArrowLeft, RefreshCw 
 } from 'lucide-react';
+import { explainCache } from '../utils/indexedDBCache';
 
 interface DictionaryResult {
   term: string;
@@ -41,6 +42,25 @@ export const BibleDictionary: React.FC<BibleDictionaryProps> = ({ onSearchRefere
     setLoading(true);
     setError(null);
     try {
+      const cacheKey = `dict:${termToSearch.toLowerCase().trim()}`;
+      const cached = await explainCache.get(cacheKey);
+      if (cached && cached.content) {
+        try {
+          const parsedResult = JSON.parse(cached.content);
+          setResult(parsedResult);
+          setQuery(termToSearch);
+          setInputVal(termToSearch);
+          
+          setHistory(prev => {
+            const filtered = prev.filter(h => h.toLowerCase() !== termToSearch.toLowerCase());
+            return [termToSearch, ...filtered].slice(0, 8);
+          });
+          return;
+        } catch (e) {
+          console.warn("Error parsing cached dictionary entry:", e);
+        }
+      }
+
       const response = await fetch('/api/gemini/dictionary', {
         method: 'POST',
         headers: {
@@ -58,6 +78,9 @@ export const BibleDictionary: React.FC<BibleDictionaryProps> = ({ onSearchRefere
       setQuery(termToSearch);
       setInputVal(termToSearch);
       
+      // Save definition to local cache
+      await explainCache.set(cacheKey, 'chapter', termToSearch, JSON.stringify(data));
+
       // Save to history (avoid duplicates)
       setHistory(prev => {
         const filtered = prev.filter(h => h.toLowerCase() !== termToSearch.toLowerCase());
