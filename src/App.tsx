@@ -121,7 +121,14 @@ export default function App() {
   const [loadingChat, setLoadingChat] = useState<boolean>(false);
 
   // Synced User Collections from Firestore
-  const [favorites, setFavorites] = useState<FavoriteVerse[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteVerse[]>(() => {
+    try {
+      const offlineFavs = localStorage.getItem('offline_bookmarks');
+      return offlineFavs ? JSON.parse(offlineFavs) : [];
+    } catch (_) {
+      return [];
+    }
+  });
   const [notes, setNotes] = useState<VerseNote[]>([]);
   const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
 
@@ -295,6 +302,12 @@ export default function App() {
       
       if (firebaseUser) {
         setAuthError(null);
+        try {
+          const offlineFavs = localStorage.getItem('offline_bookmarks');
+          if (offlineFavs) {
+            setFavorites(JSON.parse(offlineFavs));
+          }
+        } catch (_) {}
         setupUserSnapshotListeners(firebaseUser.uid);
       } else {
         try {
@@ -575,6 +588,11 @@ export default function App() {
         favList.push(docSnap.data() as FavoriteVerse);
       });
       setFavorites(favList);
+      try {
+        localStorage.setItem('offline_bookmarks', JSON.stringify(favList));
+      } catch (e) {
+        console.error("Error backing up online bookmarks to localStorage:", e);
+      }
     }, (error) => {
       console.error("Bookmarks sync error:", error);
     });
@@ -746,6 +764,32 @@ export default function App() {
       f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse
     );
 
+    // Compute and persist to local state/storage first for blazing-fast and reliable offline performance
+    let nextFavs: FavoriteVerse[];
+    if (favorited) {
+      nextFavs = favorites.filter(
+        f => !(f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse)
+      );
+    } else {
+      const favoriteItem: FavoriteVerse = {
+        book_id: verse.book_id,
+        book_name: verse.book_name,
+        chapter: verse.chapter,
+        verse: verse.verse,
+        text: verse.text,
+        added_at: new Date().toISOString()
+      };
+      nextFavs = [...favorites, favoriteItem];
+    }
+
+    setFavorites(nextFavs);
+    try {
+      localStorage.setItem('offline_bookmarks', JSON.stringify(nextFavs));
+    } catch (e) {
+      console.error("Could not write offline bookmarks:", e);
+    }
+
+    // Synchronize to Firestore for authenticated users when connection is available
     if (user) {
       const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
       try {
@@ -764,28 +808,8 @@ export default function App() {
           await setDoc(docRef, favoriteItem);
         }
       } catch (error) {
-        console.error("Could not toggle favorite status:", error);
+        console.error("Could not sync favorite status to Cloud Firestore:", error);
       }
-    } else {
-      // Offline mode
-      let nextFavs;
-      if (favorited) {
-        nextFavs = favorites.filter(
-          f => !(f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse)
-        );
-      } else {
-        const favoriteItem: FavoriteVerse = {
-          book_id: verse.book_id,
-          book_name: verse.book_name,
-          chapter: verse.chapter,
-          verse: verse.verse,
-          text: verse.text,
-          added_at: new Date().toISOString()
-        };
-        nextFavs = [...favorites, favoriteItem];
-      }
-      setFavorites(nextFavs);
-      localStorage.setItem('offline_bookmarks', JSON.stringify(nextFavs));
     }
   };
 
@@ -1082,6 +1106,13 @@ export default function App() {
       return 'auto';
     }
   });
+  const [autoAdvanceChapterSpeech, setAutoAdvanceChapterSpeech] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_auto_advance_speech') !== 'false';
+    } catch (_) {
+      return true;
+    }
+  });
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>(() => {
     try {
@@ -1090,6 +1121,20 @@ export default function App() {
       return '';
     }
   });
+
+  const [isZenMode, setIsZenMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_zen_mode') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bible_zen_mode', String(isZenMode));
+    } catch (_) {}
+  }, [isZenMode]);
 
   // Load and listen to the exhaustive list of French voices
   useEffect(() => {
@@ -1116,6 +1161,7 @@ export default function App() {
   }, []);
 
   const currentVerseToSpeakRef = useRef<number>(-1);
+  const autoPlayNextChapterAudioRef = useRef<boolean>(false);
 
   // Auto-scrolling state variables
   const [isAutoScrollWithSpeech, setIsAutoScrollWithSpeech] = useState<boolean>(true);
@@ -1172,6 +1218,16 @@ export default function App() {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
     if (index < 0 || index >= chapterVerses.length) {
+      if (index >= chapterVerses.length && autoAdvanceChapterSpeech) {
+        // Look up if a subsequent chapter exists in the Bible
+        const nextChapterExists = selectedChapter < selectedBook.chapters_count || 
+                                  BOOKS.findIndex(b => b.id === selectedBook.id) < BOOKS.length - 1;
+        if (nextChapterExists) {
+          autoPlayNextChapterAudioRef.current = true;
+          handleNextChapter();
+          return;
+        }
+      }
       stopSpeaking();
       return;
     }
@@ -1211,6 +1267,20 @@ export default function App() {
       return 0;
     });
     
+    const lowerMaleNames = [
+      'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
+      'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
+      'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
+      'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
+    ];
+    const lowerFemaleNames = [
+      'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
+      'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
+      'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
+      'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
+      'zira', 'google français', 'harmonie', 'samantha', 'siri'
+    ];
+
     let selectedVoice: SpeechSynthesisVoice | null = null;
     
     // 1. Use manual voice choice if authorized and present
@@ -1220,18 +1290,6 @@ export default function App() {
 
     // 2. Fall back on automatic gender-matching lists if no manual voice is chosen
     if (!selectedVoice) {
-      const lowerMaleNames = [
-        'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-        'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri'
-      ];
-      const lowerFemaleNames = [
-        'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
-        'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
-        'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
-        'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-        'zira', 'google français'
-      ];
-
       if (voiceGender === 'male') {
         // 1. Try exact male names from sorted high quality voices first
         selectedVoice = sortedFrenchVoices.find(voice => 
@@ -1257,9 +1315,6 @@ export default function App() {
       }
     }
 
-    // Standardize with dynamic pitch to prevent any Web Speech synthesis resampler artifacts/crackles (noise/debruil)
-    utterance.pitch = voicePitch;
-
     // Fallback if no specific gender voice was found or selected gender is 'auto'
     if (!selectedVoice && sortedFrenchVoices.length > 0) {
       selectedVoice = sortedFrenchVoices.find(voice => voice.lang.includes('FR')) || sortedFrenchVoices[0];
@@ -1267,6 +1322,29 @@ export default function App() {
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
+    }
+
+    // --- ENHANCED PITCH FOR REALISTIC MASCULINE VOICE ---
+    // If the gender is set to 'male', we want a rich, grave, masculine tone.
+    // If a recognized male voice is active, we slightly lower it (0.88x) for a gorgeous, deep, warm register.
+    // If a recognized male voice was NOT available (e.g. browser only has female/neutral voice),
+    // we lower the pitch substantially (0.74x) to realistically and naturally synthesize a clear, professional masculine voice!
+    if (voiceGender === 'male') {
+      const isKnownMale = selectedVoice ? lowerMaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
+      if (isKnownMale) {
+        utterance.pitch = Math.max(0.65, voicePitch * 0.88);
+      } else {
+        utterance.pitch = Math.max(0.60, voicePitch * 0.74);
+      }
+    } else if (voiceGender === 'female') {
+      const isKnownFemale = selectedVoice ? lowerFemaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
+      if (isKnownFemale) {
+        utterance.pitch = voicePitch * 1.02;
+      } else {
+        utterance.pitch = Math.min(1.8, voicePitch * 1.18);
+      }
+    } else {
+      utterance.pitch = voicePitch;
     }
 
     utterance.onend = () => {
@@ -1347,6 +1425,17 @@ export default function App() {
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [currentSpeakingVerseIndex, isAutoScrollWithSpeech, chapterVerses]);
+
+  // Auto-play the next chapter immediately after its verses are fully fetched
+  useEffect(() => {
+    if (!loadingVerses && chapterVerses.length > 0 && autoPlayNextChapterAudioRef.current) {
+      autoPlayNextChapterAudioRef.current = false;
+      const timer = setTimeout(() => {
+        speakVerse(0);
+      }, 120);
+      return () => clearTimeout(timer);
+    }
+  }, [chapterVerses, loadingVerses]);
 
   // 2. Continuous fluid automatic scrolling loop using high precision delta time
   useEffect(() => {
@@ -1620,21 +1709,23 @@ export default function App() {
 
   // Main Authenticated Layout
   return (
-    <div className="min-h-screen bg-luxury-bg-deep text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 pb-20 md:pb-6 text-left selection:text-[#c9a84c]">
+    <div className={`min-h-screen bg-luxury-bg-deep text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c]`}>
       
       {/* Dynamic luxury TopBar header, syncing click navigations */}
-      <TopBar 
-        onSearchPress={() => {
-          setActiveTab('read');
-          // focus input if available
-          setTimeout(() => {
-            const inputEl = document.getElementById('bible-search-input');
-            if (inputEl) inputEl.focus();
-          }, 100);
-        }}
-        onStudyPress={() => setActiveTab('read')}
-        onProfilePress={() => setIsSettingsOpen(!isSettingsOpen)}
-      />
+      {!isZenMode && (
+        <TopBar 
+          onSearchPress={() => {
+            setActiveTab('read');
+            // focus input if available
+            setTimeout(() => {
+              const inputEl = document.getElementById('bible-search-input');
+              if (inputEl) inputEl.focus();
+            }, 100);
+          }}
+          onStudyPress={() => setActiveTab('read')}
+          onProfilePress={() => setIsSettingsOpen(!isSettingsOpen)}
+        />
+      )}
 
       {/* Embedded Settings Box/Drawer */}
       <AnimatePresence>
@@ -1892,12 +1983,28 @@ export default function App() {
                               // Speak sample
                               const utterance = new SpeechSynthesisUtterance("Que la paix soit avec vous.");
                               utterance.lang = 'fr-FR';
-                              utterance.pitch = voicePitch;
                               utterance.rate = playbackRate * 0.9;
                               
                               const targetVoic = availableVoices.find(v => v.voiceURI === selectedVoiceURI);
                               if (targetVoic) {
                                 utterance.voice = targetVoic;
+                              }
+
+                              // Align test pitch with advanced gender preferences
+                              const testMaleNames = [
+                                'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
+                                'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
+                                'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
+                                'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
+                              ];
+                              if (voiceGender === 'male') {
+                                const isKnownMale = targetVoic ? testMaleNames.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
+                                utterance.pitch = isKnownMale ? Math.max(0.65, voicePitch * 0.88) : Math.max(0.60, voicePitch * 0.74);
+                              } else if (voiceGender === 'female') {
+                                const isKnownMale = targetVoic ? testMaleNames.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
+                                utterance.pitch = isKnownMale ? Math.min(1.8, voicePitch * 1.18) : voicePitch * 1.02;
+                              } else {
+                                utterance.pitch = voicePitch;
                               }
                               window.speechSynthesis.speak(utterance);
                             }
@@ -1973,6 +2080,27 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Lecture Continue Toggle */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]" title="Passer automatiquement au chapitre suivant à la fin du chapitre actuel">Lecture Continue</span>
+                    <button
+                      onClick={() => {
+                        const nextVal = !autoAdvanceChapterSpeech;
+                        setAutoAdvanceChapterSpeech(nextVal);
+                        try {
+                          localStorage.setItem('bible_auto_advance_speech', String(nextVal));
+                        } catch (_) {}
+                      }}
+                      className={`px-2 py-0.5 text-[8px] font-semibold uppercase rounded border cursor-pointer transition ${
+                        autoAdvanceChapterSpeech 
+                          ? 'bg-[#c9a84c]/10 text-[#c9a84c] border-[#c9a84c]/30' 
+                          : 'text-[#6b6355] border-[#2e2a1e]/40 hover:text-white'
+                      }`}
+                    >
+                      {autoAdvanceChapterSpeech ? 'Oui (Auto)' : 'Non'}
+                    </button>
+                  </div>
+
                   {/* Purifier Status with Test Chime button */}
                   <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
                     <span className="text-[#6b6355] flex items-center gap-1">
@@ -1998,7 +2126,7 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col md:flex-row gap-6">
         
         {/* SIDEBAR NAVIGATION TAB COLUMN FOR MEDIUM+ DISPLAY */}
-        <aside className="w-full md:w-60 shrink-0 hidden md:flex flex-col gap-1.5 text-left font-serif py-1">
+        <aside className={`w-full md:w-60 shrink-0 ${isZenMode ? 'hidden' : 'hidden md:flex'} flex-col gap-1.5 text-left font-serif py-1`}>
           <span className="text-[10px] font-mono font-black uppercase text-[#6b6355] tracking-[0.24em] px-3 mb-2">Sanctuaire</span>
           
           <button
@@ -2157,195 +2285,203 @@ export default function App() {
               className="space-y-4"
             >
               {/* Daily Verse of the day Hero banner */}
-              <div className="bg-[#12100c] border border-[#2e2a1e] p-6 rounded-[2rem] shadow-soft text-center space-y-4 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl"></div>
-                <div className="text-center">
-                  <RevelationBadge text="RÉVÉLATION DU JOUR" isCrown={true} />
-                </div>
-                
-                <p className="font-serif italic text-lg leading-relaxed text-[#c9a84c] max-w-2xl mx-auto px-2">
-                  « {dailyVerseForCurrentDay.verse.text} »
-                </p>
-                <div className="text-center font-mono text-[10px] tracking-widest text-[#6b6355] uppercase font-bold">
-                  {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
-                </div>
-                
-                <p className="text-xs text-[#a0947f] max-w-xl mx-auto font-sans leading-relaxed">
-                  {dailyVerseForCurrentDay.explanation}
-                </p>
+              {!isZenMode && (
+                <div className="bg-[#12100c] border border-[#2e2a1e] p-6 rounded-[2rem] shadow-soft text-center space-y-4 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl"></div>
+                  <div className="text-center">
+                    <RevelationBadge text="RÉVÉLATION DU JOUR" isCrown={true} />
+                  </div>
+                  
+                  <p className="font-serif italic text-lg leading-relaxed text-[#c9a84c] max-w-2xl mx-auto px-2">
+                    « {dailyVerseForCurrentDay.verse.text} »
+                  </p>
+                  <div className="text-center font-mono text-[10px] tracking-widest text-[#6b6355] uppercase font-bold">
+                    {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
+                  </div>
+                  
+                  <p className="text-xs text-[#a0947f] max-w-xl mx-auto font-sans leading-relaxed">
+                    {dailyVerseForCurrentDay.explanation}
+                  </p>
 
-                <div className="flex justify-center pt-2">
-                  <button
-                    onClick={() => {
-                      setSelectedBook(BOOKS.find(b => b.id === dailyVerseForCurrentDay.verse.book_id) || BOOKS[0]);
-                      setSelectedChapter(dailyVerseForCurrentDay.verse.chapter);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-luxury-button-bg hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150"
-                  >
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>Rejoindre la Lecture</span>
-                  </button>
+                  <div className="flex justify-center pt-2">
+                    <button
+                      onClick={() => {
+                        setSelectedBook(BOOKS.find(b => b.id === dailyVerseForCurrentDay.verse.book_id) || BOOKS[0]);
+                        setSelectedChapter(dailyVerseForCurrentDay.verse.chapter);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-luxury-button-bg hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150"
+                    >
+                      <BookOpen className="w-3.5 h-3.5" />
+                      <span>Rejoindre la Lecture</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Daily Chapter Reading Goal & Progress Bar widget */}
-              <DailyReadingGoal readingHistory={readingHistory} />
+              {!isZenMode && <DailyReadingGoal readingHistory={readingHistory} />}
 
               {/* Dynamic Scripture Selector and Chapter Nav Box */}
-              <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-                  {/* Book dropdown selector */}
-                  <div className="flex flex-col text-left">
-                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Livre Saint</label>
-                    <select
-                      value={selectedBook.id}
-                      onChange={(e) => {
-                        const nextBook = BOOKS.find(b => b.id === Number(e.target.value)) || BOOKS[0];
-                        setSelectedBook(nextBook);
-                        setSelectedChapter(1);
-                      }}
-                      className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-serif font-bold text-[#e8e0d0] rounded-xl px-3.5 py-2 outline-none focus:border-[#c9a84c] select-none text-left"
-                    >
-                      {BOOKS.map((b) => (
-                        <option key={b.id} value={b.id} className="font-serif text-[#0d0b07] bg-[#e8e0d0]">
-                          {b.name} ({b.testament})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Chapter picker dropdown */}
-                  <div className="flex flex-col text-left">
-                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Chapitre</label>
-                    <select
-                      value={selectedChapter}
-                      onChange={(e) => setSelectedChapter(Number(e.target.value))}
-                      className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-4 py-2 outline-none focus:border-[#c9a84c] select-none"
-                    >
-                      {Array.from({ length: selectedBook.chapters_count }, (_, index) => index + 1).map((n) => (
-                        <option key={n} value={n} className="font-mono text-[#0d0b07] bg-[#e8e0d0]">
-                          {n}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Mode Selector Pill Swapper */}
-                  <div className="flex flex-col text-left">
-                    <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Périmètre de lecture</label>
-                    <div className="flex bg-[#0d0b07] border border-[#2e2a1e] rounded-xl p-0.5 h-9 items-center">
-                      <button
-                        onClick={() => setIsContinuousScroll(false)}
-                        className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-                          !isContinuousScroll 
-                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                            : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                        }`}
-                        title="Lire chapitre par chapitre"
+              {!isZenMode && (
+                <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                    {/* Book dropdown selector */}
+                    <div className="flex flex-col text-left">
+                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Livre Saint</label>
+                      <select
+                        value={selectedBook.id}
+                        onChange={(e) => {
+                          const nextBook = BOOKS.find(b => b.id === Number(e.target.value)) || BOOKS[0];
+                          setSelectedBook(nextBook);
+                          setSelectedChapter(1);
+                        }}
+                        className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-serif font-bold text-[#e8e0d0] rounded-xl px-3.5 py-2 outline-none focus:border-[#c9a84c] select-none text-left"
                       >
-                        <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                        <span>Chapitre</span>
-                      </button>
-                      <button
-                        onClick={() => setIsContinuousScroll(true)}
-                        className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-                          isContinuousScroll 
-                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                            : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                        }`}
-                        title="Défilement continu de tout le livre"
+                        {BOOKS.map((b) => (
+                          <option key={b.id} value={b.id} className="font-serif text-[#0d0b07] bg-[#e8e0d0]">
+                            {b.name} ({b.testament})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Chapter picker dropdown */}
+                    <div className="flex flex-col text-left">
+                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Chapitre</label>
+                      <select
+                        value={selectedChapter}
+                        onChange={(e) => setSelectedChapter(Number(e.target.value))}
+                        className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-4 py-2 outline-none focus:border-[#c9a84c] select-none"
                       >
-                        <ScrollText className="w-3.5 h-3.5 shrink-0" />
-                        <span>Livre Entier</span>
-                      </button>
+                        {Array.from({ length: selectedBook.chapters_count }, (_, index) => index + 1).map((n) => (
+                          <option key={n} value={n} className="font-mono text-[#0d0b07] bg-[#e8e0d0]">
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Mode Selector Pill Swapper */}
+                    <div className="flex flex-col text-left">
+                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Périmètre de lecture</label>
+                      <div className="flex bg-[#0d0b07] border border-[#2e2a1e] rounded-xl p-0.5 h-9 items-center">
+                        <button
+                          onClick={() => setIsContinuousScroll(false)}
+                          className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                            !isContinuousScroll 
+                              ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                              : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                          }`}
+                          title="Lire chapitre par chapitre"
+                        >
+                          <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                          <span>Chapitre</span>
+                        </button>
+                        <button
+                          onClick={() => setIsContinuousScroll(true)}
+                          className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                            isContinuousScroll 
+                              ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                              : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                          }`}
+                          title="Défilement continu de tout le livre"
+                        >
+                          <ScrollText className="w-3.5 h-3.5 shrink-0" />
+                          <span>Livre Entier</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Chapter back and forward paging buttons */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={handlePreviousChapter}
-                    className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
-                    title="Chapitre précédent"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
+                  {/* Chapter back and forward paging buttons */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={handlePreviousChapter}
+                      className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
+                      title="Chapitre précédent"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
 
-                  <button
-                    onClick={handleSummarizeChapter}
-                    disabled={loadingSummary}
-                    className="h-8 px-3 bg-gradient-to-r from-[#8a6f2e]/10 to-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl text-[10px] font-mono font-bold tracking-wider uppercase transition flex items-center justify-center gap-1 cursor-pointer hover:border-[#c9a84c]/40"
-                  >
-                    {loadingSummary ? (
-                      <div className="w-3.5 h-3.5 rounded-full border border-t-transparent border-[#c9a84c] animate-spin"></div>
-                    ) : (
-                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                    )}
-                    <span>Résumer le Chapitre</span>
-                  </button>
+                    <button
+                      onClick={handleSummarizeChapter}
+                      disabled={loadingSummary}
+                      className="h-8 px-3 bg-gradient-to-r from-[#8a6f2e]/10 to-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl text-[10px] font-mono font-bold tracking-wider uppercase transition flex items-center justify-center gap-1 cursor-pointer hover:border-[#c9a84c]/40"
+                    >
+                      {loadingSummary ? (
+                        <div className="w-3.5 h-3.5 rounded-full border border-t-transparent border-[#c9a84c] animate-spin"></div>
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                      <span>Résumer le Chapitre</span>
+                    </button>
 
-                  <button
-                    onClick={handleNextChapter}
-                    className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
-                    title="Chapitre suivant"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Integrated offline concordance keyword search in the reader page */}
-              <div className="bg-[#12100c] border border-[#2e2a1e] p-3 rounded-2xl flex items-center gap-2 select-none">
-                <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
-                <input 
-                  id="bible-search-input"
-                  type="text"
-                  value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="Rechercher localement un verset (ex: berger, paix, foi)..."
-                  className="bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355]"
-                />
-                {searchKeyword ? (
-                  <button 
-                    onClick={() => setSearchKeyword('')}
-                    className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                ) : (
-                  <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-0.5 rounded uppercase">Concinnance</span>
-                )}
-              </div>
-
-              {/* Secondary results placeholder for localized keywords lookups */}
-              {searchKeyword.trim() !== "" && (
-                <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl space-y-3">
-                  <span className="text-[8px] font-mono uppercase tracking-widest text-[#c9a84c] font-black block">Occurrences trouvées pour "{searchKeyword}" :</span>
-                  <div className="max-h-60 overflow-y-auto space-y-2 scroller-thin pr-1">
-                    {searchLocalVerses(searchKeyword).length === 0 ? (
-                      <p className="text-xs text-[#6b6355] italic">Aucune concordance locale trouvée. Essayez un autre mot clé.</p>
-                    ) : (
-                      searchLocalVerses(searchKeyword).map((v, i) => (
-                        <div 
-                          key={i}
-                          onClick={() => {
-                            const target = BOOKS.find(b => b.id === v.book_id);
-                            if (target) {
-                              setSelectedBook(target);
-                              setSelectedChapter(v.chapter);
-                              setSearchKeyword('');
-                            }
-                          }}
-                          className="bg-[#0d0b07] hover:bg-[#14120e] p-2.5 rounded-xl border border-[#2e2a1e]/40 transition text-left cursor-pointer space-y-1"
-                        >
-                          <p className="text-xs text-[#e8e0d0] leading-relaxed font-serif truncate">« {v.text.replace(/\[[HG]\d+\]/g, '')} »</p>
-                          <span className="text-[9px] font-mono text-[#c9a84c] block uppercase">{v.book_name} {v.chapter}:{v.verse}</span>
-                        </div>
-                      ))
-                    )}
+                    <button
+                      onClick={handleNextChapter}
+                      className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
+                      title="Chapitre suivant"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
+              )}
+
+              {/* Integrated offline concordance keyword search in the reader page */}
+              {!isZenMode && (
+                <>
+                  <div className="bg-[#12100c] border border-[#2e2a1e] p-3 rounded-2xl flex items-center gap-2 select-none">
+                    <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
+                    <input 
+                      id="bible-search-input"
+                      type="text"
+                      value={searchKeyword}
+                      onChange={(e) => setSearchKeyword(e.target.value)}
+                      placeholder="Rechercher localement un verset (ex: berger, paix, foi)..."
+                      className="bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355]"
+                    />
+                    {searchKeyword ? (
+                      <button 
+                        onClick={() => setSearchKeyword('')}
+                        className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-0.5 rounded uppercase">Concinnance</span>
+                    )}
+                  </div>
+
+                  {/* Secondary results placeholder for localized keywords lookups */}
+                  {searchKeyword.trim() !== "" && (
+                    <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl space-y-3">
+                      <span className="text-[8px] font-mono uppercase tracking-widest text-[#c9a84c] font-black block">Occurrences trouvées pour "{searchKeyword}" :</span>
+                      <div className="max-h-60 overflow-y-auto space-y-2 scroller-thin pr-1">
+                        {searchLocalVerses(searchKeyword).length === 0 ? (
+                          <p className="text-xs text-[#6b6355] italic">Aucune concordance locale trouvée. Essayez un autre mot clé.</p>
+                        ) : (
+                          searchLocalVerses(searchKeyword).map((v, i) => (
+                            <div 
+                              key={i}
+                              onClick={() => {
+                                const target = BOOKS.find(b => b.id === v.book_id);
+                                if (target) {
+                                  setSelectedBook(target);
+                                  setSelectedChapter(v.chapter);
+                                  setSearchKeyword('');
+                                }
+                              }}
+                              className="bg-[#0d0b07] hover:bg-[#14120e] p-2.5 rounded-xl border border-[#2e2a1e]/40 transition text-left cursor-pointer space-y-1"
+                            >
+                              <p className="text-xs text-[#e8e0d0] leading-relaxed font-serif truncate">« {v.text.replace(/\[[HG]\d+\]/g, '')} »</p>
+                              <span className="text-[9px] font-mono text-[#c9a84c] block uppercase">{v.book_name} {v.chapter}:{v.verse}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Display chapter summary if queried */}
@@ -2411,146 +2547,174 @@ export default function App() {
 
                   {/* High-Fidelity Audio Reader Controls */}
                   {!loadingVerses && chapterVerses.length > 0 && (
-                    <div className="bg-[#0f0d09] border border-[#2e2a1e] rounded-2xl p-4.5 flex flex-col gap-4 select-none">
-                      <div className="flex flex-col md:flex-row items-center justify-between gap-4 w-full">
-                        <div className="flex items-center gap-3.5">
-                          <div className="w-10 h-10 rounded-full bg-[#1a1712] border border-[#c9a84c]/20 flex items-center justify-center text-[#c9a84c]">
+                    <div className="bg-[#0b0a08] border border-[#d4af37]/20 hover:border-[#d4af37]/35 shadow-gold-glow/5 rounded-3xl p-5 md:p-6 flex flex-col gap-5 select-none transition-all duration-300">
+                      
+                      {/* Top Header Row of Player */}
+                      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-5 pb-5 border-b border-[#2e2a1e]/40">
+                        <div className="flex items-center gap-4">
+                          <div className="relative flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-b from-[#1c1912] to-[#0a0805] border border-[#c9a84c]/30 shadow-md group shrink-0">
                             {isSpeaking && !isPaused ? (
-                              <Volume2 className="w-5 h-5 animate-pulse text-[#c9a84c]" />
+                              <>
+                                <span className="absolute inset-0 rounded-full bg-[#c9a84c]/10 animate-ping"></span>
+                                <Volume2 className="w-5 h-5 text-[#c9a84c] animate-pulse" />
+                              </>
                             ) : (
-                              <VolumeX className="w-5 h-5 text-[#6b6355]" />
+                              <VolumeX className="w-5 h-5 text-[#6b6355] group-hover:text-[#a0947f] transition-all" />
                             )}
                           </div>
-                          <div className="text-left">
-                            <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-widest block font-bold">SYNTHÈSE VOCALE</span>
-                            <p className="text-xs font-serif text-[#e8e0d0] font-bold">
+                          <div className="text-left space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono font-extrabold uppercase tracking-[0.2em] text-[#c9a84c] bg-[#c9a84c]/10 px-2 py-0.5 rounded border border-[#c9a84c]/20">
+                                Synthèse Vocale Céleste
+                              </span>
+                            </div>
+                            <p className="text-sm font-serif font-bold text-[#e8e0d0] tracking-wide leading-tight">
                               {isSpeaking 
-                                ? `Lecture : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
+                                ? `Lecture en cours : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
                                 : "Écouter la parole divine"
                               }
                             </p>
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          {/* Skip Back */}
-                          <button
-                            onClick={() => {
-                              if (currentSpeakingVerseIndex > 0) {
-                                speakVerse(currentSpeakingVerseIndex - 1);
-                              } else {
-                                speakVerse(0);
-                              }
-                            }}
-                            disabled={!isSpeaking}
-                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                            title="Verset précédent"
-                          >
-                            <SkipBack className="w-4 h-4" />
-                          </button>
-
-                          {/* Play / Pause Toggle */}
-                          <button
-                            onClick={handlePlayPause}
-                            className="h-9 px-4 rounded-xl bg-gold-gradient text-[#0d0b07] font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-1.5 transition cursor-pointer hover:opacity-95 shadow-md"
-                          >
-                            {isSpeaking && !isPaused ? (
-                              <>
-                                <Pause className="w-4 h-4" />
-                                <span>Pause</span>
-                              </>
-                            ) : (
-                              <>
-                                <Play className="w-4 h-4" />
-                                <span>Lecture</span>
-                              </>
-                            )}
-                          </button>
-
-                          {/* Stop */}
-                          <button
-                            onClick={stopSpeaking}
-                            disabled={!isSpeaking}
-                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                            title="Arrêter la lecture"
-                          >
-                            <Square className="w-4 h-4" />
-                          </button>
-
-                          {/* Skip Forward */}
-                          <button
-                            onClick={() => {
-                              if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
-                                speakVerse(currentSpeakingVerseIndex + 1);
-                              }
-                            }}
-                            disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
-                            className="p-2 rounded-xl bg-[#12100c] hover:bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-40 disabled:text-[#6b6355] disabled:pointer-events-none transition cursor-pointer"
-                            title="Verset suivant"
-                          >
-                            <SkipForward className="w-4 h-4" />
-                          </button>
-
-                          {/* Rate speed multipliers selection */}
-                          <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
-                            {[0.8, 1.0, 1.25, 1.5].map((rate) => (
-                              <button
-                                key={rate}
-                                onClick={() => {
-                                  setPlaybackRate(rate);
-                                  if (isSpeaking && !isPaused) {
-                                    // Speak using the new rate
-                                    speakVerse(currentSpeakingVerseIndex);
-                                  }
-                                }}
-                                className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all ${
-                                  playbackRate === rate 
-                                    ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                                    : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                                }`}
-                              >
-                                {rate}x
-                              </button>
-                            ))}
+                        {/* Speech configuration sliders or indicators */}
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full lg:w-auto">
+                          {/* Speed rates (playbackRate) multiplier button bar */}
+                          <div className="flex flex-col items-start gap-1 flex-1 sm:flex-initial">
+                            <span className="text-[8px] font-mono font-bold uppercase text-[#6b6355] tracking-wider">Rythme de lecture</span>
+                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 w-full sm:w-auto">
+                              {[0.8, 1.0, 1.25, 1.5].map((rate) => (
+                                <button
+                                  key={rate}
+                                  onClick={() => {
+                                    setPlaybackRate(rate);
+                                    if (isSpeaking && !isPaused) {
+                                      speakVerse(currentSpeakingVerseIndex);
+                                    }
+                                  }}
+                                  className={`flex-1 px-3 py-1.5 text-[10px] font-mono font-extrabold rounded-lg transition-all duration-200 cursor-pointer ${
+                                    playbackRate === rate 
+                                      ? 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] shadow-sm transform scale-[1.02]' 
+                                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
+                                  }`}
+                                >
+                                  {rate}x
+                                </button>
+                              ))}
+                            </div>
                           </div>
 
-                          {/* Selector for voice selection (Auto, Male, Female) */}
-                          <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 ml-1">
-                            {[
-                              { label: 'Auto', value: 'auto' },
-                              { label: 'Homme ♂', value: 'male' },
-                              { label: 'Femme ♀', value: 'female' }
-                            ].map((genderOption) => (
-                              <button
-                                key={genderOption.value}
-                                onClick={() => {
-                                  setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
-                                  try {
-                                    localStorage.setItem('bible_voice_gender', genderOption.value);
-                                  } catch (_) {}
-                                  if (isSpeaking && !isPaused) {
-                                    // Speak using the new voice selection
-                                    speakVerse(currentSpeakingVerseIndex);
-                                  }
-                                }}
-                                className={`px-2.5 py-1 text-[9px] font-sans font-bold rounded-lg transition-all ${
-                                  voiceGender === genderOption.value 
-                                    ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                                    : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                                }`}
-                                title={`Lecteur vocal : ${genderOption.label}`}
-                              >
-                                {genderOption.label}
-                              </button>
-                            ))}
+                          {/* Voice choice pills chooser */}
+                          <div className="flex flex-col items-start gap-1 flex-1 sm:flex-initial">
+                            <span className="text-[8px] font-mono font-bold uppercase text-[#6b6355] tracking-wider">Timbre du Lecteur</span>
+                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 w-full sm:w-auto">
+                              {[
+                                { label: 'Auto', value: 'auto' },
+                                { label: 'Homme ♂', value: 'male' },
+                                { label: 'Femme ♀', value: 'female' }
+                              ].map((genderOption) => (
+                                <button
+                                  key={genderOption.value}
+                                  onClick={() => {
+                                    setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
+                                    try {
+                                      localStorage.setItem('bible_voice_gender', genderOption.value);
+                                    } catch (_) {}
+                                    if (isSpeaking && !isPaused) {
+                                      speakVerse(currentSpeakingVerseIndex);
+                                    }
+                                  }}
+                                  className={`flex-1 px-3.5 py-1.5 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 cursor-pointer ${
+                                    voiceGender === genderOption.value 
+                                      ? 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] shadow-sm transform scale-[1.02]' 
+                                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
+                                  }`}
+                                  title={`Lecteur vocal : ${genderOption.label}`}
+                                >
+                                  {genderOption.label}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       </div>
 
-                      {/* Ethereal melody soundtrack integration line */}
-                      <div className="h-[1px] bg-[#2e2a1e]/40 w-full my-1"></div>
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 w-full">
-                        <div className="flex flex-wrap items-center gap-2">
+                      {/* Main Transport Control Row */}
+                      <div className="flex flex-wrap items-center justify-center gap-4 py-1.5">
+                        
+                        {/* Skip Back Button */}
+                        <button
+                          onClick={() => {
+                            if (currentSpeakingVerseIndex > 0) {
+                              speakVerse(currentSpeakingVerseIndex - 1);
+                            } else {
+                              speakVerse(0);
+                            }
+                          }}
+                          disabled={!isSpeaking}
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
+                          title="Verset précédent"
+                        >
+                          <SkipBack className="w-4 h-4" />
+                        </button>
+
+                        {/* Unified Play / Pause Golden Trigger */}
+                        <button
+                          onClick={handlePlayPause}
+                          className="h-12 px-6 rounded-full bg-gradient-to-r from-[#d4af37] via-[#f3e5ab] to-[#aa7c11] text-[#0d0b07] font-mono text-[10.5px] font-black tracking-[0.16em] uppercase flex items-center justify-center gap-2.5 transition-all duration-300 transform hover:scale-105 active:scale-95 cursor-pointer shadow-lg shadow-[#c9a84c]/10 hover:shadow-[#c9a84c]/20 border border-white/15"
+                        >
+                          {isSpeaking && !isPaused ? (
+                            <>
+                              <Pause className="w-4.5 h-4.5 fill-[#0d0b07]" />
+                              <span>Pause</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-4.5 h-4.5 fill-[#0d0b07] ml-0.5" />
+                              <span>Lecture</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Stop Button */}
+                        <button
+                          onClick={stopSpeaking}
+                          disabled={!isSpeaking}
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
+                          title="Arrêter la lecture"
+                        >
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                        </button>
+
+                        {/* Skip Forward Button */}
+                        <button
+                          onClick={() => {
+                            if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
+                              speakVerse(currentSpeakingVerseIndex + 1);
+                            }
+                          }}
+                          disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
+                          title="Verset suivant"
+                        >
+                          <SkipForward className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Ethereal Sacred melody section with dedicated modern nested box */}
+                      <div className="bg-[#080705] border border-[#2e2a1e]/60 rounded-2xl p-4.5 space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 h-9 w-9 rounded-xl bg-[#c9a84c]/5 border border-[#c9a84c]/20 flex items-center justify-center">
+                              <Music className={`w-4 h-4 text-[#c9a84c] ${isMelodyEnabled ? 'animate-pulse' : 'opacity-80'}`} />
+                            </div>
+                            <div className="text-left">
+                              <h4 className="text-[10.5px] font-mono font-bold tracking-wider text-[#c9a84c] uppercase">Options Ambiance Spirituelle</h4>
+                              <p className="text-[11px] text-[#6b6355] font-sans font-medium">Musique sacrée de fond générée en temps réel</p>
+                            </div>
+                          </div>
+
+                          {/* Beautiful modern high-lux toggler pill */}
                           <button
                             onClick={() => {
                               const nextVal = !isMelodyEnabled;
@@ -2559,65 +2723,83 @@ export default function App() {
                                 localStorage.setItem('bible_melody_enabled', String(nextVal));
                               } catch (_) {}
                             }}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                            className={`px-3.5 py-2 rounded-xl border flex items-center gap-2.5 text-[10px] font-mono font-black uppercase transition-all duration-300 cursor-pointer ${
                               isMelodyEnabled 
-                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                                ? 'bg-[#c9a84c]/15 border-[#c9a84c]/50 text-[#c9a84c] shadow-md shadow-[#c9a84c]/5 scale-[1.02]' 
+                                : 'bg-[#12100c] border-[#2e2a1e] text-[#6b6355] hover:text-[#e8e0d0]'
                             }`}
                             title="Activer la mélodie sacrée de fond"
                           >
-                            <Music className={`w-3.5 h-3.5 ${isMelodyEnabled ? 'animate-pulse text-[#c9a84c]' : ''}`} />
+                            <span className="relative flex h-2 w-2">
+                              {isMelodyEnabled && (
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
+                              )}
+                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isMelodyEnabled ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
+                            </span>
                             <span>Mélodie Sacrée : {isMelodyEnabled ? 'Activée ✓' : 'Désactivée'}</span>
                           </button>
-
-                          {isMelodyEnabled && (
-                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 items-center gap-0.5 animate-fade-in">
-                              {MELODY_STYLES.map((styleOption) => (
-                                <button
-                                  key={styleOption.id}
-                                  onClick={() => {
-                                    setMelodyStyle(styleOption.id);
-                                    try {
-                                      localStorage.setItem('bible_melody_style', styleOption.id);
-                                    } catch (_) {}
-                                  }}
-                                  className={`px-2.5 py-1 text-[9px] font-sans font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
-                                    melodyStyle === styleOption.id
-                                      ? 'bg-[#c9a84c] text-[#0d0b07]'
-                                      : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                                  }`}
-                                  title={styleOption.description}
-                                >
-                                  <span>{styleOption.icon}</span>
-                                  <span>{styleOption.name}</span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
                         </div>
 
+                        {/* Melody active items with modern aesthetic layouts */}
                         {isMelodyEnabled && (
-                          <div className="flex items-center gap-3 animate-fade-in self-end sm:self-auto">
-                            <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Volume fond</span>
-                            <input
-                              type="range"
-                              min="0"
-                              max="0.4"
-                              step="0.02"
-                              value={melodyVolume}
-                              onChange={(e) => {
-                                const vol = Number(e.target.value);
-                                setMelodyVolume(vol);
-                                try {
-                                  localStorage.setItem('bible_melody_volume', String(vol));
-                                } catch (_) {}
-                              }}
-                              className="w-24 accent-[#c9a84c] bg-[#1a1712] rounded-lg appearance-none h-1 cursor-pointer"
-                              title="Ajuster le volume de la mélodie céleste"
-                            />
-                            <span className="text-[9.5px] font-mono text-[#c9a84c] w-9 text-right font-bold">
-                              {Math.round(melodyVolume * 250)}%
-                            </span>
+                          <div className="pt-2.5 border-t border-[#2e2a1e]/30 flex flex-col lg:flex-row lg:items-center justify-between gap-4 animate-fade-in">
+                            <div className="flex flex-col gap-2 text-left">
+                              <span className="text-[9px] font-mono font-bold text-[#6b6355] uppercase tracking-wider">Style orchestral céleste</span>
+                              <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 gap-0.5">
+                                {MELODY_STYLES.map((styleOption) => (
+                                  <button
+                                    key={styleOption.id}
+                                    onClick={() => {
+                                      setMelodyStyle(styleOption.id);
+                                      try {
+                                        localStorage.setItem('bible_melody_style', styleOption.id);
+                                      } catch (_) {}
+                                    }}
+                                    className={`px-3 py-1.5 text-[10px] font-sans font-extrabold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                                      melodyStyle === styleOption.id
+                                        ? 'bg-[#c9a84c] text-[#0d0b07] font-black shadow-sm'
+                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
+                                    }`}
+                                    title={styleOption.description}
+                                  >
+                                    <span className="text-xs shrink-0">{styleOption.icon}</span>
+                                    <span>{styleOption.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Luxurious volume controller */}
+                            <div className="flex flex-col gap-2 text-left min-w-[200px]">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[9px] font-mono font-bold text-[#6b6355] uppercase tracking-wider">Volume de l'ambiance</span>
+                                <span className="text-[10px] font-mono text-[#c9a84c] font-black tracking-wider">
+                                  {Math.round(melodyVolume * 250)}%
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs text-[#6b6355] font-black">🔈</span>
+                                <div className="relative flex-1 flex items-center h-5">
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="0.4"
+                                    step="0.02"
+                                    value={melodyVolume}
+                                    onChange={(e) => {
+                                      const vol = Number(e.target.value);
+                                      setMelodyVolume(vol);
+                                      try {
+                                        localStorage.setItem('bible_melody_volume', String(vol));
+                                      } catch (_) {}
+                                    }}
+                                    className="w-full accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1.5 cursor-pointer transition-all duration-200 hover:border-[#c9a84c]/30"
+                                    title="Ajuster le volume de la mélodie céleste"
+                                  />
+                                </div>
+                                <span className="text-xs text-[#c9a84c] font-black">🔊</span>
+                              </div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -2662,6 +2844,50 @@ export default function App() {
                               ⇅
                             </span>
                             <span>Défilement continu : {isFluidAutoScrolling ? 'Défilé ✓' : 'Arrêté'}</span>
+                          </button>
+
+                          {/* Continuous Chapter Speech Auto-play button */}
+                          <button
+                            onClick={() => {
+                              const nextVal = !autoAdvanceChapterSpeech;
+                              setAutoAdvanceChapterSpeech(nextVal);
+                              try {
+                                localStorage.setItem('bible_auto_advance_speech', String(nextVal));
+                              } catch (_) {}
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                              autoAdvanceChapterSpeech 
+                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                            title="Passer automatiquement au chapitre suivant à la fin du chapitre actuel"
+                          >
+                            <span className="relative flex h-2 w-2">
+                              {autoAdvanceChapterSpeech && (
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
+                              )}
+                              <span className={`relative inline-flex rounded-full h-2 w-2 ${autoAdvanceChapterSpeech ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
+                            </span>
+                            <span>Lecture continue : {autoAdvanceChapterSpeech ? 'Activée' : 'Désactivée'}</span>
+                          </button>
+
+                          {/* Mode Zen toggle button */}
+                          <button
+                            onClick={() => setIsZenMode(prev => !prev)}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
+                              isZenMode 
+                                ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c]' 
+                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                            title="Masquer la navigation et les sélecteurs de chapitre pour une immersion totale"
+                          >
+                            <span className="relative flex h-2 w-2">
+                              {isZenMode && (
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
+                              )}
+                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isZenMode ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
+                            </span>
+                            <span>💻 Mode Zen : {isZenMode ? 'Activé' : 'Désactivé'}</span>
                           </button>
                         </div>
 
@@ -3143,59 +3369,61 @@ export default function App() {
 
       {/* GLOBAL FIXED BOTTOM NAVIGATION BAR */}
       {/* "Il ne doit y avoir qu'une seule barre de navigation en bas, fixe (sticky/fixed), avec ces éléments : [Accueil, Étudier, Bibliothèque, Notifications]" */}
-      <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex justify-around z-40 select-none shadow-gold-glow">
-        <button
-          onClick={() => {
-            setActiveTab('home');
-            setIsGlobalNotifOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
-            activeTab === 'home' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Home className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Accueil</span>
-        </button>
+      {!isZenMode && (
+        <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex justify-around z-40 select-none shadow-gold-glow">
+          <button
+            onClick={() => {
+              setActiveTab('home');
+              setIsGlobalNotifOpen(false);
+            }}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'home' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+            }`}
+          >
+            <Home className="w-5 h-5 shrink-0" />
+            <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Accueil</span>
+          </button>
 
-        <button
-          onClick={() => {
-            setActiveTab('read');
-            setIsGlobalNotifOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
-            activeTab === 'read' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <BookOpen className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Étudier</span>
-        </button>
+          <button
+            onClick={() => {
+              setActiveTab('read');
+              setIsGlobalNotifOpen(false);
+            }}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'read' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+            }`}
+          >
+            <BookOpen className="w-5 h-5 shrink-0" />
+            <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Étudier</span>
+          </button>
 
-        <button
-          onClick={() => {
-            setActiveTab('notes');
-            setIsGlobalNotifOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
-            activeTab === 'notes' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Library className="w-5 h-5 shrink-0" />
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Bibliothèque</span>
-        </button>
+          <button
+            onClick={() => {
+              setActiveTab('notes');
+              setIsGlobalNotifOpen(false);
+            }}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+              activeTab === 'notes' && !isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+            }`}
+          >
+            <Library className="w-5 h-5 shrink-0" />
+            <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Bibliothèque</span>
+          </button>
 
-        <button
-          onClick={() => setIsGlobalNotifOpen(prev => !prev)}
-          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
-            isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <div className="relative">
-            <Bell className="w-5 h-5 shrink-0" />
-            <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-pulse" />
-          </div>
-          <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Notifs</span>
-        </button>
-      </nav>
+          <button
+            onClick={() => setIsGlobalNotifOpen(prev => !prev)}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 rounded-xl transition-all cursor-pointer ${
+              isGlobalNotifOpen ? 'text-[#c9a84c] font-black scale-105' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+            }`}
+          >
+            <div className="relative">
+              <Bell className="w-5 h-5 shrink-0" />
+              <span className="absolute top-0 right-0 w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-pulse" />
+            </div>
+            <span className="text-[8.5px] font-medium font-mono uppercase tracking-widest">Notifs</span>
+          </button>
+        </nav>
+      )}
 
       {/* GLOBAL NOTIFICATIONS PANEL BOTTOM DRAWER */}
       <AnimatePresence>
@@ -3259,6 +3487,41 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Floating Zen Mode controls when active */}
+      {isZenMode && (
+        <div id="zen-mode-controls" className="fixed bottom-6 right-6 z-[100] flex items-center gap-2 bg-[#050403]/90 backdrop-blur-md border border-[#c9a84c]/40 p-2 rounded-2xl shadow-gold-glow animate-fade-in select-none">
+          <button
+            onClick={handlePreviousChapter}
+            className="p-1.5 hover:bg-[#1a1712] text-[#c9a84c] rounded-xl transition cursor-pointer"
+            title="Chapitre précédent"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          
+          <span className="text-[10px] font-mono font-bold text-[#c9a84c] px-2 font-serif text-center min-w-[100px] truncate">
+            {selectedBook.name} · {selectedChapter}
+          </span>
+
+          <button
+            onClick={handleNextChapter}
+            className="p-1.5 hover:bg-[#1a1712] text-[#c9a84c] rounded-xl transition cursor-pointer"
+            title="Chapitre suivant"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          <div className="w-[1px] h-4 bg-[#2e2a1e] mx-1"></div>
+
+          <button
+            onClick={() => setIsZenMode(false)}
+            className="px-3 py-1.5 bg-[#c9a84c] hover:bg-[#b0913b] text-black text-[9px] font-mono font-bold uppercase tracking-wider rounded-xl transition duration-150 flex items-center gap-1.5 cursor-pointer"
+          >
+            <EyeOff className="w-3.5 h-3.5" />
+            <span>Quitter</span>
+          </button>
+        </div>
+      )}
 
     </div>
   );
