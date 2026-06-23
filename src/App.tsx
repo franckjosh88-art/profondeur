@@ -38,6 +38,7 @@ import { SpiritualNotesManager } from './components/SpiritualNotesManager';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
+import { natureSounds, NATURE_SOUNDS, NatureSoundType } from './utils/natureSounds';
 import { MemorizeModule } from './components/MemorizeModule';
 import { ContemplativeHome } from './components/ContemplativeHome';
 import { audioPurifier } from './utils/audioProcessor';
@@ -1152,12 +1153,33 @@ export default function App() {
     } catch (_) {}
   }, [isZenMode]);
 
+  const [isRawReading, setIsRawReading] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_raw_reading') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bible_raw_reading', String(isRawReading));
+    } catch (_) {}
+  }, [isRawReading]);
+
   // Load and listen to the exhaustive list of French voices
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
     const updateVoices = () => {
       const voices = window.speechSynthesis.getVoices();
+      
+      if (isRawReading) {
+        // Raw Reading bypasses all filtering and sorting: return everything natively
+        setAvailableVoices(voices);
+        return;
+      }
+
       // Filter voices for French lang
       const frVoices = voices.filter(v => v.lang.startsWith('fr') || v.lang.includes('FR'));
       
@@ -1210,7 +1232,7 @@ export default function App() {
         window.speechSynthesis.onvoiceschanged = null;
       }
     };
-  }, []);
+  }, [isRawReading]);
 
   const currentVerseToSpeakRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
@@ -1245,17 +1267,47 @@ export default function App() {
     }
   });
 
+  // Expandable audio options menu
+  const [isAudioSettingsExpanded, setIsAudioSettingsExpanded] = useState<boolean>(false);
+
+  // Background Nature Sounds States
+  const [isNatureEnabled, setIsNatureEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_nature_enabled') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+  const [natureSoundVolume, setNatureSoundVolume] = useState<number>(() => {
+    try {
+      const vol = localStorage.getItem('bible_nature_volume');
+      return vol ? Number(vol) : 0.45;
+    } catch (_) {
+      return 0.45;
+    }
+  });
+  const [natureSoundType, setNatureSoundType] = useState<NatureSoundType>(() => {
+    try {
+      const stored = localStorage.getItem('bible_nature_type');
+      return (stored as NatureSoundType) || 'rain';
+    } catch (_) {
+      return 'rain';
+    }
+  });
+
   // "Veille spirituelle" (Bedtime Sleep/Vigil Timer) states
   const [isVigilActive, setIsVigilActive] = useState<boolean>(false);
   const [vigilDuration, setVigilDuration] = useState<number>(20); // default 20 minutes
   const [vigilTimeRemaining, setVigilTimeRemaining] = useState<number>(0);
   const [vigilInitialVolume, setVigilInitialVolume] = useState<number>(0.15);
+  const [vigilInitialNatureVolume, setVigilInitialNatureVolume] = useState<number>(0.15);
 
   // Vigil mode sleep timer logic
   useEffect(() => {
     if (!isVigilActive) return;
 
     setVigilInitialVolume(melodyVolume);
+    setVigilInitialNatureVolume(natureSoundVolume);
     setVigilTimeRemaining(vigilDuration * 60);
 
     const intervalId = setInterval(() => {
@@ -1263,11 +1315,12 @@ export default function App() {
         if (prev <= 1) {
           clearInterval(intervalId);
           setIsVigilActive(false);
-          // End session: stop speaking and melody to sleep peacefully
+          // End session: stop speaking, melody, and nature sounds to sleep peacefully
           if (typeof window !== 'undefined' && window.speechSynthesis) {
             window.speechSynthesis.cancel();
           }
           ambientMelody.stop();
+          natureSounds.stop();
           return 0;
         }
 
@@ -1278,6 +1331,9 @@ export default function App() {
         // Proportional volume reduction (fading down to 0)
         const nextVolume = Math.max(0, vigilInitialVolume * ratio);
         setMelodyVolume(nextVolume);
+
+        const nextNatureVolume = Math.max(0, vigilInitialNatureVolume * ratio);
+        setNatureSoundVolume(nextNatureVolume);
 
         return nextTime;
       });
@@ -1290,11 +1346,14 @@ export default function App() {
     if (isVigilActive) {
       setIsVigilActive(false);
       setMelodyVolume(vigilInitialVolume);
+      setNatureSoundVolume(vigilInitialNatureVolume);
       try {
         localStorage.setItem('bible_melody_volume', String(vigilInitialVolume));
+        localStorage.setItem('bible_nature_volume', String(vigilInitialNatureVolume));
       } catch (_) {}
     } else {
       setVigilInitialVolume(melodyVolume);
+      setVigilInitialNatureVolume(natureSoundVolume);
       setIsVigilActive(true);
     }
   };
@@ -1309,6 +1368,16 @@ export default function App() {
       ambientMelody.stop();
     }
   }, [isMelodyEnabled, isSpeaking, isPaused, melodyVolume, melodyStyle]);
+
+  // Synchronize background nature sounds (can play continuously when enabled for deep immersive reading)
+  useEffect(() => {
+    if (isNatureEnabled && activeTab === 'reader') {
+      natureSounds.start(natureSoundType);
+      natureSounds.setVolume(natureSoundVolume);
+    } else {
+      natureSounds.stop();
+    }
+  }, [isNatureEnabled, natureSoundType, natureSoundVolume, activeTab]);
 
   // Clean up speech synthesis when navigating away or selecting another chapter
   useEffect(() => {
@@ -1353,117 +1422,108 @@ export default function App() {
 
     // Dynamically look up French voice for Louis Segond French reading with gender support
     const voices = window.speechSynthesis.getVoices();
-    const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
-    
-    // Sort French voices: prioritize explicit masculine first, then general male, then higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
-    const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
-      const aLower = a.name.toLowerCase();
-      const bLower = b.name.toLowerCase();
-      
-      const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
-      const aHasPriorityMale = priorityMaleKeywords.some(keyword => aLower.includes(keyword));
-      const bHasPriorityMale = priorityMaleKeywords.some(keyword => bLower.includes(keyword));
-      
-      if (aHasPriorityMale && !bHasPriorityMale) return -1;
-      if (!aHasPriorityMale && bHasPriorityMale) return 1;
-      
-      const aIsMale = LOWER_MALE_NAMES.some(name => aLower.includes(name));
-      const bIsMale = LOWER_MALE_NAMES.some(name => bLower.includes(name));
-      
-      if (aIsMale && !bIsMale) return -1;
-      if (!aIsMale && bIsMale) return 1;
-      
-      const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
-      const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
-      
-      if (aIsPremium && !bIsPremium) return -1;
-      if (!aIsPremium && bIsPremium) return 1;
-      
-      // Also prefer voices that are not localService when available on some platforms (though browser-dependent)
-      if (a.localService === false && b.localService === true) return -1;
-      if (a.localService === true && b.localService === false) return 1;
-      
-      return 0;
-    });
     
     let selectedVoice: SpeechSynthesisVoice | null = null;
-    
-    // 1. Use manual voice choice if authorized and present
-    if (selectedVoiceURI) {
-      selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
-    }
 
-    // 2. Fall back on automatic gender-matching lists or defaults if no manual voice is chosen
-    if (!selectedVoice) {
-      if (voiceGender === 'male') {
-        // 1. Try exact male names from sorted high quality voices first
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-        // 2. Try excluding female named voices
-        if (!selectedVoice) {
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            !LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-        }
-      } else if (voiceGender === 'female') {
-        // 1. Try exact female names from sorted high quality voices first
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-        // 2. Try excluding male named voices
-        if (!selectedVoice) {
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            !LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-        }
-      } else {
-        // 'auto' mode - Prioritize explicit masculine voices ('male', 'homme', 'paul', 'nicolas')
-        // to guarantee a deep and solemn spiritual reading experience by default!
-        const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          priorityMaleKeywords.some(keyword => voice.name.toLowerCase().includes(keyword))
-        ) || null;
+    if (isRawReading) {
+      if (selectedVoiceURI) {
+        selectedVoice = voices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+      }
+      if (!selectedVoice && voices.length > 0) {
+        selectedVoice = voices[0];
+      }
+    } else {
+      const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
+      
+      // Sort French voices: prioritize explicit masculine first, then general male, then higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
+      const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
+        const aLower = a.name.toLowerCase();
+        const bLower = b.name.toLowerCase();
         
-        // Secondary fallback for auto mode: any general male voice
-        if (!selectedVoice) {
+        const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
+        const aHasPriorityMale = priorityMaleKeywords.some(keyword => aLower.includes(keyword));
+        const bHasPriorityMale = priorityMaleKeywords.some(keyword => bLower.includes(keyword));
+        
+        if (aHasPriorityMale && !bHasPriorityMale) return -1;
+        if (!aHasPriorityMale && bHasPriorityMale) return 1;
+        
+        const aIsMale = LOWER_MALE_NAMES.some(name => aLower.includes(name));
+        const bIsMale = LOWER_MALE_NAMES.some(name => bLower.includes(name));
+        
+        if (aIsMale && !bIsMale) return -1;
+        if (!aIsMale && bIsMale) return 1;
+        
+        const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
+        const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
+        
+        if (aIsPremium && !bIsPremium) return -1;
+        if (!aIsPremium && bIsPremium) return 1;
+        
+        // Also prefer voices that are not localService when available on some platforms (though browser-dependent)
+        if (a.localService === false && b.localService === true) return -1;
+        if (a.localService === true && b.localService === false) return 1;
+        
+        return 0;
+      });
+      
+      // 1. Use manual voice choice if authorized and present
+      if (selectedVoiceURI) {
+        selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+      }
+
+      // 2. Fall back on automatic gender-matching lists or defaults if no manual voice is chosen
+      if (!selectedVoice) {
+        if (voiceGender === 'male') {
+          // 1. Try exact male names from sorted high quality voices first
           selectedVoice = sortedFrenchVoices.find(voice => 
             LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
           ) || null;
+          // 2. Try excluding female named voices
+          if (!selectedVoice) {
+            selectedVoice = sortedFrenchVoices.find(voice => 
+              !LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
+            ) || null;
+          }
+        } else if (voiceGender === 'female') {
+          // 1. Try exact female names from sorted high quality voices first
+          selectedVoice = sortedFrenchVoices.find(voice => 
+            LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
+          ) || null;
+          // 2. Try excluding male named voices
+          if (!selectedVoice) {
+            selectedVoice = sortedFrenchVoices.find(voice => 
+              !LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
+            ) || null;
+          }
+        } else {
+          // 'auto' mode - Prioritize explicit masculine voices ('male', 'homme', 'paul', 'nicolas')
+          // to guarantee a deep and solemn spiritual reading experience by default!
+          const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
+          selectedVoice = sortedFrenchVoices.find(voice => 
+            priorityMaleKeywords.some(keyword => voice.name.toLowerCase().includes(keyword))
+          ) || null;
+          
+          // Secondary fallback for auto mode: any general male voice
+          if (!selectedVoice) {
+            selectedVoice = sortedFrenchVoices.find(voice => 
+              LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
+            ) || null;
+          }
         }
       }
-    }
 
-    // Fallback if no specific voice was determined
-    if (!selectedVoice && sortedFrenchVoices.length > 0) {
-      selectedVoice = sortedFrenchVoices[0];
+      // Fallback if no specific voice was determined
+      if (!selectedVoice && sortedFrenchVoices.length > 0) {
+        selectedVoice = sortedFrenchVoices[0];
+      }
     }
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
     }
 
-    // --- ENHANCED PITCH FOR REALISTIC MASCULINE/FEMININE VOICE ---
-    // If a masculine voice is detected (either in 'male' mode or 'auto' mode with detected male voice),
-    // we slightly lower it for a gorgeous, deep, warm, and solemn reading register.
-    const isMaleVoiceDetected = selectedVoice ? LOWER_MALE_NAMES.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-    const isFemaleVoiceDetected = selectedVoice ? LOWER_FEMALE_NAMES.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-
-    if (voiceGender === 'male' || (voiceGender === 'auto' && isMaleVoiceDetected)) {
-      if (isMaleVoiceDetected) {
-        utterance.pitch = Math.max(0.65, voicePitch * 0.88);
-      } else {
-        utterance.pitch = Math.max(0.60, voicePitch * 0.74);
-      }
-    } else if (voiceGender === 'female' || (voiceGender === 'auto' && isFemaleVoiceDetected)) {
-      if (isFemaleVoiceDetected) {
-        utterance.pitch = voicePitch * 1.02;
-      } else {
-        utterance.pitch = Math.min(1.8, voicePitch * 1.18);
-      }
-    } else {
-      utterance.pitch = voicePitch;
-    }
+    // Force pitch = 1.0 in raw reading mode, otherwise keep adjusted voicePitch
+    utterance.pitch = isRawReading ? 1.0 : voicePitch;
 
     utterance.onend = () => {
       // Move consecutively to next verse if we are still active on index
@@ -2131,17 +2191,8 @@ export default function App() {
                                 utterance.voice = targetVoic;
                               }
 
-                              // Align test pitch with advanced gender preferences
-                              const isMaleVoice = targetVoic ? LOWER_MALE_NAMES.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
-                              const isFemaleVoice = targetVoic ? LOWER_FEMALE_NAMES.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
-
-                              if (voiceGender === 'male' || (voiceGender === 'auto' && isMaleVoice)) {
-                                utterance.pitch = isMaleVoice ? Math.max(0.65, voicePitch * 0.88) : Math.max(0.60, voicePitch * 0.74);
-                              } else if (voiceGender === 'female' || (voiceGender === 'auto' && isFemaleVoice)) {
-                                utterance.pitch = isFemaleVoice ? voicePitch * 1.02 : Math.min(1.8, voicePitch * 1.18);
-                              } else {
-                                utterance.pitch = voicePitch;
-                              }
+                              // Keep clear native voice pitch or force 1.0 in raw reading to prevent robotic/distorted sounds
+                              utterance.pitch = isRawReading ? 1.0 : voicePitch;
                               window.speechSynthesis.speak(utterance);
                             }
                           }}
@@ -2237,6 +2288,24 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Lecture Brute Toggle */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]" title="Désactive toute modification de pitch (pitch = 1.0) et contourne le filtrage des voix de synthèse pour résoudre les distorsions sur certains téléphones">Lecture Brute</span>
+                    <button
+                      onClick={() => {
+                        const nextVal = !isRawReading;
+                        setIsRawReading(nextVal);
+                      }}
+                      className={`px-2 py-0.5 text-[8px] font-semibold uppercase rounded border cursor-pointer transition ${
+                        isRawReading 
+                          ? 'bg-[#c9a84c]/10 text-[#c9a84c] border-[#c9a84c]/30' 
+                          : 'text-[#6b6355] border-[#2e2a1e]/40 hover:text-white'
+                      }`}
+                    >
+                      {isRawReading ? 'Oui (Brut)' : 'Non'}
+                    </button>
+                  </div>
+
                   {/* Purifier Status with Test Chime button */}
                   <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
                     <span className="text-[#6b6355] flex items-center gap-1">
@@ -2259,7 +2328,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col md:flex-row gap-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-5 sm:px-6 md:px-8 pt-4 pb-28 sm:pb-32 flex flex-col md:flex-row gap-8">
         
         {/* SIDEBAR NAVIGATION TAB COLUMN FOR MEDIUM+ DISPLAY */}
         <aside className={`w-full md:w-60 shrink-0 ${isZenMode ? 'hidden' : 'hidden md:flex'} flex-col gap-1.5 text-left font-serif py-1`}>
@@ -2459,7 +2528,7 @@ export default function App() {
 
               {/* Dynamic Scripture Selector and Chapter Nav Box */}
               {!isZenMode && (
-                <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="bg-[#12100c] border border-[#2e2a1e] p-5 md:p-6 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
                     {/* Book dropdown selector */}
                     <div className="flex flex-col text-left">
@@ -2566,7 +2635,7 @@ export default function App() {
               {/* Integrated offline concordance keyword search in the reader page */}
               {!isZenMode && (
                 <>
-                  <div className="bg-[#12100c] border border-[#2e2a1e] p-3 rounded-2xl flex items-center gap-2 select-none">
+                  <div className="bg-[#12100c] border border-[#2e2a1e] p-4 sm:p-5 rounded-2xl flex items-center gap-2.5 select-none">
                     <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
                     <input 
                       id="bible-search-input"
@@ -2683,101 +2752,51 @@ export default function App() {
 
                   {/* High-Fidelity Audio Reader Controls */}
                   {!loadingVerses && chapterVerses.length > 0 && (
-                    <div className="bg-[#0b0a08] border border-[#d4af37]/20 hover:border-[#d4af37]/35 shadow-gold-glow/5 rounded-3xl p-5 md:p-6 flex flex-col gap-5 select-none transition-all duration-300">
+                    <div className="bg-[#0b0a08] border border-[#2e2a1e]/40 shadow-xl rounded-3xl p-5 md:p-6 flex flex-col gap-5 select-none transition-all duration-300">
                       
-                      {/* Top Header Row of Player */}
-                      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-5 pb-5 border-b border-[#2e2a1e]/40">
-                        <div className="flex items-center gap-4">
-                          <div className="relative flex items-center justify-center w-12 h-12 rounded-full bg-gradient-to-b from-[#1c1912] to-[#0a0805] border border-[#c9a84c]/30 shadow-md group shrink-0">
+                      {/* Top Header Row of Player (Modern and Simplified) */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-[#12100c] border border-[#2e2a1e] shadow-inner shrink-0">
                             {isSpeaking && !isPaused ? (
                               <>
                                 <span className="absolute inset-0 rounded-full bg-[#c9a84c]/10 animate-ping"></span>
-                                <Volume2 className="w-5 h-5 text-[#c9a84c] animate-pulse" />
+                                <Volume2 className="w-4 h-4 text-[#c9a84c] animate-pulse" />
                               </>
                             ) : (
-                              <VolumeX className="w-5 h-5 text-[#6b6355] group-hover:text-[#a0947f] transition-all" />
+                              <VolumeX className="w-4 h-4 text-[#6b6355]" />
                             )}
                           </div>
-                          <div className="text-left space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[9px] font-mono font-extrabold uppercase tracking-[0.2em] text-[#c9a84c] bg-[#c9a84c]/10 px-2 py-0.5 rounded border border-[#c9a84c]/20">
-                                Synthèse Vocale Céleste
-                              </span>
-                            </div>
-                            <p className="text-sm font-serif font-bold text-[#e8e0d0] tracking-wide leading-tight">
+                          <div className="text-left">
+                            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#6b6355] block">
+                              {isSpeaking && !isPaused ? 'Lecture active' : 'Audio'}
+                            </span>
+                            <span className="text-xs font-sans font-bold text-[#e8e0d0] block">
                               {isSpeaking 
-                                ? `Lecture en cours : Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
-                                : "Écouter la parole divine"
+                                ? `Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
+                                : "Écouter le chapitre"
                               }
-                            </p>
+                            </span>
                           </div>
                         </div>
 
-                        {/* Speech configuration sliders or indicators */}
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full lg:w-auto">
-                          {/* Speed rates (playbackRate) multiplier button bar */}
-                          <div className="flex flex-col items-start gap-1 flex-1 sm:flex-initial">
-                            <span className="text-[8px] font-mono font-bold uppercase text-[#6b6355] tracking-wider">Rythme de lecture</span>
-                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 w-full sm:w-auto">
-                              {[0.8, 1.0, 1.25, 1.5].map((rate) => (
-                                <button
-                                  key={rate}
-                                  onClick={() => {
-                                    setPlaybackRate(rate);
-                                    if (isSpeaking && !isPaused) {
-                                      speakVerse(currentSpeakingVerseIndex);
-                                    }
-                                  }}
-                                  className={`flex-1 px-3 py-1.5 text-[10px] font-mono font-extrabold rounded-lg transition-all duration-200 cursor-pointer ${
-                                    playbackRate === rate 
-                                      ? 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] shadow-sm transform scale-[1.02]' 
-                                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
-                                  }`}
-                                >
-                                  {rate}x
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Voice choice pills chooser */}
-                          <div className="flex flex-col items-start gap-1 flex-1 sm:flex-initial">
-                            <span className="text-[8px] font-mono font-bold uppercase text-[#6b6355] tracking-wider">Timbre du Lecteur</span>
-                            <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 w-full sm:w-auto">
-                              {[
-                                { label: 'Auto', value: 'auto' },
-                                { label: 'Homme ♂', value: 'male' },
-                                { label: 'Femme ♀', value: 'female' }
-                              ].map((genderOption) => (
-                                <button
-                                  key={genderOption.value}
-                                  onClick={() => {
-                                    setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
-                                    try {
-                                      localStorage.setItem('bible_voice_gender', genderOption.value);
-                                    } catch (_) {}
-                                    if (isSpeaking && !isPaused) {
-                                      speakVerse(currentSpeakingVerseIndex);
-                                    }
-                                  }}
-                                  className={`flex-1 px-3.5 py-1.5 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 cursor-pointer ${
-                                    voiceGender === genderOption.value 
-                                      ? 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] shadow-sm transform scale-[1.02]' 
-                                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
-                                  }`}
-                                  title={`Lecteur vocal : ${genderOption.label}`}
-                                >
-                                  {genderOption.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
+                        {/* Collapsible toggle button */}
+                        <button
+                          onClick={() => setIsAudioSettingsExpanded(!isAudioSettingsExpanded)}
+                          className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                            isAudioSettingsExpanded 
+                              ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                              : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0]'
+                          }`}
+                        >
+                          <Settings className={`w-3.5 h-3.5 transition-transform duration-300 ${isAudioSettingsExpanded ? 'rotate-45' : ''}`} />
+                          <span>{isAudioSettingsExpanded ? "Masquer" : "Réglages"}</span>
+                          {isAudioSettingsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
                       </div>
 
-                      {/* Main Transport Control Row */}
-                      <div className="flex flex-wrap items-center justify-center gap-4 py-1.5">
-                        
+                      {/* Main Transport Control Row (Hero playback controls) */}
+                      <div className="flex items-center justify-center gap-5 py-2">
                         {/* Skip Back Button */}
                         <button
                           onClick={() => {
@@ -2788,27 +2807,22 @@ export default function App() {
                             }
                           }}
                           disabled={!isSpeaking}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
                           title="Verset précédent"
                         >
                           <SkipBack className="w-4 h-4" />
                         </button>
 
-                        {/* Unified Play / Pause Golden Trigger */}
+                        {/* Unified Play / Pause Golden Hero Trigger */}
                         <button
                           onClick={handlePlayPause}
-                          className="h-12 px-6 rounded-full bg-gradient-to-r from-[#d4af37] via-[#f3e5ab] to-[#aa7c11] text-[#0d0b07] font-mono text-[10.5px] font-black tracking-[0.16em] uppercase flex items-center justify-center gap-2.5 transition-all duration-300 transform hover:scale-105 active:scale-95 cursor-pointer shadow-lg shadow-[#c9a84c]/10 hover:shadow-[#c9a84c]/20 border border-white/15"
+                          className="w-14 h-14 rounded-full bg-[#c9a84c] text-[#0d0b07] flex items-center justify-center transition-all duration-300 transform hover:scale-105 active:scale-95 cursor-pointer shadow-lg shadow-[#c9a84c]/15 hover:shadow-[#c9a84c]/25 border border-white/10"
+                          title={isSpeaking && !isPaused ? "Pause" : "Lecture"}
                         >
                           {isSpeaking && !isPaused ? (
-                            <>
-                              <Pause className="w-4.5 h-4.5 fill-[#0d0b07]" />
-                              <span>Pause</span>
-                            </>
+                            <Pause className="w-5 h-5 fill-[#0d0b07]" />
                           ) : (
-                            <>
-                              <Play className="w-4.5 h-4.5 fill-[#0d0b07] ml-0.5" />
-                              <span>Lecture</span>
-                            </>
+                            <Play className="w-5 h-5 fill-[#0d0b07] ml-0.5" />
                           )}
                         </button>
 
@@ -2816,8 +2830,8 @@ export default function App() {
                         <button
                           onClick={stopSpeaking}
                           disabled={!isSpeaking}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
-                          title="Arrêter la lecture"
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
+                          title="Arrêter"
                         >
                           <Square className="w-3.5 h-3.5 fill-current" />
                         </button>
@@ -2830,27 +2844,29 @@ export default function App() {
                             }
                           }}
                           disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#c9a84c] disabled:opacity-30 disabled:text-[#6b6355] disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:border-[#c9a84c]/40 hover:scale-105 active:scale-95"
+                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
                           title="Verset suivant"
                         >
                           <SkipForward className="w-4 h-4" />
                         </button>
                       </div>
 
-                      {/* Ethereal Sacred melody section with dedicated modern nested box */}
-                      <div className="bg-[#080705] border border-[#2e2a1e]/60 rounded-2xl p-4.5 space-y-4">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+                      {/* Side-by-side Ambient Toggles (Compact switches) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {/* Melody Card */}
+                        <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <div className="p-2 h-9 w-9 rounded-xl bg-[#c9a84c]/5 border border-[#c9a84c]/20 flex items-center justify-center">
-                              <Music className={`w-4 h-4 text-[#c9a84c] ${isMelodyEnabled ? 'animate-pulse' : 'opacity-80'}`} />
+                            <div className="p-2 rounded-xl bg-[#1a1712] border border-[#2e2a1e]/60 text-[#a0947f]">
+                              <Music className={`w-4 h-4 ${isMelodyEnabled ? 'text-[#c9a84c]' : ''}`} />
                             </div>
                             <div className="text-left">
-                              <h4 className="text-[10.5px] font-mono font-bold tracking-wider text-[#c9a84c] uppercase">Options Ambiance Spirituelle</h4>
-                              <p className="text-[11px] text-[#6b6355] font-sans font-medium">Musique sacrée de fond générée en temps réel</p>
+                              <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Mélodie Céleste</span>
+                              <span className="text-[10px] text-[#6b6355] block">
+                                {isMelodyEnabled ? (MELODY_STYLES.find(s => s.id === melodyStyle)?.name || 'Active') : 'Désactivée'}
+                              </span>
                             </div>
                           </div>
-
-                          {/* Beautiful modern high-lux toggler pill */}
+                          {/* Elegant Apple Switch Toggle */}
                           <button
                             onClick={() => {
                               const nextVal = !isMelodyEnabled;
@@ -2859,63 +2875,184 @@ export default function App() {
                                 localStorage.setItem('bible_melody_enabled', String(nextVal));
                               } catch (_) {}
                             }}
-                            className={`px-3.5 py-2 rounded-xl border flex items-center gap-2.5 text-[10px] font-mono font-black uppercase transition-all duration-300 cursor-pointer ${
-                              isMelodyEnabled 
-                                ? 'bg-[#c9a84c]/15 border-[#c9a84c]/50 text-[#c9a84c] shadow-md shadow-[#c9a84c]/5 scale-[1.02]' 
-                                : 'bg-[#12100c] border-[#2e2a1e] text-[#6b6355] hover:text-[#e8e0d0]'
+                            className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                              isMelodyEnabled ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
                             }`}
-                            title="Activer la mélodie sacrée de fond"
                           >
-                            <span className="relative flex h-2 w-2">
-                              {isMelodyEnabled && (
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
-                              )}
-                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isMelodyEnabled ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
-                            </span>
-                            <span>Mélodie Sacrée : {isMelodyEnabled ? 'Activée ✓' : 'Désactivée'}</span>
+                            <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                              isMelodyEnabled ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                            }`} />
                           </button>
                         </div>
 
-                        {/* Melody active items with modern aesthetic layouts */}
-                        {isMelodyEnabled && (
-                          <div className="pt-2.5 border-t border-[#2e2a1e]/30 flex flex-col lg:flex-row lg:items-center justify-between gap-4 animate-fade-in">
-                            <div className="flex flex-col gap-2 text-left">
-                              <span className="text-[9px] font-mono font-bold text-[#6b6355] uppercase tracking-wider">Style orchestral céleste</span>
-                              <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 gap-0.5">
-                                {MELODY_STYLES.map((styleOption) => (
+                        {/* Nature Sounds Card */}
+                        <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 rounded-xl bg-[#1a1712] border border-[#2e2a1e]/60 text-[#a0947f]">
+                              <span className={`text-sm ${isNatureEnabled ? 'opacity-100' : 'opacity-60'}`}>🌲</span>
+                            </div>
+                            <div className="text-left">
+                              <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Sons de la Nature</span>
+                              <span className="text-[10px] text-[#6b6355] block">
+                                {isNatureEnabled ? (NATURE_SOUNDS.find(s => s.id === natureSoundType)?.name || 'Actifs') : 'Désactivés'}
+                              </span>
+                            </div>
+                          </div>
+                          {/* Elegant Apple Switch Toggle */}
+                          <button
+                            onClick={() => {
+                              const nextVal = !isNatureEnabled;
+                              setIsNatureEnabled(nextVal);
+                              try {
+                                localStorage.setItem('bible_nature_enabled', String(nextVal));
+                              } catch (_) {}
+                            }}
+                            className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                              isNatureEnabled ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                            }`}
+                          >
+                            <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                              isNatureEnabled ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                            }`} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Expandable Secondary Settings Panel */}
+                      {isAudioSettingsExpanded && (
+                        <div className="pt-4 border-t border-[#2e2a1e]/40 space-y-7 md:space-y-9 animate-fade-in text-left">
+                          
+                          {/* Voix & Vitesse Group */}
+                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs">🎙️</span>
+                              <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Voix & Vitesse</h5>
+                            </div>
+
+                            {/* playbackRate Selector */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                              <span className="text-xs text-[#6b6355] font-sans font-medium">Vitesse de lecture</span>
+                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 self-start sm:self-auto">
+                                {[0.8, 1.0, 1.25, 1.5].map((rate) => (
                                   <button
-                                    key={styleOption.id}
+                                    key={rate}
                                     onClick={() => {
-                                      setMelodyStyle(styleOption.id);
-                                      try {
-                                        localStorage.setItem('bible_melody_style', styleOption.id);
-                                      } catch (_) {}
+                                      setPlaybackRate(rate);
+                                      if (isSpeaking && !isPaused) {
+                                        speakVerse(currentSpeakingVerseIndex);
+                                      }
                                     }}
-                                    className={`px-3 py-1.5 text-[10px] font-sans font-extrabold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
-                                      melodyStyle === styleOption.id
-                                        ? 'bg-[#c9a84c] text-[#0d0b07] font-black shadow-sm'
-                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
+                                    className={`px-3 py-1 text-[10px] font-mono font-bold rounded-lg transition-all duration-200 cursor-pointer ${
+                                      playbackRate === rate 
+                                        ? 'bg-[#c9a84c] text-[#0d0b07] shadow-sm font-black' 
+                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
                                     }`}
-                                    title={styleOption.description}
                                   >
-                                    <span className="text-xs shrink-0">{styleOption.icon}</span>
-                                    <span>{styleOption.name}</span>
+                                    {rate}x
                                   </button>
                                 ))}
                               </div>
                             </div>
 
-                            {/* Luxurious volume controller */}
-                            <div className="flex flex-col gap-2 text-left min-w-[200px]">
-                              <div className="flex items-center justify-between">
-                                <span className="text-[9px] font-mono font-bold text-[#6b6355] uppercase tracking-wider">Volume de l'ambiance</span>
-                                <span className="text-[10px] font-mono text-[#c9a84c] font-black tracking-wider">
-                                  {Math.round(melodyVolume * 250)}%
-                                </span>
+                            {/* voiceGender Selector */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                              <span className="text-xs text-[#6b6355] font-sans font-medium">Timbre du lecteur</span>
+                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 self-start sm:self-auto">
+                                {[
+                                  { label: 'Auto', value: 'auto' },
+                                  { label: 'Homme ♂', value: 'male' },
+                                  { label: 'Femme ♀', value: 'female' }
+                                ].map((genderOption) => (
+                                  <button
+                                    key={genderOption.value}
+                                    onClick={() => {
+                                      setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
+                                      try {
+                                        localStorage.setItem('bible_voice_gender', genderOption.value);
+                                      } catch (_) {}
+                                      if (isSpeaking && !isPaused) {
+                                        speakVerse(currentSpeakingVerseIndex);
+                                      }
+                                    }}
+                                    className={`px-3 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 cursor-pointer ${
+                                      voiceGender === genderOption.value 
+                                        ? 'bg-[#c9a84c] text-[#0d0b07] shadow-sm font-black' 
+                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
+                                    }`}
+                                  >
+                                    {genderOption.label}
+                                  </button>
+                                ))}
                               </div>
-                              <div className="flex items-center gap-3">
-                                <span className="text-xs text-[#6b6355] font-black">🔈</span>
-                                <div className="relative flex-1 flex items-center h-5">
+                            </div>
+
+                            {/* rawReading Switch Toggle */}
+                            <div className="flex items-center justify-between py-1.5 border-t border-[#2e2a1e]/20">
+                              <div className="text-left space-y-0.5">
+                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Lecture Directe (Anti-bruit)</span>
+                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Bypasse le pitch-shifter pour éviter les micro-saccades vocales</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const nextVal = !isRawReading;
+                                  setIsRawReading(nextVal);
+                                }}
+                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                  isRawReading ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                }`}
+                              >
+                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                  isRawReading ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                }`} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Melody Style & Volume Config (Only visible when melody is enabled) */}
+                          {isMelodyEnabled && (
+                            <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4 animate-fade-in">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Music className="w-3.5 h-3.5 text-[#a0947f]" />
+                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Réglages Mélodie</h5>
+                              </div>
+
+                              {/* Style Choices */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Style céleste</span>
+                                <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-1.5 gap-2 sm:gap-2.5">
+                                  {MELODY_STYLES.map((styleOption) => (
+                                    <button
+                                      key={styleOption.id}
+                                      onClick={() => {
+                                        setMelodyStyle(styleOption.id);
+                                        try {
+                                          localStorage.setItem('bible_melody_style', styleOption.id);
+                                        } catch (_) {}
+                                      }}
+                                      className={`px-2.5 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                                        melodyStyle === styleOption.id
+                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] font-black'
+                                          : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
+                                      }`}
+                                      title={styleOption.description}
+                                    >
+                                      <span className="text-xs shrink-0">{styleOption.icon}</span>
+                                      <span>{styleOption.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Volume range slider */}
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Volume de l'ambiance</span>
+                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold">
+                                    {Math.round(melodyVolume * 250)}%
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs text-[#6b6355]">🔈</span>
                                   <input
                                     type="range"
                                     min="0"
@@ -2929,182 +3066,253 @@ export default function App() {
                                         localStorage.setItem('bible_melody_volume', String(vol));
                                       } catch (_) {}
                                     }}
-                                    className="w-full accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1.5 cursor-pointer transition-all duration-200 hover:border-[#c9a84c]/30"
-                                    title="Ajuster le volume de la mélodie céleste"
+                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
                                   />
+                                  <span className="text-xs text-[#6b6355]">🔊</span>
                                 </div>
-                                <span className="text-xs text-[#c9a84c] font-black">🔊</span>
                               </div>
                             </div>
-                          </div>
-                        )}
+                          )}
 
-                        {/* Elegant Sleep / Vigil Timer (Veille Spirituelle) nested option */}
-                        <div className="pt-3.5 border-t border-[#2e2a1e]/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                          <div className="flex items-center gap-3 text-left">
-                            <div className={`p-2 rounded-xl border flex items-center justify-center transition-all ${isVigilActive ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] animate-pulse' : 'bg-[#12100c] border-[#2e2a1e] text-[#6b6355]'}`}>
-                              <Moon className="w-4 h-4" />
-                            </div>
-                            <div className="space-y-0.5">
-                              <h5 className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#c9a84c]">Veille Spirituelle</h5>
-                              <p className="text-[11px] text-[#6b6355]">Diminue progressivement la luminosité et le volume pour le coucher</p>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2.5">
-                            {/* Duration pills (only if vigil is not active) */}
-                            {!isVigilActive ? (
-                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5">
-                                {[
-                                  { label: '20 min', val: 20 },
-                                  { label: '10 min', val: 10 },
-                                  { label: '5 min', val: 5 },
-                                  { label: '1 min (Test)', val: 1 }
-                                ].map((opt) => (
-                                  <button
-                                    key={opt.val}
-                                    onClick={() => setVigilDuration(opt.val)}
-                                    className={`px-2.5 py-1 text-[9px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
-                                      vigilDuration === opt.val 
-                                        ? 'bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30' 
-                                        : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                                    }`}
-                                  >
-                                    {opt.label}
-                                  </button>
-                                ))}
+                          {/* Nature Style & Volume Config (Only visible when nature is enabled) */}
+                          {isNatureEnabled && (
+                            <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4 animate-fade-in">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs">🌲</span>
+                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Réglages Nature</h5>
                               </div>
-                            ) : (
-                              // Countdown
-                              <div className="flex items-center gap-2 bg-[#c9a84c]/10 border border-[#c9a84c]/30 px-3 py-1 rounded-xl text-xs font-mono font-bold text-[#c9a84c]">
-                                <Timer className="w-3.5 h-3.5 animate-spin" />
-                                <span>{Math.floor(vigilTimeRemaining / 60)}:{(vigilTimeRemaining % 60).toString().padStart(2, '0')} restants</span>
+
+                              {/* Style Choices */}
+                              <div className="space-y-1.5">
+                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Ambiance naturelle</span>
+                                <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-1.5 gap-2 sm:gap-2.5">
+                                  {NATURE_SOUNDS.filter(s => s.id !== 'none').map((soundOption) => (
+                                    <button
+                                      key={soundOption.id}
+                                      onClick={() => {
+                                        setNatureSoundType(soundOption.id);
+                                        try {
+                                          localStorage.setItem('bible_nature_type', soundOption.id);
+                                        } catch (_) {}
+                                      }}
+                                      className={`px-2.5 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                                        natureSoundType === soundOption.id
+                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] font-black'
+                                          : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
+                                      }`}
+                                      title={soundOption.description}
+                                    >
+                                      <span className="text-xs shrink-0">{soundOption.icon}</span>
+                                      <span>{soundOption.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Volume range slider */}
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Volume de la nature</span>
+                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold">
+                                    {Math.round(natureSoundVolume * 100)}%
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs text-[#6b6355]">🔈</span>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="1.0"
+                                    step="0.05"
+                                    value={natureSoundVolume}
+                                    onChange={(e) => {
+                                      const vol = Number(e.target.value);
+                                      setNatureSoundVolume(vol);
+                                      try {
+                                        localStorage.setItem('bible_nature_volume', String(vol));
+                                      } catch (_) {}
+                                    }}
+                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
+                                  />
+                                  <span className="text-xs text-[#6b6355]">🔊</span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Sleep Timer (Veille Spirituelle) Group */}
+                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
+                            <div className="flex items-center justify-between py-1">
+                              <div className="flex items-center gap-2">
+                                <Moon className="w-3.5 h-3.5 text-[#a0947f]" />
+                                <div className="text-left space-y-0.5">
+                                  <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Minuteur de Sommeil</span>
+                                  <p className="text-[10px] text-[#6b6355] leading-relaxed">Atténue progressivement les volumes pour le coucher</p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2.5">
+                                {isVigilActive && (
+                                  <div className="flex items-center gap-1.5 bg-[#c9a84c]/10 border border-[#c9a84c]/30 px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold text-[#c9a84c]">
+                                    <Timer className="w-3 h-3 animate-spin" />
+                                    <span>{Math.floor(vigilTimeRemaining / 60)}:{(vigilTimeRemaining % 60).toString().padStart(2, '0')}</span>
+                                  </div>
+                                )}
+                                <button
+                                  onClick={toggleVigilMode}
+                                  className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                    isVigilActive ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                  }`}
+                                >
+                                  <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                    isVigilActive ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                  }`} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Duration selectors if not active */}
+                            {!isVigilActive && (
+                              <div className="flex items-center justify-between gap-4 pt-1.5 border-t border-[#2e2a1e]/20">
+                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Durée de veille</span>
+                                <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5">
+                                  {[
+                                    { label: '20m', val: 20 },
+                                    { label: '10m', val: 10 },
+                                    { label: '5m', val: 5 },
+                                    { label: '1m (Test)', val: 1 }
+                                  ].map((opt) => (
+                                    <button
+                                      key={opt.val}
+                                      onClick={() => setVigilDuration(opt.val)}
+                                      className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                                        vigilDuration === opt.val 
+                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/20' 
+                                          : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Navigation & Layout Options (Subtle switches list) */}
+                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Eye className="w-3.5 h-3.5 text-[#a0947f]" />
+                              <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Affichage & Défilement</h5>
+                            </div>
+
+                            {/* Suivi vocal actif switch */}
+                            <div className="flex items-center justify-between py-1">
+                              <div className="text-left space-y-0.5">
+                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Suivi vocal automatique</span>
+                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Centre l'écran sur le verset prononcé en temps réel</p>
+                              </div>
+                              <button
+                                onClick={() => setIsAutoScrollWithSpeech(prev => !prev)}
+                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                  isAutoScrollWithSpeech ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                }`}
+                              >
+                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                  isAutoScrollWithSpeech ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                }`} />
+                              </button>
+                            </div>
+
+                            {/* Défilement continu switch */}
+                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
+                              <div className="text-left space-y-0.5">
+                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Défilement continu fluide</span>
+                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Fait descendre lentement le papyrus sans interruption</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const nextVal = !isFluidAutoScrolling;
+                                  setIsFluidAutoScrolling(nextVal);
+                                }}
+                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                  isFluidAutoScrolling ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                }`}
+                              >
+                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                  isFluidAutoScrolling ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                }`} />
+                              </button>
+                            </div>
+
+                            {/* Scroll speed slider if enabled */}
+                            {isFluidAutoScrolling && (
+                              <div className="pl-4 pt-1 flex items-center justify-between gap-4 animate-fade-in">
+                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Vitesse</span>
+                                <div className="flex items-center gap-3 flex-1 justify-end max-w-xs">
+                                  <input
+                                    type="range"
+                                    min="5"
+                                    max="60"
+                                    step="5"
+                                    value={fluidScrollSpeed}
+                                    onChange={(e) => {
+                                      setFluidScrollSpeed(Number(e.target.value));
+                                    }}
+                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
+                                  />
+                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold w-12 text-right shrink-0">
+                                    {fluidScrollSpeed} px/s
+                                  </span>
+                                </div>
                               </div>
                             )}
 
-                            {/* Trigger Toggle */}
-                            <button
-                              onClick={toggleVigilMode}
-                              className={`px-3 py-1.5 rounded-xl text-[9px] font-mono font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
-                                isVigilActive
-                                  ? 'bg-[#ff4d4d]/10 border border-[#ff4d4d]/30 text-[#ff4d4d] hover:bg-[#ff4d4d]/25'
-                                  : 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] hover:opacity-95 shadow-md'
-                              }`}
-                            >
-                              {isVigilActive ? 'Désactiver' : 'Activer'}
-                            </button>
+                            {/* Lecture continue switch */}
+                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
+                              <div className="text-left space-y-0.5">
+                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Lecture en continu (Chapitres)</span>
+                                <p className="text-[10px] text-[#6b6355]">Passe automatiquement au chapitre suivant à la fin</p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const nextVal = !autoAdvanceChapterSpeech;
+                                  setAutoAdvanceChapterSpeech(nextVal);
+                                  try {
+                                    localStorage.setItem('bible_auto_advance_speech', String(nextVal));
+                                  } catch (_) {}
+                                }}
+                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                  autoAdvanceChapterSpeech ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                }`}
+                              >
+                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                  autoAdvanceChapterSpeech ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                }`} />
+                              </button>
+                            </div>
+
+                            {/* Mode Zen switch */}
+                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
+                              <div className="text-left space-y-0.5">
+                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Mode Zen</span>
+                                <p className="text-[10px] text-[#6b6355]">Masque toute la navigation pour une concentration totale</p>
+                              </div>
+                              <button
+                                onClick={() => setIsZenMode(prev => !prev)}
+                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
+                                  isZenMode ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
+                                }`}
+                              >
+                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
+                                  isZenMode ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
+                                }`} />
+                              </button>
+                            </div>
                           </div>
+
                         </div>
-                      </div>
-
-                      {/* Ligne d'intégration Défilement automatique */}
-                      <div className="h-[1px] bg-[#2e2a1e]/40 w-full my-1"></div>
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 w-full">
-                        <div className="flex flex-wrap items-center gap-3">
-                          {/* Switch/Button for auto-scrolling vocal synchronization */}
-                          <button
-                            onClick={() => setIsAutoScrollWithSpeech(prev => !prev)}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
-                              isAutoScrollWithSpeech 
-                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
-                            }`}
-                            title="Centrer automatiquement sur l'écran les versets lors de la lecture audio"
-                          >
-                            <span className="relative flex h-2 w-2">
-                              {isAutoScrollWithSpeech && (
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
-                              )}
-                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isAutoScrollWithSpeech ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
-                            </span>
-                            <span>Suivi vocal actif : {isAutoScrollWithSpeech ? 'Oui' : 'Non'}</span>
-                          </button>
-
-                          {/* Fluid auto-scroll button */}
-                          <button
-                            onClick={() => {
-                              const nextVal = !isFluidAutoScrolling;
-                              setIsFluidAutoScrolling(nextVal);
-                            }}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
-                              isFluidAutoScrolling 
-                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
-                            }`}
-                            title="Faire défiler lentement et en continu la page sans intervention humaine"
-                          >
-                            <span className={`w-3.5 h-3.5 flex items-center justify-center ${isFluidAutoScrolling ? 'text-[#c9a84c] animate-bounce font-sans font-bold' : 'text-[#6b6355]'}`}>
-                              ⇅
-                            </span>
-                            <span>Défilement continu : {isFluidAutoScrolling ? 'Défilé ✓' : 'Arrêté'}</span>
-                          </button>
-
-                          {/* Continuous Chapter Speech Auto-play button */}
-                          <button
-                            onClick={() => {
-                              const nextVal = !autoAdvanceChapterSpeech;
-                              setAutoAdvanceChapterSpeech(nextVal);
-                              try {
-                                localStorage.setItem('bible_auto_advance_speech', String(nextVal));
-                              } catch (_) {}
-                            }}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
-                              autoAdvanceChapterSpeech 
-                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
-                            }`}
-                            title="Passer automatiquement au chapitre suivant à la fin du chapitre actuel"
-                          >
-                            <span className="relative flex h-2 w-2">
-                              {autoAdvanceChapterSpeech && (
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
-                              )}
-                              <span className={`relative inline-flex rounded-full h-2 w-2 ${autoAdvanceChapterSpeech ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
-                            </span>
-                            <span>Lecture continue : {autoAdvanceChapterSpeech ? 'Activée' : 'Désactivée'}</span>
-                          </button>
-
-                          {/* Mode Zen toggle button */}
-                          <button
-                            onClick={() => setIsZenMode(prev => !prev)}
-                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-2 text-[10px] font-mono font-bold uppercase transition duration-150 cursor-pointer ${
-                              isZenMode 
-                                ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c]' 
-                                : 'bg-transparent border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
-                            }`}
-                            title="Masquer la navigation et les sélecteurs de chapitre pour une immersion totale"
-                          >
-                            <span className="relative flex h-2 w-2">
-                              {isZenMode && (
-                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#c9a84c] opacity-75"></span>
-                              )}
-                              <span className={`relative inline-flex rounded-full h-2 w-2 ${isZenMode ? 'bg-[#c9a84c]' : 'bg-[#6b6355]'}`}></span>
-                            </span>
-                            <span>💻 Mode Zen : {isZenMode ? 'Activé' : 'Désactivé'}</span>
-                          </button>
-                        </div>
-
-                        {/* Speed control slider */}
-                        <div className="flex items-center gap-3 self-end sm:self-auto">
-                          <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Vitesse défilement</span>
-                          <input
-                            type="range"
-                            min="5"
-                            max="60"
-                            step="5"
-                            value={fluidScrollSpeed}
-                            disabled={!isFluidAutoScrolling}
-                            onChange={(e) => {
-                              setFluidScrollSpeed(Number(e.target.value));
-                            }}
-                            className="w-28 accent-[#c9a84c] bg-[#1a1712] rounded-lg appearance-none h-1 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="Ajuster la vitesse de glissement automatique de la page des Écritures"
-                          />
-                          <span className={`text-[9.5px] font-mono w-14 text-right font-bold ${isFluidAutoScrolling ? 'text-[#c9a84c]' : 'text-[#6b6355]'}`}>
-                            {fluidScrollSpeed} px/s
-                          </span>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>

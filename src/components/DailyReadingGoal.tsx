@@ -59,7 +59,7 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
   };
 
   return (
-    <div className="bg-[#12100c] border border-[#2e2a1e] rounded-2xl p-5 space-y-4 select-none relative overflow-hidden text-left shadow-soft">
+    <div className="bg-[#12100c] border border-[#2e2a1e] rounded-2xl p-5 md:p-6 space-y-4 select-none relative overflow-hidden text-left shadow-soft">
       {/* Background ambient gold light effects */}
       <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
       <div className="absolute bottom-0 left-0 w-20 h-20 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
@@ -200,7 +200,7 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
 
       {/* Accordion view list of Chapters completed today */}
       {countToday > 0 && (
-        <div className="bg-[#0c0a07] border border-[#2e2a1e]/50 rounded-xl p-2.5 mt-2 text-[10px] space-y-1.5">
+        <div className="bg-[#0c0a07] border border-[#2e2a1e]/50 rounded-xl p-3.5 mt-3.5 text-[10px] space-y-1.5">
           <div className="text-[8px] font-mono text-[#6b6355] uppercase tracking-widest font-black">
             Chapitres accomplis aujourd'hui :
           </div>

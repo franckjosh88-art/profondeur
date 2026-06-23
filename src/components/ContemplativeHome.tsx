@@ -255,8 +255,8 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
         </main>
       ) : (
         /* SECONDARY RETRO/BRONZE GRID DASHBOARD (PRESERVING FUNCTIONAL OUTCOMES) */
-        <main className="relative z-10 flex-1 p-4 space-y-3.5 overflow-y-auto no-scrollbar animate-fade-slide-up">
-          <div className="bg-[#12100c]/90 border border-[#c9a84c]/15 p-4 rounded-xl flex flex-col space-y-2">
+        <main className="relative z-10 flex-1 p-5 md:p-6 space-y-5 md:space-y-6 overflow-y-auto no-scrollbar animate-fade-slide-up">
+          <div className="bg-[#12100c]/90 border border-[#c9a84c]/15 p-5 md:p-6 rounded-xl flex flex-col space-y-2.5">
             <span className="text-[8px] font-mono tracking-[0.15em] text-[#6b6355] uppercase font-bold">Verset en lumière</span>
             <p className="font-serif italic text-xs leading-relaxed text-[#c9a84c]">
               « {activeVerse.quote} »
@@ -264,17 +264,17 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             <span className="font-mono text-[8px] text-[#6b6355] tracking-widest uppercase font-black">{activeVerse.reference}</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-3 md:gap-4">
             <button
               onClick={() => onNavigateToTab('read')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[72px] transition cursor-pointer"
+              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
             >
               <BookOpen className="w-4 h-4 text-[#c9a84c]" />
               <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Lecture</span>
             </button>
             <button
               onClick={() => onNavigateToTab('assistant')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[72px] transition cursor-pointer"
+              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
             >
               <HelpCircle className="w-4 h-4 text-[#c9a84c]" />
               <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Assistant</span>
@@ -282,7 +282,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
           </div>
 
           {/* OBJECTIF LECTURE */}
-          <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-xl p-3 flex items-center justify-between">
+          <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-xl p-4 sm:p-5 flex items-center justify-between">
             <div>
               <span className="text-[8px] font-mono text-[#6b6355] uppercase tracking-wider">Objectif quotidien</span>
               <span className="text-xs font-serif font-black text-[#e8e0d0] block">Complété à {goalPercent}%</span>

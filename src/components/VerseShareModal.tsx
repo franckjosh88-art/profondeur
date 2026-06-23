@@ -119,6 +119,8 @@ export const VerseShareModal: React.FC<VerseShareModalProps> = ({ verse, onClose
   const [bgTextureIntensity, setBgTextureIntensity] = useState<number>(30); // 0 to 100
 
   const [copiedLink, setCopiedLink] = useState(false);
+  const [mobileImageBlobUrl, setMobileImageBlobUrl] = useState<string | null>(null);
+  const [isMobileSaveOpen, setIsMobileSaveOpen] = useState(false);
 
   // Strip strong tags [H1234] from text for the clean image card
   const cleanText = verse.text.replace(/\[[HG]\d+\]/g, '').trim();
@@ -478,18 +480,51 @@ export const VerseShareModal: React.FC<VerseShareModalProps> = ({ verse, onClose
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     try {
       const dataUrl = canvas.toDataURL('image/png');
+      
+      // Check if user is on mobile
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+      // Web Share API support check for sharing files directly
+      if (isMobile && navigator.share && navigator.canShare) {
+        try {
+          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+          if (blob) {
+            const fileName = `BibleProfonde_${verse.book_name.replace(/\s+/g, '')}_Ch${verse.chapter}_V${verse.verse}.png`;
+            const file = new File([blob], fileName, { type: 'image/png' });
+            
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+                title: `Bible Profonde - ${verse.book_name}`,
+                text: `Découvrez ce verset illustré : « ${customText} »`
+              });
+              return; // Shared successfully, no need to trigger manual fallback
+            }
+          }
+        } catch (shareErr) {
+          console.warn("Web Share files failed, falling back to traditional flow", shareErr);
+        }
+      }
+
+      // Traditional download anchor
       const link = document.createElement('a');
       link.download = `BibleProfonde_${verse.book_name.replace(/\s+/g, '')}_Ch${verse.chapter}_V${verse.verse}.png`;
       link.href = dataUrl;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+
+      // Mobile fallback instructions (since programmatic download is often blocked in mobile WebViews / iOS Safari)
+      if (isMobile) {
+        setMobileImageBlobUrl(dataUrl);
+        setIsMobileSaveOpen(true);
+      }
     } catch (e) {
       console.error("Error generating poster image download:", e);
     }
@@ -944,6 +979,51 @@ export const VerseShareModal: React.FC<VerseShareModalProps> = ({ verse, onClose
         </div>
 
       </motion.div>
+
+      {/* Mobile Long-Press Download Backup Modal Overlay */}
+      {isMobileSaveOpen && mobileImageBlobUrl && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-4 bg-black/95 backdrop-blur-md">
+          <div className="absolute inset-0 cursor-default" onClick={() => setIsMobileSaveOpen(false)}></div>
+          
+          <div className="relative bg-[#0d0b07] border border-[#2e2a1e] rounded-[1.5rem] w-full max-w-sm p-5 space-y-4 shadow-2xl text-center z-10 animate-scaleUp">
+            <button 
+              onClick={() => setIsMobileSaveOpen(false)}
+              className="absolute top-3 right-3 p-1.5 rounded-full bg-[#16130f] border border-[#2e2a1e] text-[#807664] hover:text-[#f4efe2] transition duration-150 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+
+            <div className="space-y-1">
+              <span className="text-[9px] font-mono tracking-widest text-[#c9a84c] uppercase font-black">
+                Téléchargement Mobile
+              </span>
+              <h3 className="font-serif font-extrabold text-[#e8e0d0] text-sm">
+                Enregistrer sur votre téléphone
+              </h3>
+              <p className="text-[11px] text-[#807664] leading-relaxed">
+                Le téléchargement direct peut être restreint sur certains navigateurs mobiles. 
+                <strong className="text-[#c9a84c] block mt-1">Restez appuyé sur l'image ci-dessous puis choisissez "Enregistrer dans Photos" ou "Partager".</strong>
+              </p>
+            </div>
+
+            <div className="border border-[#2e2a1e] rounded-xl overflow-hidden shadow-lg max-h-[340px] flex items-center justify-center bg-[#070604]">
+              <img 
+                src={mobileImageBlobUrl} 
+                alt="Verset Biblique Généré" 
+                className="max-h-[330px] object-contain pointer-events-auto select-all"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+
+            <button
+              onClick={() => setIsMobileSaveOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-[#16130f] hover:bg-[#201c15] border border-[#2e2a1e] text-[#c9a84c] font-mono text-[10px] font-bold tracking-widest uppercase transition cursor-pointer"
+            >
+              Fermer l'aperçu
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
