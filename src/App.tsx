@@ -16,7 +16,7 @@ import {
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -28,6 +28,7 @@ import { ReadingChallenges } from './components/ReadingChallenges';
 import { StudyStatsChart } from './components/StudyStatsChart';
 import { DailyReminder } from './components/DailyReminder';
 import { DailyReadingGoal } from './components/DailyReadingGoal';
+import { RecentlyReadChapters } from './components/RecentlyReadChapters';
 import { AnalysisCard } from './components/AnalysisCard';
 import { ContextSection } from './components/ContextSection';
 import { VerseQuote } from './components/VerseQuote';
@@ -41,6 +42,21 @@ import { MemorizeModule } from './components/MemorizeModule';
 import { ContemplativeHome } from './components/ContemplativeHome';
 import { audioPurifier } from './utils/audioProcessor';
 import { explainCache, CachedExplanation } from './utils/indexedDBCache';
+
+const LOWER_MALE_NAMES = [
+  'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
+  'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
+  'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
+  'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
+];
+
+const LOWER_FEMALE_NAMES = [
+  'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
+  'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
+  'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
+  'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
+  'zira', 'google français', 'harmonie', 'samantha', 'siri'
+];
 
 export default function App() {
   // Authentication states
@@ -1144,7 +1160,43 @@ export default function App() {
       const voices = window.speechSynthesis.getVoices();
       // Filter voices for French lang
       const frVoices = voices.filter(v => v.lang.startsWith('fr') || v.lang.includes('FR'));
-      setAvailableVoices(frVoices);
+      
+      const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
+      
+      // Sort French voices: prioritize explicit masculine, then general male, then premium/high quality
+      const sortedFrVoices = [...frVoices].sort((a, b) => {
+        const aName = a.name.toLowerCase();
+        const bName = b.name.toLowerCase();
+        
+        // 1. Explicitly marked masculine voices
+        const aHasPriorityMale = priorityMaleKeywords.some(keyword => aName.includes(keyword));
+        const bHasPriorityMale = priorityMaleKeywords.some(keyword => bName.includes(keyword));
+        
+        if (aHasPriorityMale && !bHasPriorityMale) return -1;
+        if (!aHasPriorityMale && bHasPriorityMale) return 1;
+        
+        // 2. Other male voices
+        const aIsMale = LOWER_MALE_NAMES.some(name => aName.includes(name));
+        const bIsMale = LOWER_MALE_NAMES.some(name => bName.includes(name));
+        
+        if (aIsMale && !bIsMale) return -1;
+        if (!aIsMale && bIsMale) return 1;
+        
+        // 3. Premium/High fidelity voices
+        const aIsPremium = aName.includes('google') || aName.includes('natural') || aName.includes('neural') || aName.includes('premium') || aName.includes('high');
+        const bIsPremium = bName.includes('google') || bName.includes('natural') || bName.includes('neural') || bName.includes('premium') || bName.includes('high');
+        
+        if (aIsPremium && !bIsPremium) return -1;
+        if (!aIsPremium && bIsPremium) return 1;
+        
+        // 4. Local service preferences
+        if (a.localService === false && b.localService === true) return -1;
+        if (a.localService === true && b.localService === false) return 1;
+        
+        return 0;
+      });
+
+      setAvailableVoices(sortedFrVoices);
     };
 
     updateVoices();
@@ -1192,6 +1244,60 @@ export default function App() {
       return 'warm_pad';
     }
   });
+
+  // "Veille spirituelle" (Bedtime Sleep/Vigil Timer) states
+  const [isVigilActive, setIsVigilActive] = useState<boolean>(false);
+  const [vigilDuration, setVigilDuration] = useState<number>(20); // default 20 minutes
+  const [vigilTimeRemaining, setVigilTimeRemaining] = useState<number>(0);
+  const [vigilInitialVolume, setVigilInitialVolume] = useState<number>(0.15);
+
+  // Vigil mode sleep timer logic
+  useEffect(() => {
+    if (!isVigilActive) return;
+
+    setVigilInitialVolume(melodyVolume);
+    setVigilTimeRemaining(vigilDuration * 60);
+
+    const intervalId = setInterval(() => {
+      setVigilTimeRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(intervalId);
+          setIsVigilActive(false);
+          // End session: stop speaking and melody to sleep peacefully
+          if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+          }
+          ambientMelody.stop();
+          return 0;
+        }
+
+        const nextTime = prev - 1;
+        const totalSecs = vigilDuration * 60;
+        const ratio = nextTime / totalSecs;
+
+        // Proportional volume reduction (fading down to 0)
+        const nextVolume = Math.max(0, vigilInitialVolume * ratio);
+        setMelodyVolume(nextVolume);
+
+        return nextTime;
+      });
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [isVigilActive, vigilDuration]);
+
+  const toggleVigilMode = () => {
+    if (isVigilActive) {
+      setIsVigilActive(false);
+      setMelodyVolume(vigilInitialVolume);
+      try {
+        localStorage.setItem('bible_melody_volume', String(vigilInitialVolume));
+      } catch (_) {}
+    } else {
+      setVigilInitialVolume(melodyVolume);
+      setIsVigilActive(true);
+    }
+  };
 
   // Synchronize background ambient melody with TTS reading states
   useEffect(() => {
@@ -1249,10 +1355,23 @@ export default function App() {
     const voices = window.speechSynthesis.getVoices();
     const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
     
-    // Sort French voices: prioritize higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
+    // Sort French voices: prioritize explicit masculine first, then general male, then higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
     const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
       const aLower = a.name.toLowerCase();
       const bLower = b.name.toLowerCase();
+      
+      const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
+      const aHasPriorityMale = priorityMaleKeywords.some(keyword => aLower.includes(keyword));
+      const bHasPriorityMale = priorityMaleKeywords.some(keyword => bLower.includes(keyword));
+      
+      if (aHasPriorityMale && !bHasPriorityMale) return -1;
+      if (!aHasPriorityMale && bHasPriorityMale) return 1;
+      
+      const aIsMale = LOWER_MALE_NAMES.some(name => aLower.includes(name));
+      const bIsMale = LOWER_MALE_NAMES.some(name => bLower.includes(name));
+      
+      if (aIsMale && !bIsMale) return -1;
+      if (!aIsMale && bIsMale) return 1;
       
       const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
       const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
@@ -1267,20 +1386,6 @@ export default function App() {
       return 0;
     });
     
-    const lowerMaleNames = [
-      'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-      'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
-      'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-      'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
-    ];
-    const lowerFemaleNames = [
-      'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
-      'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
-      'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
-      'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-      'zira', 'google français', 'harmonie', 'samantha', 'siri'
-    ];
-
     let selectedVoice: SpeechSynthesisVoice | null = null;
     
     // 1. Use manual voice choice if authorized and present
@@ -1288,57 +1393,70 @@ export default function App() {
       selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
     }
 
-    // 2. Fall back on automatic gender-matching lists if no manual voice is chosen
+    // 2. Fall back on automatic gender-matching lists or defaults if no manual voice is chosen
     if (!selectedVoice) {
       if (voiceGender === 'male') {
         // 1. Try exact male names from sorted high quality voices first
         selectedVoice = sortedFrenchVoices.find(voice => 
-          lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+          LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
         ) || null;
         // 2. Try excluding female named voices
         if (!selectedVoice) {
           selectedVoice = sortedFrenchVoices.find(voice => 
-            !lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+            !LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
           ) || null;
         }
       } else if (voiceGender === 'female') {
         // 1. Try exact female names from sorted high quality voices first
         selectedVoice = sortedFrenchVoices.find(voice => 
-          lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
+          LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
         ) || null;
         // 2. Try excluding male named voices
         if (!selectedVoice) {
           selectedVoice = sortedFrenchVoices.find(voice => 
-            !lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
+            !LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
+          ) || null;
+        }
+      } else {
+        // 'auto' mode - Prioritize explicit masculine voices ('male', 'homme', 'paul', 'nicolas')
+        // to guarantee a deep and solemn spiritual reading experience by default!
+        const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
+        selectedVoice = sortedFrenchVoices.find(voice => 
+          priorityMaleKeywords.some(keyword => voice.name.toLowerCase().includes(keyword))
+        ) || null;
+        
+        // Secondary fallback for auto mode: any general male voice
+        if (!selectedVoice) {
+          selectedVoice = sortedFrenchVoices.find(voice => 
+            LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
           ) || null;
         }
       }
     }
 
-    // Fallback if no specific gender voice was found or selected gender is 'auto'
+    // Fallback if no specific voice was determined
     if (!selectedVoice && sortedFrenchVoices.length > 0) {
-      selectedVoice = sortedFrenchVoices.find(voice => voice.lang.includes('FR')) || sortedFrenchVoices[0];
+      selectedVoice = sortedFrenchVoices[0];
     }
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
     }
 
-    // --- ENHANCED PITCH FOR REALISTIC MASCULINE VOICE ---
-    // If the gender is set to 'male', we want a rich, grave, masculine tone.
-    // If a recognized male voice is active, we slightly lower it (0.88x) for a gorgeous, deep, warm register.
-    // If a recognized male voice was NOT available (e.g. browser only has female/neutral voice),
-    // we lower the pitch substantially (0.74x) to realistically and naturally synthesize a clear, professional masculine voice!
-    if (voiceGender === 'male') {
-      const isKnownMale = selectedVoice ? lowerMaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-      if (isKnownMale) {
+    // --- ENHANCED PITCH FOR REALISTIC MASCULINE/FEMININE VOICE ---
+    // If a masculine voice is detected (either in 'male' mode or 'auto' mode with detected male voice),
+    // we slightly lower it for a gorgeous, deep, warm, and solemn reading register.
+    const isMaleVoiceDetected = selectedVoice ? LOWER_MALE_NAMES.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
+    const isFemaleVoiceDetected = selectedVoice ? LOWER_FEMALE_NAMES.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
+
+    if (voiceGender === 'male' || (voiceGender === 'auto' && isMaleVoiceDetected)) {
+      if (isMaleVoiceDetected) {
         utterance.pitch = Math.max(0.65, voicePitch * 0.88);
       } else {
         utterance.pitch = Math.max(0.60, voicePitch * 0.74);
       }
-    } else if (voiceGender === 'female') {
-      const isKnownFemale = selectedVoice ? lowerFemaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-      if (isKnownFemale) {
+    } else if (voiceGender === 'female' || (voiceGender === 'auto' && isFemaleVoiceDetected)) {
+      if (isFemaleVoiceDetected) {
         utterance.pitch = voicePitch * 1.02;
       } else {
         utterance.pitch = Math.min(1.8, voicePitch * 1.18);
@@ -1711,6 +1829,29 @@ export default function App() {
   return (
     <div className={`min-h-screen bg-luxury-bg-deep text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c]`}>
       
+      {/* Veille spirituelle overlays (Sunset eye protection + physical screen dimmer) */}
+      {isVigilActive && (
+        <>
+          {/* Sunset warm orange light blocker filter */}
+          <div 
+            className="fixed inset-0 pointer-events-none z-[9998] transition-opacity duration-1000"
+            style={{
+              backgroundColor: '#cc5a01',
+              opacity: Math.min(0.20, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.20),
+              mixBlendMode: 'color-burn'
+            }}
+          />
+          {/* Pitch-black dimmer filter */}
+          <div 
+            className="fixed inset-0 pointer-events-none z-[9999] transition-opacity duration-1000"
+            style={{
+              backgroundColor: '#050403',
+              opacity: Math.min(0.85, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.85)
+            }}
+          />
+        </>
+      )}
+
       {/* Dynamic luxury TopBar header, syncing click navigations */}
       {!isZenMode && (
         <TopBar 
@@ -1991,18 +2132,13 @@ export default function App() {
                               }
 
                               // Align test pitch with advanced gender preferences
-                              const testMaleNames = [
-                                'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-                                'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
-                                'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-                                'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
-                              ];
-                              if (voiceGender === 'male') {
-                                const isKnownMale = targetVoic ? testMaleNames.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
-                                utterance.pitch = isKnownMale ? Math.max(0.65, voicePitch * 0.88) : Math.max(0.60, voicePitch * 0.74);
-                              } else if (voiceGender === 'female') {
-                                const isKnownMale = targetVoic ? testMaleNames.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
-                                utterance.pitch = isKnownMale ? Math.min(1.8, voicePitch * 1.18) : voicePitch * 1.02;
+                              const isMaleVoice = targetVoic ? LOWER_MALE_NAMES.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
+                              const isFemaleVoice = targetVoic ? LOWER_FEMALE_NAMES.some(name => targetVoic.name.toLowerCase().includes(name)) : false;
+
+                              if (voiceGender === 'male' || (voiceGender === 'auto' && isMaleVoice)) {
+                                utterance.pitch = isMaleVoice ? Math.max(0.65, voicePitch * 0.88) : Math.max(0.60, voicePitch * 0.74);
+                              } else if (voiceGender === 'female' || (voiceGender === 'auto' && isFemaleVoice)) {
+                                utterance.pitch = isFemaleVoice ? voicePitch * 1.02 : Math.min(1.8, voicePitch * 1.18);
                               } else {
                                 utterance.pitch = voicePitch;
                               }
@@ -2802,6 +2938,63 @@ export default function App() {
                             </div>
                           </div>
                         )}
+
+                        {/* Elegant Sleep / Vigil Timer (Veille Spirituelle) nested option */}
+                        <div className="pt-3.5 border-t border-[#2e2a1e]/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 text-left">
+                            <div className={`p-2 rounded-xl border flex items-center justify-center transition-all ${isVigilActive ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] animate-pulse' : 'bg-[#12100c] border-[#2e2a1e] text-[#6b6355]'}`}>
+                              <Moon className="w-4 h-4" />
+                            </div>
+                            <div className="space-y-0.5">
+                              <h5 className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#c9a84c]">Veille Spirituelle</h5>
+                              <p className="text-[11px] text-[#6b6355]">Diminue progressivement la luminosité et le volume pour le coucher</p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            {/* Duration pills (only if vigil is not active) */}
+                            {!isVigilActive ? (
+                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5">
+                                {[
+                                  { label: '20 min', val: 20 },
+                                  { label: '10 min', val: 10 },
+                                  { label: '5 min', val: 5 },
+                                  { label: '1 min (Test)', val: 1 }
+                                ].map((opt) => (
+                                  <button
+                                    key={opt.val}
+                                    onClick={() => setVigilDuration(opt.val)}
+                                    className={`px-2.5 py-1 text-[9px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                                      vigilDuration === opt.val 
+                                        ? 'bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30' 
+                                        : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              // Countdown
+                              <div className="flex items-center gap-2 bg-[#c9a84c]/10 border border-[#c9a84c]/30 px-3 py-1 rounded-xl text-xs font-mono font-bold text-[#c9a84c]">
+                                <Timer className="w-3.5 h-3.5 animate-spin" />
+                                <span>{Math.floor(vigilTimeRemaining / 60)}:{(vigilTimeRemaining % 60).toString().padStart(2, '0')} restants</span>
+                              </div>
+                            )}
+
+                            {/* Trigger Toggle */}
+                            <button
+                              onClick={toggleVigilMode}
+                              className={`px-3 py-1.5 rounded-xl text-[9px] font-mono font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                                isVigilActive
+                                  ? 'bg-[#ff4d4d]/10 border border-[#ff4d4d]/30 text-[#ff4d4d] hover:bg-[#ff4d4d]/25'
+                                  : 'bg-gradient-to-b from-[#e3bf5d] to-[#c9a84c] text-[#0d0b07] hover:opacity-95 shadow-md'
+                              }`}
+                            >
+                              {isVigilActive ? 'Désactiver' : 'Activer'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Ligne d'intégration Défilement automatique */}
@@ -3320,6 +3513,12 @@ export default function App() {
             >
               {/* Daily Chapter Reading Goal & Progress Bar widget */}
               <DailyReadingGoal readingHistory={readingHistory} />
+
+              {/* Recently Read Chapters chronological history list */}
+              <RecentlyReadChapters 
+                readingHistory={readingHistory} 
+                onNavigateToChapter={handleNavigateChallengeToReader} 
+              />
 
               {/* Daily Reminder Scheduler widget */}
               <DailyReminder />
