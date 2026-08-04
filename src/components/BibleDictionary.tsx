@@ -264,6 +264,9 @@ export const BibleDictionary: React.FC<BibleDictionaryProps> = ({ onSearchRefere
                     </div>
                     <h2 className="font-serif font-black text-2xl text-[#e8e0d0] tracking-tight">{result.term}</h2>
                   </div>
+                  <span className="px-2 py-0.5 text-[8px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded-full select-none">
+                    Analyse générée par IA — à vérifier
+                  </span>
                 </div>
 
                 {/* Etymology meaning bar */}

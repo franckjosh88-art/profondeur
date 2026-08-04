@@ -19,39 +19,22 @@ export function isSqliteInitialized(): boolean {
   }
 }
 
-// Perform SQLite relational database import at first launch
+// Perform SQLite database status check and setup
 export function initializeSqliteDatabase(
   onProgress: (progress: number, text: string) => void
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    let currentProgress = 0;
-    const steps = [
-      { prg: 10, text: "Initialisation du fichier SQLite mobile client..." },
-      { prg: 25, text: "Création des tables SQL : 'books', 'verses', 'strong_index'..." },
-      { prg: 45, text: "Lecture du bundle JSON local 'bible-classic.json'..." },
-      { prg: 65, text: "Importation relationnelle de 66 livres dans la table 'books'..." },
-      { prg: 80, text: "Peuplement de la table 'verses' avec annotations d'études..." },
-      { prg: 95, text: "Création de la table de concordance et dictionnaire Strong..." },
-      { prg: 100, text: "Sanctuaire SQLite initialisé avec succès ! Prêt pour la lecture offline." }
-    ];
-
-    let currentStepIndex = 0;
-    const interval = setInterval(() => {
-      if (currentStepIndex < steps.length) {
-        const step = steps[currentStepIndex];
-        currentProgress = step.prg;
-        onProgress(currentProgress, step.text);
-        currentStepIndex++;
-      } else {
-        clearInterval(interval);
-        try {
-          localStorage.setItem('sqlite_bible_initialized', 'true');
-        } catch (e) {
-          console.warn("localStorage disabled");
-        }
-        resolve(true);
+    // Honest message: only STATIC_VERSES are available offline, the rest requires an internet connection
+    onProgress(50, "Vérification des données locales...");
+    setTimeout(() => {
+      onProgress(100, "Base de données hors-ligne prête : seuls les passages de la Bible LSG 1910 importés (dans STATIC_VERSES) sont disponibles hors-ligne. Le reste nécessite une connexion.");
+      try {
+        localStorage.setItem('sqlite_bible_initialized', 'true');
+      } catch (e) {
+        console.warn("localStorage disabled");
       }
-    }, 400); // Simulated progress increments for luxury UX
+      resolve(true);
+    }, 300);
   });
 }
 
@@ -63,54 +46,6 @@ export function resetSqliteDatabase() {
 }
 
 const STATIC_VERSES: Record<string, any[]> = BIBLE_JSON.verses as Record<string, any[]>;
-
-// Pseudo-random premium scripture generator for offline fallback (100% Offline coverage for all 66 books!)
-const FAITH_WORDS_H = ["H7225", "H1513", "H1918", "H3068", "H430", "H7462", "H3444"];
-const FAITH_WORDS_G = ["G3056", "G26", "G4102", "G5485", "G1097", "G1515", "G1422"];
-
-function getOfflineGeneratedVerses(bookId: number, bookName: string, chapter: number): Verse[] {
-  // We can seed a deterministic generator based on bookId and chapter
-  const count = 10 + ((bookId * 7 + chapter * 3) % 15); // between 10 and 24 verses
-  const versesList: Verse[] = [];
-
-  const sentences = [
-    `Oracle [H7225] de la parole de l'Éternel adressé à Son peuple lors de la traversée bénie.`,
-    `Car la foi [G4102] est la ferme assurance des choses qu'on espère, la démonstration de celles qu'on ne voit pas.`,
-    `Dans l'épreuve, réjouis-toi car l'Éternel est ta force, un abri sous l'Esprit du Très-Haut.`,
-    `Que votre amour [G26] soit sans hypocrisie. Ayez le mal en horreur; attachez-vous fortement au bien.`,
-    `La lumière divine luit dans les ténèbres les plus denses du cœur repentant.`,
-    `Celui qui écoute la Parole [G3056] et la met en pratique ressemble à un homme avisé qui a bâti sur le roc.`,
-    `L'Éternel se souviendra à jamais de l'alliance divine scellée par la vérité.`,
-    `Mijote les enseignements sacrés le jour et la nuit pour parfaire le chemin de ton âme.`,
-    `Heureux ceux dont la voie est intègre, qui marchent selon la loi sacrée de Dieu.`,
-    `Ma grâce [G5485] te suffit, car ma puissance s'accomplit dans la faiblesse de l'homme.`
-  ];
-
-  for (let i = 1; i <= count; i++) {
-    const sentenceIndex = (bookId * 5 + chapter * 11 + i * 3) % sentences.length;
-    let baseSentence = sentences[sentenceIndex];
-    
-    // Customize starting of verse sometimes
-    if (i === 1) {
-      baseSentence = `Chapitre ${chapter} du livre de ${bookName}. ` + baseSentence;
-    } else {
-      // randomly inject a Strong Number from time to time
-      if ((bookId + i) % 4 === 0) {
-        baseSentence = baseSentence.replace("Dieu", "Dieu [H430]");
-      }
-    }
-
-    versesList.push({
-      book_id: bookId,
-      book_name: bookName,
-      chapter: chapter,
-      verse: i,
-      text: baseSentence
-    });
-  }
-
-  return versesList;
-}
 
 // 100% Offline SQLite Chapter queries
 export const BOOK_MAPPING_TO_ENGLISH: Record<number, string> = {
@@ -215,7 +150,7 @@ export async function fetchOnlineChapter(
   }));
 }
 
-export function querySqliteChapter(bookId: number, bookName: string, chapterNum: number): Verse[] {
+export function querySqliteChapter(bookId: number, bookName: string, chapterNum: number): Verse[] | null {
   const cacheKey = `${bookId}_${chapterNum}`;
   if (STATIC_VERSES[cacheKey]) {
     return STATIC_VERSES[cacheKey].map(v => ({
@@ -227,8 +162,7 @@ export function querySqliteChapter(bookId: number, bookName: string, chapterNum:
     }));
   }
   
-  // Generates offline scriptures deterministically if not fully detailed in the minimal bundle
-  return getOfflineGeneratedVerses(bookId, bookName, chapterNum);
+  return null;
 }
 
 export const STRONG_ENTRIES: Record<string, StrongEntry> = {

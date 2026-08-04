@@ -2,15 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Crown, BookOpen, Award, Sparkles, Plus, Minus, Trophy, 
-  CheckCircle2, Flame, Calendar, RefreshCw 
+  CheckCircle2, Flame, Calendar, RefreshCw, Timer, Clock
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
 
 interface DailyReadingGoalProps {
   readingHistory: ReadingHistory[];
+  readingTimeToday: number;
+  setReadingTimeToday: React.Dispatch<React.SetStateAction<number>>;
+  dailyTimeGoal: number;
+  setDailyTimeGoal: (goal: number) => void;
+  goalType: 'chapters' | 'time';
+  setGoalType: (type: 'chapters' | 'time') => void;
 }
 
-export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHistory }) => {
+export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ 
+  readingHistory,
+  readingTimeToday,
+  setReadingTimeToday,
+  dailyTimeGoal,
+  setDailyTimeGoal,
+  goalType,
+  setGoalType
+}) => {
   const [dailyGoal, setDailyGoal] = useState<number>(3);
   const [showCelebration, setShowCelebration] = useState<boolean>(false);
 
@@ -34,13 +48,21 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
   });
 
   const countToday = todayReadings.length;
-  const progressRatio = countToday / dailyGoal;
+  const minutesToday = Math.floor(readingTimeToday / 60);
+  const secondsLeft = readingTimeToday % 60;
+
+  const progressRatio = goalType === 'chapters' 
+    ? countToday / dailyGoal 
+    : (readingTimeToday / 60) / dailyTimeGoal;
+
   const percent = Math.min(100, Math.round(progressRatio * 100));
-  const isGoalReached = countToday >= dailyGoal;
+  const isGoalReached = goalType === 'chapters' 
+    ? countToday >= dailyGoal 
+    : (readingTimeToday / 60) >= dailyTimeGoal;
 
   // Trigger celebration on reaching goal for the first time in session
   useEffect(() => {
-    if (isGoalReached && countToday > 0) {
+    if (isGoalReached && (countToday > 0 || readingTimeToday > 0)) {
       const triggeredToday = localStorage.getItem(`goal_celebration_${todayStr}`);
       if (!triggeredToday) {
         setShowCelebration(true);
@@ -50,12 +72,43 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
         return () => clearTimeout(timer);
       }
     }
-  }, [isGoalReached, countToday, todayStr]);
+  }, [isGoalReached, countToday, readingTimeToday, todayStr]);
 
   const handleUpdateGoal = (amount: number) => {
-    const nextGoal = Math.max(1, Math.min(20, dailyGoal + amount));
-    setDailyGoal(nextGoal);
-    localStorage.setItem('bible_daily_goal', String(nextGoal));
+    if (goalType === 'chapters') {
+      const nextGoal = Math.max(1, Math.min(20, dailyGoal + amount));
+      setDailyGoal(nextGoal);
+      localStorage.setItem('bible_daily_goal', String(nextGoal));
+    } else {
+      // Adjust minutes goal (5-120 min, by steps of 5)
+      const nextGoal = Math.max(5, Math.min(120, dailyTimeGoal + (amount * 5)));
+      setDailyTimeGoal(nextGoal);
+      localStorage.setItem('bible_daily_goal_time', String(nextGoal));
+    }
+  };
+
+  const handleAddManualTime = (minutes: number) => {
+    setReadingTimeToday(prev => {
+      const nextTime = prev + (minutes * 60);
+      
+      // Save directly to localStorage
+      let durations: Record<string, number> = {};
+      const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
+      if (savedDurations) {
+        try {
+          durations = JSON.parse(savedDurations);
+        } catch (e) {}
+      }
+      durations[todayStr] = nextTime;
+      localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
+
+      return nextTime;
+    });
+  };
+
+  const handleResetCelebration = () => {
+    localStorage.removeItem(`goal_celebration_${todayStr}`);
+    setShowCelebration(false);
   };
 
   return (
@@ -83,7 +136,10 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
                 « Celui qui persévère dans la vérité verra sa foi couronnée de lumière. »
               </p>
               <p className="text-[9px] text-[#6b6355] font-mono uppercase tracking-widest pt-1">
-                {countToday} / {dailyGoal} chapitres lus aujourd'hui
+                {goalType === 'chapters' 
+                  ? `${countToday} / ${dailyGoal} chapitres lus aujourd'hui`
+                  : `${minutesToday} min de méditation accomplies aujourd'hui`
+                }
               </p>
               <button 
                 onClick={() => setShowCelebration(false)}
@@ -97,45 +153,55 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
       </AnimatePresence>
 
       {/* Header and Title Section */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <div className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all ${
             isGoalReached 
               ? 'bg-[#c9a84c]/10 border-[#c9a84c] text-[#c9a84c]' 
               : 'bg-[#1a1712] border-[#2e2a1e] text-[#6b6355]'
           }`}>
-            {isGoalReached ? <Trophy className="w-4.5 h-4.5 text-[#c9a84c] animate-pulse" /> : <BookOpen className="w-4.5 h-4.5 text-[#a0947f]" />}
+            {isGoalReached ? (
+              <Trophy className="w-4.5 h-4.5 text-[#c9a84c] animate-pulse" />
+            ) : goalType === 'chapters' ? (
+              <BookOpen className="w-4.5 h-4.5 text-[#a0947f]" />
+            ) : (
+              <Timer className="w-4.5 h-4.5 text-[#a0947f]" />
+            )}
           </div>
           <div>
-            <h4 className="font-serif font-extrabold text-[13px] text-[#e8e0d0] tracking-tight">Objectif Spirituel Quotidien</h4>
+            <h4 className="font-serif font-extrabold text-[13px] text-[#e8e0d0] tracking-tight">Objectif Quotidien</h4>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-[8.5px] font-mono text-[#6b6355] uppercase flex items-center gap-1">
                 <Calendar className="w-3 h-3 text-[#c9a84c]" />
-                Progression du Jour
+                Fidélité & Temps de lecture
               </span>
             </div>
           </div>
         </div>
 
-        {/* Dynamic Chapter Goal Setter dial */}
-        <div className="bg-[#1a1712] border border-[#2e2a1e] rounded-xl px-2.5 py-1 flex items-center gap-2">
+        {/* Dynamic Goal Setter dial based on selected goal type */}
+        <div className="bg-[#1a1712] border border-[#2e2a1e] rounded-xl px-2.5 py-1 flex items-center gap-2 self-start sm:self-auto">
           <button 
             onClick={() => handleUpdateGoal(-1)}
-            disabled={dailyGoal <= 1}
+            disabled={goalType === 'chapters' ? dailyGoal <= 1 : dailyTimeGoal <= 5}
             className="p-1 text-[#6b6355] hover:text-[#c9a84c] disabled:opacity-30 disabled:hover:text-[#6b6355] transition text-xs shrink-0 cursor-pointer"
             title="Diminuer l'objectif"
           >
             <Minus className="w-3 h-3" />
           </button>
           
-          <div className="text-center min-w-[36px]">
-            <p className="text-[11px] font-mono font-bold text-[#c9a84c] leading-none">{dailyGoal}</p>
-            <span className="text-[6.5px] font-mono text-[#6b6355] uppercase tracking-wider block mt-0.5">ch. / jour</span>
+          <div className="text-center min-w-[50px]">
+            <p className="text-[11px] font-mono font-bold text-[#c9a84c] leading-none">
+              {goalType === 'chapters' ? dailyGoal : dailyTimeGoal}
+            </p>
+            <span className="text-[6.5px] font-mono text-[#6b6355] uppercase tracking-wider block mt-0.5">
+              {goalType === 'chapters' ? 'ch. / jour' : 'min. / jour'}
+            </span>
           </div>
 
           <button 
             onClick={() => handleUpdateGoal(1)}
-            disabled={dailyGoal >= 20}
+            disabled={goalType === 'chapters' ? dailyGoal >= 20 : dailyTimeGoal >= 120}
             className="p-1 text-[#6b6355] hover:text-[#c9a84c] disabled:opacity-30 disabled:hover:text-[#6b6355] transition text-xs shrink-0 cursor-pointer"
             title="Augmenter l'objectif"
           >
@@ -144,8 +210,40 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
         </div>
       </div>
 
+      {/* Goal Type Tabs Switcher */}
+      <div className="flex bg-[#1a1712] border border-[#2e2a1e] rounded-xl p-0.5 gap-1 select-none">
+        <button
+          onClick={() => {
+            setGoalType('chapters');
+            localStorage.setItem('bible_daily_goal_type', 'chapters');
+          }}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            goalType === 'chapters'
+              ? 'bg-[#c9a84c] text-black shadow-md'
+              : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>📚 Chapitres</span>
+        </button>
+        <button
+          onClick={() => {
+            setGoalType('time');
+            localStorage.setItem('bible_daily_goal_type', 'time');
+          }}
+          className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+            goalType === 'time'
+              ? 'bg-[#c9a84c] text-black shadow-md'
+              : 'text-[#6b6355] hover:text-[#e8e0d0]'
+          }`}
+        >
+          <Timer className="w-3.5 h-3.5" />
+          <span>⏱️ Temps de lecture</span>
+        </button>
+      </div>
+
       {/* Main Global Progress Bar with Gold Glow and Shine Effect */}
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         <div className="flex items-center justify-between text-[11px] font-mono">
           <div className="flex items-center gap-1.5">
             <span className="text-[#a0947f]">Statut :</span>
@@ -153,7 +251,7 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
               <span className="text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1 py-0.5 px-1.5 bg-emerald-500/10 rounded-md border border-emerald-500/15 text-[8.5px]">
                 <CheckCircle2 className="w-3 h-3" /> Complété
               </span>
-            ) : countToday > 0 ? (
+            ) : (countTypeProgress() > 0) ? (
               <span className="text-[#c9a84c] uppercase tracking-wider flex items-center gap-1 text-[8.5px]">
                 <Flame className="w-3 h-3 animate-pulse" /> En chemin
               </span>
@@ -162,7 +260,15 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
             )}
           </div>
           <span className="text-[#e8e0d0] font-bold">
-            {countToday} / {dailyGoal} <span className="text-[10px] text-[#6b6355] font-light font-sans">ch. ({percent}%)</span>
+            {goalType === 'chapters' ? (
+              <>
+                {countToday} / {dailyGoal} <span className="text-[10px] text-[#6b6355] font-light font-sans">ch. ({percent}%)</span>
+              </>
+            ) : (
+              <>
+                {minutesToday} min {secondsLeft}s / {dailyTimeGoal} min <span className="text-[10px] text-[#6b6355] font-light font-sans">({percent}%)</span>
+              </>
+            )}
           </span>
         </div>
 
@@ -180,14 +286,65 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
         </div>
       </div>
 
+      {/* Manual Time Logging Panel for offline reading or audio */}
+      {goalType === 'time' && (
+        <div className="bg-[#1a1712]/60 border border-[#2e2a1e]/50 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-[#c9a84c]" />
+            <span className="text-[10px] font-mono text-[#a0947f] uppercase tracking-wide">Ajouter du temps (Lecture hors-ligne)</span>
+          </div>
+          <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
+            <button
+              onClick={() => handleAddManualTime(1)}
+              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+            >
+              +1 min
+            </button>
+            <button
+              onClick={() => handleAddManualTime(5)}
+              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+            >
+              +5 min
+            </button>
+            <button
+              onClick={() => handleAddManualTime(15)}
+              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+            >
+              +15 min
+            </button>
+            <button
+              onClick={() => {
+                setReadingTimeToday(0);
+                let durations: Record<string, number> = {};
+                const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
+                if (savedDurations) {
+                  try { durations = JSON.parse(savedDurations); } catch (e) {}
+                }
+                durations[todayStr] = 0;
+                localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
+              }}
+              title="Réinitialiser le chrono d'aujourd'hui"
+              className="p-1 text-[#6b6355] hover:text-red-400 transition cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Dynamic Spiritual Motivation Text */}
       <div className="pt-2 border-t border-[#2e2a1e]/40 flex items-center justify-between text-[10px]">
         <p className="text-[#a0947f] italic font-serif leading-relaxed pr-2">
           {isGoalReached 
             ? "« Votre esprit est nourri aujourd'hui. Poursuivez cette fidélité sacré ! »" 
-            : countToday > 0 
-              ? `Il vous reste ${dailyGoal - countToday} chapitre${dailyGoal - countToday > 1 ? 's' : ''} à lire pour accomplir votre objectif de sagesse.` 
-              : "« Un chapitre par jour sanctifie un esprit. Prenez un instant spirituel. »"}
+            : goalType === 'chapters' 
+              ? (countToday > 0 
+                ? `Il vous reste ${dailyGoal - countToday} chapitre${dailyGoal - countToday > 1 ? 's' : ''} à lire pour accomplir votre objectif de sagesse.` 
+                : "« Un chapitre par jour sanctifie un esprit. Prenez un instant spirituel. »")
+              : (readingTimeToday > 0
+                ? `Il vous reste environ ${Math.max(1, dailyTimeGoal - minutesToday)} minute${(dailyTimeGoal - minutesToday) > 1 ? 's' : ''} de lecture pour atteindre votre objectif.`
+                : "« Prenez quelques minutes de recueillement et de lecture pour élever votre âme. »")
+          }
         </p>
 
         {isGoalReached && (
@@ -198,7 +355,7 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
         )}
       </div>
 
-      {/* Accordion view list of Chapters completed today */}
+      {/* Accordion view list of Chapters completed today (Only visible under chapters tab or if we have readings done) */}
       {countToday > 0 && (
         <div className="bg-[#0c0a07] border border-[#2e2a1e]/50 rounded-xl p-3.5 mt-3.5 text-[10px] space-y-1.5">
           <div className="text-[8px] font-mono text-[#6b6355] uppercase tracking-widest font-black">
@@ -219,4 +376,8 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ readingHisto
       )}
     </div>
   );
+
+  function countTypeProgress() {
+    return goalType === 'chapters' ? countToday : readingTimeToday;
+  }
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   doc, setDoc, getDoc, onSnapshot, collection, deleteDoc, updateDoc, writeBatch
 } from 'firebase/firestore';
@@ -43,12 +43,13 @@ import { MemorizeModule } from './components/MemorizeModule';
 import { ContemplativeHome } from './components/ContemplativeHome';
 import { audioPurifier } from './utils/audioProcessor';
 import { explainCache, CachedExplanation } from './utils/indexedDBCache';
+import { playCompletionChime, triggerGoldenSparks } from './utils/soundEffects';
 
 const LOWER_MALE_NAMES = [
   'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
   'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
   'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-  'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
+  'x-frd', 'x-frb', 'x-fri', 'vcb', 'vcd', 'vch', 'vci', 'vcj', 'vck', 'male', 'man', 'boy', 'guy'
 ];
 
 const LOWER_FEMALE_NAMES = [
@@ -56,7 +57,7 @@ const LOWER_FEMALE_NAMES = [
   'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
   'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
   'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-  'zira', 'google français', 'harmonie', 'samantha', 'siri'
+  'zira', 'google français', 'harmonie', 'samantha', 'siri', 'vca', 'vcc', 'vce', 'vcf', 'vcg'
 ];
 
 export default function App() {
@@ -69,6 +70,7 @@ export default function App() {
   const [displayName, setDisplayName] = useState<string>('');
   const [authError, setAuthError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = useState<boolean>(false);
 
   // User Settings 
   const [textSize, setTextSize] = useState<number>(18);
@@ -108,7 +110,9 @@ export default function App() {
   const [selectedChapter, setSelectedChapter] = useState<number>(1);
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingVerses, setLoadingVerses] = useState<boolean>(false);
+  const [loadingError, setLoadingError] = useState<string | null>(null);
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null); // formatted as "bookId_chapter_verse"
+  const [targetResumeVerseNum, setTargetResumeVerseNum] = useState<number | null>(null);
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   
   // Continuous scroll states
@@ -227,7 +231,7 @@ export default function App() {
               const isPreloaded = (bk.id === 1 && (ch === 1 || ch === 2)) || 
                                   (bk.id === 19 && ch === 23);
               if (isPreloaded) {
-                verses = querySqliteChapter(bk.id, bk.name, ch);
+                verses = querySqliteChapter(bk.id, bk.name, ch) || [];
               } else {
                 try {
                   const response = await fetch('/api/gemini/fetch-verses', {
@@ -288,12 +292,65 @@ export default function App() {
   }, [isSettingsOpen]);
 
   const [localDailyGoal, setLocalDailyGoal] = useState<number>(3);
+  const [dailyTimeGoal, setDailyTimeGoal] = useState<number>(15); // in minutes
+  const [goalType, setGoalType] = useState<'chapters' | 'time'>('chapters');
+  const [readingTimeToday, setReadingTimeToday] = useState<number>(0); // in seconds
+
   useEffect(() => {
     const savedGoal = localStorage.getItem('bible_daily_goal');
     if (savedGoal) {
       setLocalDailyGoal(parseInt(savedGoal, 10) || 3);
     }
+    const savedTimeGoal = localStorage.getItem('bible_daily_goal_time');
+    if (savedTimeGoal) {
+      setDailyTimeGoal(parseInt(savedTimeGoal, 10) || 15);
+    }
+    const savedGoalType = localStorage.getItem('bible_daily_goal_type') as 'chapters' | 'time' | null;
+    if (savedGoalType) {
+      setGoalType(savedGoalType);
+    }
   }, [readingHistory, activeTab]);
+
+  // Load reading durations on mount & tab switches
+  useEffect(() => {
+    const todayStr = new Date().toDateString();
+    const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
+    if (savedDurations) {
+      try {
+        const durations = JSON.parse(savedDurations);
+        if (durations[todayStr]) {
+          setReadingTimeToday(durations[todayStr]);
+        }
+      } catch (e) {}
+    }
+  }, [activeTab]);
+
+  // Timer effect to automatically track seconds spent on reading tab
+  useEffect(() => {
+    if (activeTab !== 'read') return;
+
+    const interval = setInterval(() => {
+      setReadingTimeToday((prev) => {
+        const nextTime = prev + 1;
+        
+        // Save to localStorage
+        const todayStr = new Date().toDateString();
+        let durations: Record<string, number> = {};
+        const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
+        if (savedDurations) {
+          try {
+            durations = JSON.parse(savedDurations);
+          } catch (e) {}
+        }
+        durations[todayStr] = nextTime;
+        localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
+
+        return nextTime;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeTab]);
 
   const todayStrStr = new Date().toDateString();
   const todayReadingsCount = readingHistory.filter(h => {
@@ -305,7 +362,73 @@ export default function App() {
     }
   }).length;
 
-  const goalPercent = Math.min(100, Math.round((todayReadingsCount / localDailyGoal) * 100));
+  const goalPercent = goalType === 'chapters'
+    ? Math.min(100, Math.round((todayReadingsCount / localDailyGoal) * 100))
+    : Math.min(100, Math.round(((readingTimeToday / 60) / dailyTimeGoal) * 100));
+
+  // Computed last read verse ID from reading history
+  const latestHistoryRecord = useMemo(() => {
+    if (!readingHistory || readingHistory.length === 0) return null;
+    return [...readingHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+  }, [readingHistory]);
+
+  const currentChapterHistoryRecord = useMemo(() => {
+    if (!readingHistory || !selectedBook) return null;
+    return readingHistory.find(h => h.book_id === selectedBook.id && h.chapter === selectedChapter);
+  }, [readingHistory, selectedBook, selectedChapter]);
+
+  const lastReadVerseId = latestHistoryRecord && latestHistoryRecord.last_verse
+    ? `${latestHistoryRecord.book_id}_${latestHistoryRecord.chapter}_${latestHistoryRecord.last_verse}`
+    : null;
+
+  // Computed streak for ContemplativeHome and others
+  const currentStreak = useMemo(() => {
+    let streak = 0;
+    const readsByDate: Record<string, boolean> = {};
+    
+    readingHistory.forEach(item => {
+      try {
+        const dateObj = new Date(item.timestamp);
+        if (!isNaN(dateObj.getTime())) {
+          const dateStr = dateObj.toLocaleDateString('fr-FR');
+          readsByDate[dateStr] = true;
+        }
+      } catch (e) {}
+    });
+
+    const d = new Date();
+    // Check back daily starting today
+    while (true) {
+      const dateStr = d.toLocaleDateString('fr-FR');
+      if (readsByDate[dateStr]) {
+        streak++;
+        d.setDate(d.getDate() - 1);
+      } else {
+        // If streak is 0, let's also check yesterday just in case they didn't read today yet
+        if (streak === 0) {
+          const yesterday = new Date();
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayStr = yesterday.toLocaleDateString('fr-FR');
+          if (readsByDate[yesterdayStr]) {
+            streak++;
+            yesterday.setDate(yesterday.getDate() - 1);
+            let checkD = yesterday;
+            while (true) {
+              const checkStr = checkD.toLocaleDateString('fr-FR');
+              if (readsByDate[checkStr]) {
+                streak++;
+                checkD.setDate(checkD.getDate() - 1);
+              } else {
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+    }
+    return streak;
+  }, [readingHistory]);
 
   useEffect(() => {
     refreshPopularExplanations();
@@ -407,6 +530,7 @@ export default function App() {
 
     const fetchPromise = (async (): Promise<Verse[]> => {
       try {
+        setLoadingError(null);
         // --- CHECK INDEXEDDB OFFLINE VERSES CACHE FIRST ---
         const dbCached = await explainCache.getVerses(cacheKey);
         if (dbCached && Array.isArray(dbCached) && dbCached.length > 0) {
@@ -415,11 +539,9 @@ export default function App() {
 
         let verses: Verse[] = [];
         if (selectedTranslation === 'local') {
-          const isPreloaded = (selectedBook.id === 1 && (chapterNum === 1 || chapterNum === 2)) || 
-                              (selectedBook.id === 19 && chapterNum === 23);
-          
-          if (isPreloaded) {
-            verses = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+          const res = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+          if (res !== null) {
+            verses = res;
           } else {
             try {
               const response = await fetch('/api/gemini/fetch-verses', {
@@ -443,8 +565,19 @@ export default function App() {
                 throw new Error("Format de réponse invalide.");
               }
             } catch (err) {
-              console.warn("API dynamic verses fetch failed, using offline fallback:", err);
-              verses = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+              console.warn("API dynamic verses fetch failed, trying online backup API:", err);
+              const fallbackRes = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+              if (fallbackRes !== null) {
+                verses = fallbackRes;
+              } else {
+                try {
+                  verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, 'web');
+                } catch (onlineErr) {
+                  console.error("All verse retrieval attempts failed:", onlineErr);
+                  setLoadingError("Texte indisponible");
+                  return [];
+                }
+              }
             }
           }
         } else {
@@ -458,7 +591,13 @@ export default function App() {
         return verses;
       } catch (err) {
         console.warn("Failed to load scriptures, using offline fallback:", err);
-        return querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+        const fallbackRes = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+        if (fallbackRes !== null) {
+          return fallbackRes;
+        } else {
+          setLoadingError("Texte indisponible");
+          return [];
+        }
       }
     })();
 
@@ -683,7 +822,9 @@ export default function App() {
   };
 
   const handleGoogleSignIn = async () => {
+    if (isGoogleSigningIn) return;
     setAuthError(null);
+    setIsGoogleSigningIn(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
@@ -700,8 +841,20 @@ export default function App() {
         }
       }
     } catch (err: any) {
-      console.error(err);
-      setAuthError("Connexion avec l'authentification Google impossible ou annulée.");
+      if (
+        err?.code === 'auth/cancelled-popup-request' ||
+        err?.code === 'auth/popup-closed-by-user'
+      ) {
+        console.warn("Google sign-in popup cancelled or closed by user:", err?.code);
+        // User closed or cancelled the popup - do not set an aggressive error message
+      } else if (err?.code === 'auth/popup-blocked') {
+        setAuthError("La fenêtre surgissante Google a été bloquée par votre navigateur. Veuillez autoriser les popups.");
+      } else {
+        console.error("Google Sign-In Error:", err);
+        setAuthError("Connexion avec l'authentification Google impossible. Veuillez réessayer.");
+      }
+    } finally {
+      setIsGoogleSigningIn(false);
     }
   };
 
@@ -741,37 +894,25 @@ export default function App() {
     }
   };
 
-  // Synchronize reading log state, marking current chapter as completed
-  const markCurrentChapterRead = async () => {
-    // Check if already exist
-    const isAlreadyRead = readingHistory.some(
+  // Synchronize reading log state, marking current chapter as completed or toggling status
+  const markCurrentChapterRead = async (onlyMarkRead: boolean = false, targetEl?: HTMLElement | null) => {
+    const existing = readingHistory.find(
       h => h.book_id === selectedBook.id && h.chapter === selectedChapter
     );
-    if (isAlreadyRead) return;
+    const isAlreadyCompleted = existing?.status === 'complete' || (existing && existing.last_verse && existing.total_verses && existing.last_verse >= existing.total_verses);
 
-    const historyItem: ReadingHistory = {
-      book_id: selectedBook.id,
-      book_name: selectedBook.name,
-      chapter: selectedChapter,
-      timestamp: new Date().toISOString()
-    };
+    if (onlyMarkRead && isAlreadyCompleted) {
+      return;
+    }
 
-    if (user) {
-      try {
-        const docId = `history_${selectedBook.id}_${selectedChapter}`;
-        await setDoc(doc(db, 'users', user.uid, 'history', docId), historyItem);
-      } catch (error) {
-        console.error("Error saving reading progress record:", error);
-      }
+    const totalVerses = chapterVerses.length || existing?.total_verses || 1;
+
+    if (isAlreadyCompleted) {
+      updateChapterProgress(selectedBook.id, selectedBook.name, selectedChapter, existing?.last_verse || 1, totalVerses, 'en_cours');
     } else {
-      // Offline fallback
-      try {
-        const nextHistory = [...readingHistory, historyItem];
-        setReadingHistory(nextHistory);
-        localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
-      } catch (e) {
-        console.error("Error saving offline reading progress record:", e);
-      }
+      updateChapterProgress(selectedBook.id, selectedBook.name, selectedChapter, totalVerses, totalVerses, 'complete');
+      playCompletionChime();
+      triggerGoldenSparks(targetEl);
     }
   };
 
@@ -826,6 +967,7 @@ export default function App() {
         }
       } catch (error) {
         console.error("Could not sync favorite status to Cloud Firestore:", error);
+        handleFirestoreError(error, favorited ? OperationType.DELETE : OperationType.WRITE, `users/${user.uid}/bookmarks/${docId}`);
       }
     }
   };
@@ -1107,10 +1249,74 @@ export default function App() {
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
+  const [ttsLogs, setTtsLogs] = useState<string[]>([]);
+
+  const logTts = (msg: string, type: 'log' | 'warn' | 'error' = 'log') => {
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] ${msg}`;
+    if (type === 'error') {
+      console.error(msg);
+    } else if (type === 'warn') {
+      console.warn(msg);
+    } else {
+      console.log(msg);
+    }
+    setTtsLogs(prev => {
+      // Keep at most 80 logs to avoid memory bloat
+      const next = [formatted, ...prev];
+      if (next.length > 80) {
+        return next.slice(0, 80);
+      }
+      return next;
+    });
+  };
+  const [ttsEngineState, setTtsEngineState] = useState<{
+    speaking: boolean;
+    paused: boolean;
+    pending: boolean;
+    wakeLockActive: boolean;
+    activeUtteranceCount: number;
+  }>({
+    speaking: false,
+    paused: false,
+    pending: false,
+    wakeLockActive: false,
+    activeUtteranceCount: 0,
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateTtsState = () => {
+      const synth = window.speechSynthesis;
+      if (synth) {
+        setTtsEngineState({
+          speaking: synth.speaking,
+          paused: synth.paused,
+          pending: synth.pending,
+          wakeLockActive: !!wakeLockRef.current,
+          activeUtteranceCount: (window as any)._activeUtterances ? (window as any)._activeUtterances.length : 0,
+        });
+      }
+    };
+
+    updateTtsState();
+    const interval = setInterval(updateTtsState, 500);
+
+    return () => clearInterval(interval);
+  }, []);
   const [voicePitch, setVoicePitch] = useState<number>(() => {
     try {
       const p = localStorage.getItem('bible_voice_pitch');
       return p ? Number(p) : 1.0;
+    } catch (_) {
+      return 1.0;
+    }
+  });
+  const [voiceVolume, setVoiceVolume] = useState<number>(() => {
+    try {
+      const v = localStorage.getItem('bible_voice_volume');
+      return v ? Number(v) : 1.0;
     } catch (_) {
       return 1.0;
     }
@@ -1236,6 +1442,8 @@ export default function App() {
 
   const currentVerseToSpeakRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
+  const speechPauseResumeIntervalRef = useRef<any>(null);
+  const wakeLockRef = useRef<any>(null);
 
   // Auto-scrolling state variables
   const [isAutoScrollWithSpeech, setIsAutoScrollWithSpeech] = useState<boolean>(true);
@@ -1385,9 +1593,89 @@ export default function App() {
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
+      if (speechPauseResumeIntervalRef.current) {
+        clearInterval(speechPauseResumeIntervalRef.current);
+        speechPauseResumeIntervalRef.current = null;
+      }
+      try {
+        if (wakeLockRef.current) {
+          wakeLockRef.current.release();
+          wakeLockRef.current = null;
+        }
+      } catch (_) {}
       ambientMelody.stop();
     };
   }, [selectedBook, selectedChapter, activeTab]);
+
+  const requestWakeLock = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && !wakeLockRef.current) {
+        const lock = await (navigator as any).wakeLock.request('screen');
+        wakeLockRef.current = lock;
+        lock.addEventListener('release', () => {
+          console.log('Wake Lock was released by the system or browser');
+          if (wakeLockRef.current === lock) {
+            wakeLockRef.current = null;
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('Wake Lock request failed:', err);
+    }
+  };
+
+  const releaseWakeLock = () => {
+    try {
+      if (wakeLockRef.current) {
+        const lock = wakeLockRef.current;
+        wakeLockRef.current = null;
+        lock.release().catch((err: any) => {
+          console.warn('Wake Lock release error:', err);
+        });
+      }
+    } catch (err) {
+      console.warn('Wake Lock release failed:', err);
+    }
+  };
+
+  // Keep Screen Wake Lock active throughout the entire active text-to-speech session
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let heartbeatInterval: any = null;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible' && isSpeaking && !isPaused) {
+        await requestWakeLock();
+      }
+    };
+
+    if (isSpeaking && !isPaused) {
+      // Promptly request wake lock when audio session becomes active
+      requestWakeLock();
+
+      // Re-request lock if the tab becomes visible again
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+
+      // Heartbeat renewal check every 60 seconds to ensure lock is held
+      heartbeatInterval = setInterval(async () => {
+        if (isSpeaking && !isPaused && !wakeLockRef.current) {
+          console.log('Wake Lock Heartbeat: Wake lock expired or released by browser. Re-acquiring...');
+          await requestWakeLock();
+        }
+      }, 60000);
+    } else {
+      // Release wake lock when paused or speaking stops
+      releaseWakeLock();
+    }
+
+    return () => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isSpeaking, isPaused]);
 
   const speakVerse = (index: number) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -1407,6 +1695,27 @@ export default function App() {
       return;
     }
 
+    // Request wake lock to keep mobile screen awake and keep audio running in background
+    requestWakeLock();
+
+    // Setup periodic pause-resume wakeup hack to prevent TTS from cutting off after 15 seconds on Chrome/iOS
+    if (!speechPauseResumeIntervalRef.current) {
+      logTts("[TTS Debug] Setting up periodic 10-second pause-resume heartbeat hack.");
+      speechPauseResumeIntervalRef.current = setInterval(() => {
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+          const speakingState = window.speechSynthesis.speaking;
+          const pausedState = window.speechSynthesis.paused;
+          logTts(`[TTS Debug Heartbeat] speaking: ${speakingState}, paused: ${pausedState}`);
+          if (speakingState && !pausedState) {
+            logTts("[TTS Debug Heartbeat] Triggering pause-resume hack to maintain active audio session.");
+            window.speechSynthesis.pause();
+            window.speechSynthesis.resume();
+          }
+        }
+      }, 10000);
+    }
+
+    logTts(`[TTS Debug] cancel() called. Starting speakVerse for index: ${index}`);
     window.speechSynthesis.cancel();
     setCurrentSpeakingVerseIndex(index);
     currentVerseToSpeakRef.current = index;
@@ -1416,24 +1725,51 @@ export default function App() {
     const cleanText = verseObj.text.replace(/\[[HG]\d+\]/g, '').trim();
     const textToSpeak = `Verset ${verseObj.verse}. ${cleanText}`;
 
+    logTts(`[TTS Debug] Creating new SpeechSynthesisUtterance for verse ${index}. Text length: ${textToSpeak.length}`);
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.lang = 'fr-FR';
     utterance.rate = playbackRate;
 
+    // Prevent garbage collection on mobile browsers (e.g. Chrome/iOS/Android)
+    if (!(window as any)._activeUtterances) {
+      (window as any)._activeUtterances = [];
+    }
+    (window as any)._activeUtterances.push(utterance);
+    logTts(`[TTS Debug] Utterance stored in active array. Total active reference count: ${(window as any)._activeUtterances.length}`);
+
+    const cleanUtterance = () => {
+      if ((window as any)._activeUtterances) {
+        const initialLen = (window as any)._activeUtterances.length;
+        (window as any)._activeUtterances = (window as any)._activeUtterances.filter((u: any) => u !== utterance);
+        logTts(`[TTS Debug] cleanUtterance for verse ${index}. Filtered from ${initialLen} to ${(window as any)._activeUtterances.length} references.`);
+      }
+    };
+
     // Dynamically look up French voice for Louis Segond French reading with gender support
     const voices = window.speechSynthesis.getVoices();
+    logTts(`[TTS Debug Selector] Total voices available in browser: ${voices.length}`);
+    logTts(`[TTS Debug Selector] User configuration -> voiceGender: "${voiceGender}", selectedVoiceURI: "${selectedVoiceURI || 'none'}", isRawReading: ${isRawReading}`);
     
     let selectedVoice: SpeechSynthesisVoice | null = null;
 
     if (isRawReading) {
+      logTts(`[TTS Debug Selector] isRawReading is TRUE. Trying manual selection first...`);
       if (selectedVoiceURI) {
         selectedVoice = voices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+        logTts(`[TTS Debug Selector] Manual selection search with URI "${selectedVoiceURI}" returned: ${selectedVoice ? selectedVoice.name : 'null'}`);
       }
       if (!selectedVoice && voices.length > 0) {
         selectedVoice = voices[0];
+        logTts(`[TTS Debug Selector] Fallback to first available voice as raw reading: ${selectedVoice.name}`);
       }
     } else {
       const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
+      logTts(`[TTS Debug Selector] Found ${frenchVoices.length} French voices overall.`);
+      frenchVoices.forEach((v, idx) => {
+        const isMaleMatched = LOWER_MALE_NAMES.some(name => v.name.toLowerCase().includes(name));
+        const isFemaleMatched = LOWER_FEMALE_NAMES.some(name => v.name.toLowerCase().includes(name));
+        logTts(`[TTS Debug Voice List] Voice #${idx}: "${v.name}" | URI: "${v.voiceURI}" | lang: "${v.lang}" | isMaleMatched: ${isMaleMatched} | isFemaleMatched: ${isFemaleMatched} | localService: ${v.localService}`);
+      });
       
       // Sort French voices: prioritize explicit masculine first, then general male, then higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
       const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
@@ -1469,31 +1805,39 @@ export default function App() {
       // 1. Use manual voice choice if authorized and present
       if (selectedVoiceURI) {
         selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
+        logTts(`[TTS Debug Selector] Tried manual voiceURI match for "${selectedVoiceURI}". Found: ${selectedVoice ? selectedVoice.name : 'null'}`);
       }
 
       // 2. Fall back on automatic gender-matching lists or defaults if no manual voice is chosen
       if (!selectedVoice) {
+        logTts(`[TTS Debug Selector] No manual voice matched. Resolving voice for gender: "${voiceGender}"`);
         if (voiceGender === 'male') {
           // 1. Try exact male names from sorted high quality voices first
           selectedVoice = sortedFrenchVoices.find(voice => 
             LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
           ) || null;
+          logTts(`[TTS Debug Selector] Male matching - Step 1 (exact names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
+          
           // 2. Try excluding female named voices
           if (!selectedVoice) {
             selectedVoice = sortedFrenchVoices.find(voice => 
               !LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
             ) || null;
+            logTts(`[TTS Debug Selector] Male matching - Step 2 (not female names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
           }
         } else if (voiceGender === 'female') {
           // 1. Try exact female names from sorted high quality voices first
           selectedVoice = sortedFrenchVoices.find(voice => 
             LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
           ) || null;
+          logTts(`[TTS Debug Selector] Female matching - Step 1 (exact names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
+          
           // 2. Try excluding male named voices
           if (!selectedVoice) {
             selectedVoice = sortedFrenchVoices.find(voice => 
               !LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
             ) || null;
+            logTts(`[TTS Debug Selector] Female matching - Step 2 (not male names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
           }
         } else {
           // 'auto' mode - Prioritize explicit masculine voices ('male', 'homme', 'paul', 'nicolas')
@@ -1502,12 +1846,14 @@ export default function App() {
           selectedVoice = sortedFrenchVoices.find(voice => 
             priorityMaleKeywords.some(keyword => voice.name.toLowerCase().includes(keyword))
           ) || null;
+          logTts(`[TTS Debug Selector] Auto matching - Step 1 (priority keywords): ${selectedVoice ? selectedVoice.name : 'none found'}`);
           
           // Secondary fallback for auto mode: any general male voice
           if (!selectedVoice) {
             selectedVoice = sortedFrenchVoices.find(voice => 
               LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
             ) || null;
+            logTts(`[TTS Debug Selector] Auto matching - Step 2 (general male names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
           }
         }
       }
@@ -1515,55 +1861,131 @@ export default function App() {
       // Fallback if no specific voice was determined
       if (!selectedVoice && sortedFrenchVoices.length > 0) {
         selectedVoice = sortedFrenchVoices[0];
+        logTts(`[TTS Debug Selector] Gender fallback matching failed. Picking first sorted French voice: ${selectedVoice.name}`);
       }
     }
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
+      logTts(`[TTS Debug] FINAL Selected Voice object: "${selectedVoice.name}" (${selectedVoice.lang}) | URI: "${selectedVoice.voiceURI}" | LocalService: ${selectedVoice.localService}`);
+    } else {
+      logTts("[TTS Debug] FINAL Selected Voice: None. Browser default will be used.");
     }
 
     // Force pitch = 1.0 in raw reading mode, otherwise keep adjusted voicePitch
     utterance.pitch = isRawReading ? 1.0 : voicePitch;
+    utterance.volume = voiceVolume;
+
+    // Detailed debug logs for all event listeners
+    const logState = (eventName: string, details?: any) => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        logTts(
+          `[TTS Debug Event] ${eventName} triggered for verse ${index}. ` +
+          `State -> speaking: ${window.speechSynthesis.speaking}, ` +
+          `paused: ${window.speechSynthesis.paused}, ` +
+          `pending: ${window.speechSynthesis.pending}.` +
+          (details ? ` Details: ${JSON.stringify(details)}` : '')
+        );
+      }
+    };
+
+    utterance.onstart = () => {
+      logState('onstart');
+    };
+
+    utterance.onpause = () => {
+      logState('onpause');
+    };
+
+    utterance.onresume = () => {
+      logState('onresume');
+    };
+
+    utterance.onboundary = (e) => {
+      logState('onboundary', { charIndex: e.charIndex, name: e.name, elapsedTime: e.elapsedTime });
+    };
+
+    utterance.onmark = (e) => {
+      logState('onmark', { name: e.name, elapsedTime: e.elapsedTime });
+    };
 
     utterance.onend = () => {
+      logState('onend');
+      cleanUtterance();
       // Move consecutively to next verse if we are still active on index
       if (currentVerseToSpeakRef.current === index) {
+        logTts(`[TTS Debug] Moving consecutively from verse ${index} to ${index + 1}`);
         speakVerse(index + 1);
+      } else {
+        logTts(`[TTS Debug] currentVerseToSpeakRef.current (${currentVerseToSpeakRef.current}) differs from index (${index}). Next verse skipped.`);
       }
     };
 
     utterance.onerror = (e) => {
-      console.error("Speech Synthesis Utterance Error:", e);
-      if (e.error !== 'interrupted' && currentVerseToSpeakRef.current === index) {
+      const errCode = e.error || (e as any).type || 'unknown';
+      logState('onerror', { error: errCode, message: (e as any).message });
+      logTts(`[TTS Debug Event Details] Error for verse ${index}: error='${errCode}', type='${e.type}'`, 'warn');
+      cleanUtterance();
+      
+      const ignorableErrors = ['interrupted', 'canceled', 'agent-rejected'];
+      const isIgnorable = !errCode || ignorableErrors.includes(errCode);
+      if (!isIgnorable && currentVerseToSpeakRef.current === index) {
+        logTts(`[TTS Debug] Hard speech synthesis error '${errCode}'. Stopping speaking.`, 'error');
         stopSpeaking();
       }
     };
 
-    window.speechSynthesis.speak(utterance);
-    setIsSpeaking(true);
-    setIsPaused(false);
+    logTts(`[TTS Debug] Queueing speak() invocation for verse ${index} in 60ms to let cancel() settle.`);
+    setTimeout(() => {
+      if (currentVerseToSpeakRef.current === index) {
+        logTts(`[TTS Debug] Invoking window.speechSynthesis.speak() for verse ${index}`);
+        window.speechSynthesis.speak(utterance);
+        setIsSpeaking(true);
+        setIsPaused(false);
 
-    // Synchronisation : Débute chaque verset par un carillon ou pincement de harpe céleste en harmonie
-    if (isMelodyEnabled) {
-      ambientMelody.triggerTransitPluck();
-    }
+        // Synchronisation : Débute chaque verset par un carillon ou pincement de harpe céleste en harmonie
+        if (isMelodyEnabled) {
+          ambientMelody.triggerTransitPluck();
+        }
+      } else {
+        logTts(`[TTS Debug] Skipped speak() invocation for verse ${index} because active verse changed during settle timeout.`);
+      }
+    }, 60);
   };
 
   const pauseSpeaking = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    logTts("[TTS Debug Action] pauseSpeaking() invoked.");
     window.speechSynthesis.pause();
     setIsPaused(true);
   };
 
   const resumeSpeaking = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    logTts("[TTS Debug Action] resumeSpeaking() invoked.");
     window.speechSynthesis.resume();
     setIsPaused(false);
   };
 
   const stopSpeaking = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    logTts("[TTS Debug Action] stopSpeaking() invoked. Calling cancel().");
     window.speechSynthesis.cancel();
+
+    // Clear active utterances to release memory
+    logTts("[TTS Debug Action] Resetting active utterances array.");
+    (window as any)._activeUtterances = [];
+
+    // Clear periodic pause-resume interval
+    if (speechPauseResumeIntervalRef.current) {
+      logTts("[TTS Debug Action] Clearing periodic pause-resume interval.");
+      clearInterval(speechPauseResumeIntervalRef.current);
+      speechPauseResumeIntervalRef.current = null;
+    }
+
+    // Release screen wake lock
+    releaseWakeLock();
+
     setIsSpeaking(false);
     setIsPaused(false);
     setCurrentSpeakingVerseIndex(-1);
@@ -1603,6 +2025,143 @@ export default function App() {
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [currentSpeakingVerseIndex, isAutoScrollWithSpeech, chapterVerses]);
+
+  // Smooth scroll to target resume verse when loaded
+  useEffect(() => {
+    if (targetResumeVerseNum && !loadingVerses && chapterVerses.length > 0) {
+      const timer = setTimeout(() => {
+        const el = document.getElementById(`verse-${selectedBook.id}-${selectedChapter}-${targetResumeVerseNum}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [targetResumeVerseNum, loadingVerses, chapterVerses, selectedBook.id, selectedChapter]);
+
+  // Helper to update progress per chapter in history state
+  const updateChapterProgress = (
+    bookId: number,
+    bookName: string,
+    chapterNum: number,
+    verseNum: number,
+    totalVersesNum: number,
+    forceStatus?: 'en_cours' | 'complete'
+  ) => {
+    setReadingHistory((prev) => {
+      const existingIndex = prev.findIndex(h => h.book_id === bookId && h.chapter === chapterNum);
+      const existing = existingIndex !== -1 ? prev[existingIndex] : null;
+
+      const currentLastVerse = Math.max(existing?.last_verse || 1, verseNum);
+      const currentTotalVerses = Math.max(existing?.total_verses || 1, totalVersesNum);
+      
+      let computedStatus: 'non_commence' | 'en_cours' | 'complete';
+      if (forceStatus) {
+        computedStatus = forceStatus;
+      } else if (existing?.status === 'complete' || currentLastVerse >= currentTotalVerses) {
+        computedStatus = 'complete';
+      } else {
+        computedStatus = 'en_cours';
+      }
+
+      const timeSpent = existing?.time_spent_seconds || 0;
+
+      const updatedItem: ReadingHistory = {
+        book_id: bookId,
+        book_name: bookName,
+        chapter: chapterNum,
+        timestamp: new Date().toISOString(),
+        last_verse: currentLastVerse,
+        total_verses: currentTotalVerses,
+        time_spent_seconds: timeSpent,
+        status: computedStatus
+      };
+
+      let nextHistory: ReadingHistory[];
+      if (existingIndex !== -1) {
+        nextHistory = [...prev];
+        nextHistory[existingIndex] = updatedItem;
+      } else {
+        nextHistory = [updatedItem, ...prev];
+      }
+
+      try {
+        localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
+      } catch (_) {}
+
+      if (user) {
+        const docId = `history_${bookId}_${chapterNum}`;
+        setDoc(doc(db, 'users', user.uid, 'history', docId), updatedItem).catch(() => {});
+      }
+
+      return nextHistory;
+    });
+  };
+
+  // IntersectionObserver to auto-track active verse progress while scrolling
+  useEffect(() => {
+    if (activeTab !== 'read' || chapterVerses.length === 0 || !selectedBook) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const verseAttr = entry.target.getAttribute('data-verse-num');
+            if (verseAttr) {
+              const vNum = parseInt(verseAttr, 10);
+              if (!isNaN(vNum) && vNum > 0) {
+                updateChapterProgress(selectedBook.id, selectedBook.name, selectedChapter, vNum, chapterVerses.length);
+              }
+            }
+          }
+        });
+      },
+      { threshold: 0.6 }
+    );
+
+    const verseEls = document.querySelectorAll('.verse-container-item');
+    verseEls.forEach((el) => observer.observe(el));
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [activeTab, chapterVerses, selectedBook, selectedChapter]);
+
+  // Timer effect to accumulate seconds spent on current active chapter
+  useEffect(() => {
+    if (activeTab !== 'read' || !selectedBook || !selectedChapter) return;
+
+    const timer = setInterval(() => {
+      setReadingHistory(prev => {
+        const existingIndex = prev.findIndex(h => h.book_id === selectedBook.id && h.chapter === selectedChapter);
+        if (existingIndex === -1) return prev;
+
+        const existing = prev[existingIndex];
+        const nextTime = (existing.time_spent_seconds || 0) + 1;
+
+        const updatedItem: ReadingHistory = {
+          ...existing,
+          time_spent_seconds: nextTime,
+          timestamp: new Date().toISOString()
+        };
+
+        const nextHistory = [...prev];
+        nextHistory[existingIndex] = updatedItem;
+        try {
+          localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
+        } catch (_) {}
+
+        if (user) {
+          const docId = `history_${selectedBook.id}_${selectedChapter}`;
+          setDoc(doc(db, 'users', user.uid, 'history', docId), updatedItem).catch(() => {});
+        }
+
+        return nextHistory;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeTab, selectedBook, selectedChapter, user]);
 
   // Auto-play the next chapter immediately after its verses are fully fetched
   useEffect(() => {
@@ -1679,12 +2238,27 @@ export default function App() {
     }
   };
 
-  // Reading plans navigation integration helper
-  const handleNavigateChallengeToReader = (bookId: number, chapterNum: number) => {
+  // Reading plans & chapter history navigation helper with exact verse resume
+  const handleNavigateChallengeToReader = (bookId: number, chapterNum: number, verseNum?: number) => {
     const targetBook = BOOKS.find(b => b.id === bookId);
     if (targetBook) {
       setSelectedBook(targetBook);
       setSelectedChapter(chapterNum);
+
+      let verseToJump = verseNum;
+      if (!verseToJump) {
+        const existing = readingHistory.find(h => h.book_id === bookId && h.chapter === chapterNum);
+        if (existing && existing.last_verse) {
+          verseToJump = existing.last_verse;
+        }
+      }
+
+      if (verseToJump) {
+        setTargetResumeVerseNum(verseToJump);
+        setSelectedVerseId(`${bookId}_${chapterNum}_${verseToJump}`);
+      } else {
+        setTargetResumeVerseNum(null);
+      }
       setActiveTab('read');
     }
   };
@@ -1870,15 +2444,25 @@ export default function App() {
 
           <button
             onClick={handleGoogleSignIn}
-            className="w-full py-3 bg-[#0d0b07] hover:bg-[#1a1712] text-[#e8e0d0] border border-[#2e2a1e] rounded-xl transition text-[10px] font-mono tracking-widest uppercase flex items-center justify-center gap-2.5 cursor-pointer"
+            disabled={isGoogleSigningIn}
+            className="w-full py-3 bg-[#0d0b07] hover:bg-[#1a1712] text-[#e8e0d0] border border-[#2e2a1e] rounded-xl transition text-[10px] font-mono tracking-widest uppercase flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
-              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
-            </svg>
-            <span>Google Sign-In</span>
+            {isGoogleSigningIn ? (
+              <span className="flex items-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
+                Connexion en cours...
+              </span>
+            ) : (
+              <>
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+                </svg>
+                <span>Google Sign-In</span>
+              </>
+            )}
           </button>
         </div>
       </div>
@@ -2134,6 +2718,21 @@ export default function App() {
                             try {
                               localStorage.setItem('bible_voice_gender', genderVal);
                             } catch (_) {}
+                            // Clear precise voice selection to let automatic gender-matching take effect
+                            setSelectedVoiceURI('');
+                            try {
+                              localStorage.removeItem('bible_preferred_voice_uri');
+                            } catch (_) {}
+
+                            // Invalidate/clear active utterances queue & cancel synthesis to avoid old voice cache playing
+                            if (typeof window !== 'undefined' && window.speechSynthesis) {
+                              window.speechSynthesis.cancel();
+                              (window as any)._activeUtterances = [];
+                            }
+
+                            if (isSpeaking && currentSpeakingVerseIndex !== -1) {
+                              speakVerse(currentSpeakingVerseIndex);
+                            }
                           }}
                           className={`py-1 text-[8px] font-mono uppercase border rounded transition cursor-pointer ${
                             voiceGender === genderVal 
@@ -2159,6 +2758,16 @@ export default function App() {
                           try {
                             localStorage.setItem('bible_preferred_voice_uri', val);
                           } catch (_) {}
+
+                          // Invalidate/clear active utterances queue & cancel synthesis to avoid old voice cache playing
+                          if (typeof window !== 'undefined' && window.speechSynthesis) {
+                            window.speechSynthesis.cancel();
+                            (window as any)._activeUtterances = [];
+                          }
+
+                          if (isSpeaking && currentSpeakingVerseIndex !== -1) {
+                            speakVerse(currentSpeakingVerseIndex);
+                          }
                         }}
                         className="flex-1 text-[9px] bg-[#14120e] border border-[#2e2a1e]/80 text-[#e8e0d0] rounded p-1 focus:outline-none focus:border-[#c9a84c] min-w-0"
                       >
@@ -2193,6 +2802,7 @@ export default function App() {
 
                               // Keep clear native voice pitch or force 1.0 in raw reading to prevent robotic/distorted sounds
                               utterance.pitch = isRawReading ? 1.0 : voicePitch;
+                              utterance.volume = voiceVolume;
                               window.speechSynthesis.speak(utterance);
                             }
                           }}
@@ -2219,6 +2829,30 @@ export default function App() {
                       value={playbackRate}
                       onChange={(e) => setPlaybackRate(Number(e.target.value))}
                       className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1.5 appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Volume de la voix TTS */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[9px] font-mono">
+                      <span className="text-[#6b6355]">Volume de la voix (TTS)</span>
+                      <span className="text-[#c9a84c] font-bold">{Math.round(voiceVolume * 100)}%</span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0.0" 
+                      max="1.0" 
+                      step="0.05"
+                      value={voiceVolume}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        setVoiceVolume(val);
+                        try {
+                          localStorage.setItem('bible_voice_volume', String(val));
+                        } catch (_) {}
+                      }}
+                      className="w-full accent-[#c9a84c] bg-[#1a1712] rounded-lg h-1.5 appearance-none cursor-pointer"
+                      title="Ajuste le volume de la synthèse vocale indépendamment du volume système"
                     />
                   </div>
 
@@ -2319,6 +2953,20 @@ export default function App() {
                       className="px-1.5 py-0.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/40 rounded hover:bg-[#c9a84c]/20 transition cursor-pointer text-[8px] uppercase font-bold"
                     >
                       Calibrer 🎵
+                    </button>
+                  </div>
+
+                  {/* Vider les logs de débogage stockés temporairement */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]" title="Vider manuellement les journaux de débogage stockés pour éviter la saturation">Logs de Débogage TTS</span>
+                    <button
+                      onClick={() => {
+                        setTtsLogs([]);
+                        logTts("[TTS Debug] Journaux effacés manuellement.");
+                      }}
+                      className="px-1.5 py-0.5 bg-red-950/20 text-red-400 border border-red-500/35 rounded hover:bg-red-900/20 transition cursor-pointer text-[8px] uppercase font-bold"
+                    >
+                      Vider 🗑️
                     </button>
                   </div>
                 </div>
@@ -2478,6 +3126,10 @@ export default function App() {
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 notesCount={notes.length}
                 goalPercent={goalPercent}
+                currentStreak={currentStreak}
+                readingHistory={readingHistory}
+                onNavigateToChapter={handleNavigateChallengeToReader}
+                onPlayAudioCurrentChapter={() => speakVerse(0)}
               />
             </motion.div>
           )}
@@ -2524,7 +3176,17 @@ export default function App() {
               )}
 
               {/* Daily Chapter Reading Goal & Progress Bar widget */}
-              {!isZenMode && <DailyReadingGoal readingHistory={readingHistory} />}
+              {!isZenMode && (
+                <DailyReadingGoal 
+                  readingHistory={readingHistory} 
+                  readingTimeToday={readingTimeToday}
+                  setReadingTimeToday={setReadingTimeToday}
+                  dailyTimeGoal={dailyTimeGoal}
+                  setDailyTimeGoal={setDailyTimeGoal}
+                  goalType={goalType}
+                  setGoalType={setGoalType}
+                />
+              )}
 
               {/* Dynamic Scripture Selector and Chapter Nav Box */}
               {!isZenMode && (
@@ -2692,17 +3354,22 @@ export default function App() {
               {/* Display chapter summary if queried */}
               {chapterSummary && (
                 <div className="bg-[#12100c] border border-[#c9a84c]/20 p-5 rounded-[2rem] text-left space-y-3 shadow-gold-glow animate-fade-slide-up select-text">
-                  <div className="flex justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
+                  <div className="flex flex-wrap gap-2 justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
                     <span className="text-[9px] font-mono tracking-widest text-[#c9a84c] uppercase font-black flex items-center gap-1.5">
                       <Sparkles className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" />
                       <span>Sagesse & Synthèse IA du Chapitre {selectedChapter}</span>
                     </span>
-                    <button 
-                      onClick={() => setChapterSummary(null)}
-                      className="p-1 hover:bg-[#1a1712] rounded text-[#6b6355] hover:text-white transition"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded-full select-none">
+                        Analyse générée par IA — à vérifier
+                      </span>
+                      <button 
+                        onClick={() => setChapterSummary(null)}
+                        className="p-1 hover:bg-[#1a1712] rounded text-[#6b6355] hover:text-white transition"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="font-sans text-[13.5px] leading-relaxed text-[#c9a84c] whitespace-pre-line prose max-w-none">
                     {cleanBibleMarkdown(chapterSummary)}
@@ -2970,7 +3637,19 @@ export default function App() {
                                       try {
                                         localStorage.setItem('bible_voice_gender', genderOption.value);
                                       } catch (_) {}
-                                      if (isSpeaking && !isPaused) {
+                                      // Clear precise voice selection to let automatic gender-matching take effect
+                                      setSelectedVoiceURI('');
+                                      try {
+                                        localStorage.removeItem('bible_preferred_voice_uri');
+                                      } catch (_) {}
+
+                                      // Invalidate/clear active utterances queue & cancel synthesis to avoid old voice cache playing
+                                      if (typeof window !== 'undefined' && window.speechSynthesis) {
+                                        window.speechSynthesis.cancel();
+                                        (window as any)._activeUtterances = [];
+                                      }
+
+                                      if (isSpeaking && currentSpeakingVerseIndex !== -1) {
                                         speakVerse(currentSpeakingVerseIndex);
                                       }
                                     }}
@@ -3311,6 +3990,188 @@ export default function App() {
                             </div>
                           </div>
 
+                          {/* Diagnostic du Flux Vocal (TTS) */}
+                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs">🛠️</span>
+                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Diagnostic du Flux Vocal (TTS)</h5>
+                              </div>
+                              <span className="text-[9px] font-mono bg-[#2e2a1e]/40 px-2 py-0.5 rounded-full text-[#6b6355]">Temps réel</span>
+                            </div>
+
+                            {/* Status Indicators Row */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {/* Indicator: Play State */}
+                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
+                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Lecture</span>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.speaking && !ttsEngineState.paused ? 'bg-green-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
+                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
+                                    {ttsEngineState.speaking && !ttsEngineState.paused ? 'Actif' : 'Inactif'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Indicator: Pause State */}
+                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
+                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Pause</span>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.paused ? 'bg-amber-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
+                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
+                                    {ttsEngineState.paused ? 'En Pause' : 'Non'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Indicator: Pending State */}
+                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
+                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">En Attente</span>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.pending ? 'bg-blue-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
+                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
+                                    {ttsEngineState.pending ? 'Oui' : 'Non'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Indicator: Wake Lock */}
+                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
+                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Wake Lock</span>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.wakeLockActive ? 'bg-[#c9a84c] animate-pulse' : 'bg-[#6b6355]/40'}`} />
+                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
+                                    {ttsEngineState.wakeLockActive ? 'Maintenu' : 'Inactif'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Queue progression details */}
+                            <div className="bg-[#12100c]/80 rounded-xl p-4 border border-[#2e2a1e]/30 space-y-3.5">
+                              <div className="flex items-center justify-between text-xs">
+                                <span className="text-[#6b6355]">Progression du chapitre :</span>
+                                <span className="font-mono font-bold text-[#e8e0d0]">
+                                  {currentSpeakingVerseIndex !== -1 ? `${currentSpeakingVerseIndex + 1} / ${chapterVerses.length}` : `0 / ${chapterVerses.length}`} versets
+                                </span>
+                              </div>
+
+                              {/* Progress bar */}
+                              <div className="w-full bg-[#1a1712] rounded-full h-1.5 overflow-hidden border border-[#2e2a1e]/30">
+                                <div 
+                                  className="bg-gradient-to-r from-[#a0947f] to-[#c9a84c] h-full transition-all duration-300"
+                                  style={{ 
+                                    width: chapterVerses.length > 0 
+                                      ? `${Math.max(0, Math.min(100, ((currentSpeakingVerseIndex + 1) / chapterVerses.length) * 100))}%` 
+                                      : '0%' 
+                                  }}
+                                />
+                              </div>
+
+                              {/* Cache & Engine internals info */}
+                              <div className="grid grid-cols-2 gap-4 pt-1.5 text-[11px] font-mono text-[#6b6355]">
+                                <div>
+                                  <span className="block">Mémoire Utterances :</span>
+                                  <span className="font-bold text-[#e8e0d0]">{ttsEngineState.activeUtteranceCount} active(s)</span>
+                                </div>
+                                <div className="text-right">
+                                  <span className="block">Statut global :</span>
+                                  <span className={`font-bold uppercase ${isSpeaking ? 'text-[#c9a84c]' : 'text-[#6b6355]'}`}>
+                                    {isSpeaking ? (isPaused ? 'En Pause' : 'Lecture en cours') : 'En attente de démarrage'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Queue of upcoming verses */}
+                            {isSpeaking && currentSpeakingVerseIndex !== -1 && (
+                              <div className="space-y-2 text-left">
+                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Prochaines lectures en file :</span>
+                                <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
+                                  {chapterVerses.slice(currentSpeakingVerseIndex, currentSpeakingVerseIndex + 3).map((v, i) => {
+                                    const realIndex = currentSpeakingVerseIndex + i;
+                                    const isCurrent = realIndex === currentSpeakingVerseIndex;
+                                    return (
+                                      <div 
+                                        key={v.id || realIndex}
+                                        className={`flex items-start gap-2.5 p-2 rounded-lg border text-left transition-all duration-200 ${
+                                          isCurrent 
+                                            ? 'bg-[#c9a84c]/5 border-[#c9a84c]/20 text-[#e8e0d0]' 
+                                            : 'bg-[#12100c]/30 border-transparent text-[#6b6355]'
+                                        }`}
+                                      >
+                                        <div className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono font-bold shrink-0 ${
+                                          isCurrent 
+                                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
+                                            : 'bg-[#2e2a1e]/50 text-[#6b6355]'
+                                        }`}>
+                                          {v.verse}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-[11px] font-sans truncate">
+                                            {v.text.replace(/\[[HG]\d+\]/g, '').trim()}
+                                          </p>
+                                          {isCurrent && (
+                                            <span className="text-[9px] font-mono text-[#c9a84c] font-semibold animate-pulse block mt-0.5">
+                                              🔈 En cours de lecture...
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {chapterVerses.length - 1 - currentSpeakingVerseIndex > 3 && (
+                                    <div className="text-center py-1">
+                                      <span className="text-[9px] font-mono text-[#6b6355]">
+                                        + {chapterVerses.length - 1 - currentSpeakingVerseIndex - 3} autre(s) verset(s) dans le chapitre
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Journaux en Temps Réel du Déroulement Vocal */}
+                            <div className="bg-[#12100c]/80 rounded-xl p-3 border border-[#2e2a1e]/30 space-y-2 mt-2">
+                              <div className="flex items-center justify-between text-[10px] font-mono">
+                                <span className="text-[#a0947f] font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
+                                  Journaux de Diagnostic
+                                </span>
+                                <button 
+                                  onClick={() => {
+                                    setTtsLogs([]);
+                                    logTts("[TTS Debug] Journaux effacés.");
+                                  }}
+                                  className="text-[9px] text-[#c9a84c] hover:underline cursor-pointer font-bold flex items-center gap-1"
+                                >
+                                  Effacer 🗑️
+                                </button>
+                              </div>
+                              <div className="space-y-1 max-h-[110px] overflow-y-auto text-[9.5px] font-mono text-left pr-1 scrollbar-thin scrollbar-thumb-[#2e2a1e] scrollbar-track-transparent">
+                                {ttsLogs.length === 0 ? (
+                                  <span className="text-[#6b6355] italic block py-1.5 text-center">Aucun événement enregistré. Lancez l'écoute pour générer des diagnostics.</span>
+                                ) : (
+                                  ttsLogs.map((logStr, idx) => {
+                                    const isError = logStr.toLowerCase().includes('error') || logStr.toLowerCase().includes('onerror') || logStr.toLowerCase().includes('failed');
+                                    const isAction = logStr.includes('Action') || logStr.includes('cancel');
+                                    const isEvent = logStr.includes('Event');
+                                    return (
+                                      <div 
+                                        key={idx} 
+                                        className={`py-0.5 border-b border-[#2e2a1e]/15 break-all last:border-0 leading-relaxed ${
+                                          isError ? 'text-red-400 font-bold' : isAction ? 'text-blue-400' : isEvent ? 'text-[#c9a84c]' : 'text-[#a0947f]'
+                                        }`}
+                                      >
+                                        {logStr}
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
                         </div>
                       )}
                     </div>
@@ -3321,6 +4182,16 @@ export default function App() {
                   <div className="py-20 flex flex-col items-center justify-center space-y-3 select-none">
                     <div className="w-8 h-8 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
                     <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Mise au jour du papyrus...</p>
+                  </div>
+                ) : loadingError ? (
+                  <div className="py-16 px-6 rounded-2xl bg-rose-950/10 border border-rose-900/20 text-center space-y-3 select-none animate-fade-in">
+                    <AlertCircle className="w-8 h-8 text-rose-500 mx-auto opacity-80" />
+                    <h4 className="text-sm font-bold text-rose-400 font-sans">Texte indisponible</h4>
+                    <p className="text-xs text-rose-300 max-w-md mx-auto leading-relaxed">{loadingError}</p>
+                  </div>
+                ) : chapterVerses.length === 0 ? (
+                  <div className="py-20 text-center space-y-2 select-none animate-fade-in">
+                    <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Aucun verset disponible</p>
                   </div>
                 ) : (
                   <motion.div 
@@ -3354,6 +4225,8 @@ export default function App() {
                           emotionAnalysis={noteInfo.emotionAnalysis}
                           onSaveNote={handleSaveSpiritualNote}
                           isCurrentSpoken={currentSpeakingVerseIndex === idx}
+                          isLastReadTarget={targetResumeVerseNum === item.verse}
+                          isLastRead={lastReadVerseId === verseUniqueId || (!!currentChapterHistoryRecord?.last_verse && currentChapterHistoryRecord.last_verse === item.verse)}
                           index={idx}
                         />
                       );
@@ -3401,15 +4274,15 @@ export default function App() {
                     </div>
                     
                     <button
-                      onClick={markCurrentChapterRead}
-                      disabled={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)}
-                      className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition duration-150 flex items-center gap-1.5 ${
+                      onClick={(e) => markCurrentChapterRead(false, e.currentTarget)}
+                      className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 ${
                         readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)
-                          ? 'bg-[#1a1712] border-[#2e2a1e] text-emerald-500'
-                          : 'bg-emerald-950/20 hover:bg-emerald-950/40 border-emerald-500/25 text-emerald-400'
+                          ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                          : 'bg-emerald-950/15 hover:bg-emerald-950/35 border-emerald-500/25 text-emerald-400/80 hover:text-emerald-400'
                       }`}
+                      title={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? "Lecture déjà complétée et enregistrée. Cliquez pour retirer." : "Marquer ce chapitre comme lu et enregistrer la progression."}
                     >
-                      <Check className="w-3.5 h-3.5" />
+                      <Check className={`w-3.5 h-3.5 transition-transform duration-200 ${readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'scale-110' : ''}`} />
                       <span>{readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'COMPLÉTÉ ET ENREGISTRÉ' : 'MARQUER LECTURE FAITE'}</span>
                     </button>
                   </div>
@@ -3720,7 +4593,15 @@ export default function App() {
               className="space-y-5"
             >
               {/* Daily Chapter Reading Goal & Progress Bar widget */}
-              <DailyReadingGoal readingHistory={readingHistory} />
+              <DailyReadingGoal 
+                readingHistory={readingHistory} 
+                readingTimeToday={readingTimeToday}
+                setReadingTimeToday={setReadingTimeToday}
+                dailyTimeGoal={dailyTimeGoal}
+                setDailyTimeGoal={setDailyTimeGoal}
+                goalType={goalType}
+                setGoalType={setGoalType}
+              />
 
               {/* Recently Read Chapters chronological history list */}
               <RecentlyReadChapters 

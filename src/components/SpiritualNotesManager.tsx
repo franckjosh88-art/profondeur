@@ -361,9 +361,14 @@ export const SpiritualNotesManager: React.FC<SpiritualNotesManagerProps> = ({
                       {/* Detailed pastoral analysis advice beneath note text, collapsible on demand or elegant small teaser */}
                       {note.emotion_analysis && (
                         <div className="mt-2.5 pt-2 border-t border-[#2e2a1e]/20 space-y-1.5">
-                          <span className="text-[7.5px] font-mono text-[#6b6355] uppercase tracking-widest block select-none">
-                            RÉSONANCE DE L'ÂME · IA
-                          </span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[7.5px] font-mono text-[#6b6355] uppercase tracking-widest block select-none">
+                              RÉSONANCE DE L'ÂME · IA
+                            </span>
+                            <span className="px-1.5 py-0.5 text-[6.5px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded select-none">
+                              Analyse générée par IA — à vérifier
+                            </span>
+                          </div>
                           <p className="text-[10px] leading-relaxed text-[#b8af9e] italic font-sans pl-1.5 border-l border-[#c9a84c]/20">
                             {note.emotion_analysis.emotionalSummary}
                           </p>

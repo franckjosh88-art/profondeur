@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2, Image } from 'lucide-react';
+import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2, Image, Bookmark } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Verse, EmotionAnalysisResult } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
@@ -22,6 +22,8 @@ interface VerseItemProps {
   emotionAnalysis?: EmotionAnalysisResult;
   onSaveNote: (verse: Verse, noteText: string, audioBase64?: string, emotionAnalysis?: EmotionAnalysisResult) => void;
   isCurrentSpoken?: boolean;
+  isLastReadTarget?: boolean;
+  isLastRead?: boolean;
   index?: number;
 }
 
@@ -42,6 +44,8 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
   emotionAnalysis,
   onSaveNote,
   isCurrentSpoken = false,
+  isLastReadTarget = false,
+  isLastRead = false,
   index = 0
 }) => {
   const [copied, setCopied] = useState(false);
@@ -418,6 +422,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
   return (
     <motion.div 
       id={`verse-${verse.book_id}-${verse.chapter}-${verse.verse}`}
+      data-verse-num={verse.verse}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ 
@@ -429,12 +434,14 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         e.stopPropagation();
         onTap();
       }}
-      className={`group relative py-2 px-3 transition-all duration-200 cursor-pointer select-none border-b border-[#2e2a1e]/10 ${
-        isSelected 
-          ? 'bg-[rgba(201,168,76,0.06)] border-l-2 border-[#c9a84c] rounded-none' 
-          : isCurrentSpoken
-            ? 'bg-[rgba(201,168,76,0.04)] border-l-2 border-[#c9a84c] rounded-none animate-pulse'
-            : 'border-l-2 border-transparent hover:bg-white/[0.01]'
+      className={`verse-container-item group relative py-2 px-3 transition-all duration-200 cursor-pointer select-none border-b border-[#2e2a1e]/10 ${
+        (isLastReadTarget || isLastRead)
+          ? 'bg-[#c9a84c]/10 border-l-2 border-[#c9a84c] rounded-r-xl shadow-[0_0_15px_rgba(201,168,76,0.15)] ring-1 ring-[#c9a84c]/30 my-1'
+          : isSelected 
+            ? 'bg-[rgba(201,168,76,0.06)] border-l-2 border-[#c9a84c] rounded-none' 
+            : isCurrentSpoken
+              ? 'bg-[rgba(201,168,76,0.04)] border-l-2 border-[#c9a84c] rounded-none animate-pulse'
+              : 'border-l-2 border-transparent hover:bg-white/[0.01]'
       }`}
       style={{
         paddingLeft: '12px',
@@ -443,10 +450,23 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         paddingBottom: '8px',
       }}
     >
+      {(isLastReadTarget || isLastRead) && (
+        <div className="mb-2 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#c9a84c] text-[#0d0b07] font-mono text-[9px] font-extrabold uppercase tracking-wider w-fit shadow-md animate-fade-in">
+          <Bookmark className="w-3 h-3 fill-current" />
+          <Sparkles className="w-3 h-3 fill-current" />
+          <span>Dernière position de lecture · Verset {verse.verse}</span>
+        </div>
+      )}
+
       <div className="flex items-start gap-2.5">
-        {/* Verse Number aligned elegant top-left superscript style with optional Note icon */}
+        {/* Verse Number aligned elegant top-left superscript style with optional Note icon & Golden Bookmark */}
         <div className="flex flex-col items-center gap-1 select-none font-mono text-[11px] font-extrabold text-[#c9a84c] mt-1 pr-0.5 flex-shrink-0">
           <span>{verse.verse}</span>
+          {(isLastRead || isLastReadTarget) && (
+            <div title="Dernier verset lu" className="p-0.5 rounded-full bg-[#c9a84c]/20 flex items-center justify-center animate-pulse">
+              <Bookmark className="w-3 h-3 text-[#c9a84c] fill-[#c9a84c]" />
+            </div>
+          )}
           {hasNote && (() => {
             if (emotionAnalysis?.detectedEmotion) {
               const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
@@ -565,17 +585,21 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
             e.stopPropagation();
             onToggleFavorite(verse);
           }}
-          className={`flex-shrink-0 p-1.5 rounded bg-white/[0.01] hover:bg-white/[0.08] transition duration-150 cursor-pointer self-start ${
+          className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all duration-200 cursor-pointer self-start select-none ${
             isFavorite 
-              ? 'text-[#c9a84c] opacity-100' 
-              : 'text-[#6b6355] hover:text-[#c9a84c] opacity-0 group-hover:opacity-100 max-md:opacity-30 focus:opacity-100'
+              ? 'bg-[#c9a84c]/15 text-[#c9a84c] border-[#c9a84c]/50 shadow-[0_0_12px_rgba(201,168,76,0.25)] opacity-100 font-bold' 
+              : 'bg-[#16130e] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e] hover:border-[#c9a84c]/40 opacity-80 group-hover:opacity-100 focus:opacity-100'
           }`}
-          title={isFavorite ? "Retirer des favoris" : "Ajout rapide aux favoris"}
+          title={isFavorite ? "Retirer des favoris (Sauvegardé localement & dans Firestore)" : "Ajouter aux favoris (Sauvegarder localement & dans Firestore)"}
         >
-          <Star 
-            className="w-3.5 h-3.5" 
-            fill={isFavorite ? "#c9a84c" : "transparent"} 
+          <Heart 
+            className={`w-3.5 h-3.5 transition-transform duration-200 ${
+              isFavorite ? 'scale-110 fill-[#c9a84c] text-[#c9a84c]' : 'group-hover:scale-105'
+            }`} 
           />
+          <span className="text-[10px] font-mono tracking-wider uppercase">
+            Favori
+          </span>
         </button>
 
         {/* Quick copy-to-clipboard option directly in the interface */}
@@ -641,7 +665,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
             <div className="pt-2 border-t border-[#2e2a1e]/30 space-y-2 select-none">
               <div className="flex justify-between items-center">
                 <span className="text-[9px] font-mono tracking-wider text-[#c9a84c] uppercase font-bold flex items-center gap-1.5">
-                  <Mic className="w-3.5 h-3.5 text-[#c9a84c]" /> Réflexion vocale
+                  <Mic className="w-3.5 h-3.5 text-[#c9a84c]" /> Note vocale & Témoignage spirituel
                 </span>
                 
                 {isSpeechToTextSupported && (
@@ -665,12 +689,13 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
                       <span className="text-[10.5px] font-mono text-rose-400 font-bold">
-                        Enregistrement... {Math.floor(recordDuration / 60)}:{(recordDuration % 60).toString().padStart(2, '0')}
+                        Enregistrement du témoignage... {Math.floor(recordDuration / 60)}:{(recordDuration % 60).toString().padStart(2, '0')}
                       </span>
                     </div>
                     <button
+                      type="button"
                       onClick={stopRecording}
-                      className="p-1 px-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-md text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer transition"
+                      className="p-1 px-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-md text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer transition shadow-sm"
                     >
                       <Square className="w-3 h-3 fill-current" />
                       <span>Arrêter</span>
@@ -679,28 +704,30 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
                   {isTranscribing && (
                     <div className="flex items-center gap-1.5 text-[9px] font-mono text-[#c9a84c] bg-[#1a1712] rounded px-2 py-1 border border-[#c9a84c]/20 animate-pulse">
                       <Sparkles className="w-3.5 h-3.5 text-[#c9a84c]" />
-                      <span>Dictée vocale active : exprimez votre pensée spirituelle oralement...</span>
+                      <span>Dictée vocale active : exprimez votre témoignage spirituel oralement...</span>
                     </div>
                   )}
                 </div>
               ) : audioUrl ? (
-                <div className="flex items-center justify-between bg-[#1f1a12] border border-[#2e2a1e] rounded-lg p-2 px-3">
+                <div className="flex items-center justify-between bg-[#1f1a12] border border-[#c9a84c]/30 rounded-lg p-2 px-3 shadow-soft">
                   <div className="flex items-center gap-2.5">
                     <button
+                      type="button"
                       onClick={playAudio}
                       className="w-7 h-7 rounded-full bg-[#c9a84c]/10 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] hover:bg-[#c9a84c]/20 transition cursor-pointer"
                     >
                       {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
                     </button>
                     <div>
-                      <p className="text-[11px] text-[#e8e0d0] font-sans font-medium">Réflexion audio enregistrée</p>
-                      <p className="text-[9px] text-[#6b6355] font-mono uppercase">Prêt à être sauvegardé dans vos notes</p>
+                      <p className="text-[11px] text-[#e8e0d0] font-sans font-medium">Témoignage vocal enregistré</p>
+                      <p className="text-[9px] text-[#6b6355] font-mono uppercase">Prêt à être sauvegardé dans Firestore</p>
                     </div>
                   </div>
                   <button
+                    type="button"
                     onClick={handleDeleteAudio}
                     className="p-1.5 hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 rounded-md transition cursor-pointer"
-                    title="Supprimer la réflexion vocale"
+                    title="Supprimer la note vocale"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -709,10 +736,11 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
                 <button
                   type="button"
                   onClick={startRecording}
-                  className="w-full py-2 bg-[#17140f] hover:bg-[#201b13] border border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#c9a84c] rounded-lg text-[10px] font-mono uppercase font-black tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full py-2.5 bg-[#17140f] hover:bg-[#201b13] border border-[#c9a84c]/30 hover:border-[#c9a84c] text-[#c9a84c] hover:text-[#e8e0d0] rounded-lg text-[10px] font-mono uppercase font-black tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                  title="Enregistrer un témoignage ou une note vocale via MediaRecorder et sauvegarder dans Firestore"
                 >
                   <Mic className="w-3.5 h-3.5 text-[#c9a84c]" />
-                  <span>Enregistrer une réflexion vocale</span>
+                  <span>Enregistrer une note vocale</span>
                 </button>
               )}
             </div>
@@ -749,19 +777,24 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
                   </div>
                 ) : currentAnalysis ? (
                   <div className="bg-[#17140f] border border-[#2e2a1e]/60 rounded-lg p-3 space-y-2.5 animate-fade-in text-left">
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const meta = getEmotionMeta(currentAnalysis.detectedEmotion);
-                        return (
-                          <div className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none`}>
-                            {renderEmotionIcon(meta.iconName, "w-3 h-3")}
-                            <span>{currentAnalysis.detectedEmotion}</span>
-                          </div>
-                        );
-                      })()}
-                      <p className="text-[10.5px] font-sans font-bold text-[#b8af9e]">
-                        détecté comme climat spirituel
-                      </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const meta = getEmotionMeta(currentAnalysis.detectedEmotion);
+                          return (
+                            <div className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none`}>
+                              {renderEmotionIcon(meta.iconName, "w-3 h-3")}
+                              <span>{currentAnalysis.detectedEmotion}</span>
+                            </div>
+                          );
+                        })()}
+                        <p className="text-[10.5px] font-sans font-bold text-[#b8af9e]">
+                          détecté comme climat spirituel
+                        </p>
+                      </div>
+                      <span className="px-1.5 py-0.5 text-[6.5px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded select-none">
+                        Analyse générée par IA — à vérifier
+                      </span>
                     </div>
 
                     <p className="font-serif italic text-xs text-[#b8af9e] leading-relaxed">
@@ -871,7 +904,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
               style={{ color: isFavorite ? '#c9a84c' : '#6b6355' }}
             >
               <Heart className="w-3.5 h-3.5" fill={isFavorite ? '#c9a84c' : 'none'} />
-              <span>{isFavorite ? 'Sauvé' : 'Sauver'}</span>
+              <span>Favori</span>
             </button>
 
             {/* Divider */}

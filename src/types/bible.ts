@@ -52,6 +52,10 @@ export interface ReadingHistory {
   book_name: string;
   chapter: number;
   timestamp: string;
+  last_verse?: number;
+  total_verses?: number;
+  time_spent_seconds?: number;
+  status?: 'non_commence' | 'en_cours' | 'complete';
 }
 
 export interface EmotionAnalysisResult {

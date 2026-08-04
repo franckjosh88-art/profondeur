@@ -365,14 +365,14 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
       'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
       'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
       'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-      'x-frd', 'x-frb', 'x-fri', 'male', 'man', 'boy', 'guy'
+      'x-frd', 'x-frb', 'x-fri', 'vcb', 'vcd', 'vch', 'vci', 'vcj', 'vck', 'male', 'man', 'boy', 'guy'
     ];
     const lowerFemaleNames = [
       'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
       'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
       'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
       'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-      'zira', 'google français'
+      'zira', 'google français', 'harmonie', 'samantha', 'siri', 'vca', 'vcc', 'vce', 'vcf', 'vcg'
     ];
     
     let selectedVoice: SpeechSynthesisVoice | null = null;

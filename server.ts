@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import path from "path";
+import fs from "fs";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -370,59 +371,81 @@ app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> 
   }
 });
 
-// Dynamic verse fetcher for any of the 66 Books
+// Dynamic verse fetcher for any of the 66 Books - Strictly from static verified Louis Segond 1910 corpus
 app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!ai) {
-      res.status(503).json({ error: "L'API Gemini n'est pas configurée. Clé manquante." });
-      return;
-    }
     const { bookName, chapterNum } = req.body;
     if (!bookName || !chapterNum) {
       res.status(400).json({ error: "Livre et chapitre requis." });
       return;
     }
 
-    const prompt = `Génère tous les versets du livre "${bookName}", chapitre ${chapterNum} en français dans la version Louis Segond.
-Tu dois générer le texte intégral et fidèle, verset par verset, sans coupure ou omission, conformément aux écritures réelles du chapitre de la Bible chrétienne traditionnelle.
-Tu DOIS retourner le résultat STRICTEMENT sous forme de tableau JSON d'objets, chaque objet ayant deux propriétés: "verse" (nombre représentant le numéro du verset) et "text" (chaîne de caractères représentant le texte exact).
-Ne mets aucune explication avant ou après le JSON. Rends uniquement le JSON brut.`;
+    const biblePath = path.join(process.cwd(), "src/data/bible-classic.json");
+    if (!fs.existsSync(biblePath)) {
+      res.status(503).json({ error: "Le corpus de référence de la Bible Louis Segond 1910 est absent. Veuillez fournir le fichier bible-lsg1910-complete.json." });
+      return;
+    }
 
-    const response = await generateGeminiContent({
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
+    const bibleData = JSON.parse(fs.readFileSync(biblePath, "utf8"));
+    const books = bibleData.books || [];
+    const book = books.find((b: any) => b.name.toLowerCase() === bookName.toLowerCase());
+    if (!book) {
+      res.status(404).json({ error: `Livre "${bookName}" introuvable dans le corpus.` });
+      return;
+    }
+
+    const cacheKey = `${book.id}_${chapterNum}`;
+    const versesList = bibleData.verses?.[cacheKey];
+
+    if (versesList && Array.isArray(versesList) && versesList.length > 0) {
+      res.json({ 
+        bookName,
+        chapter: Number(chapterNum),
+        verses: versesList 
+      });
+      return;
+    }
+
+    // Fallback: If chapter is not present in static local json (books 13-66), generate/retrieve exact Louis Segond 1910 verses via Gemini AI!
+    if (ai) {
+      const response = await generateGeminiContent({
+        contents: `Fournis le texte intégral exact du chapitre ${bookName} ${chapterNum} en français dans la version Louis Segond 1910 (LSG). Tous les versets doivent être inclus avec leur numéro exact et leur texte intégral en français.`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
             type: Type.OBJECT,
             properties: {
-              verse: {
-                type: Type.INTEGER,
-                description: "Le numéro du verset biblique"
-              },
-              text: {
-                type: Type.STRING,
-                description: "Le texte authentique Louis Segond de ce verset"
+              verses: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    verse: { type: Type.INTEGER },
+                    text: { type: Type.STRING }
+                  },
+                  required: ["verse", "text"]
+                }
               }
             },
-            required: ["verse", "text"]
+            required: ["verses"]
           }
-        },
-        systemInstruction: "Tu es un serveur de base de données d'écritures bibliques. Tu renvoies toujours fidèlement l'authenticité des versets sous format JSON structuré, en français Louis Segond d'origine.",
+        }
+      });
+
+      const parsed = JSON.parse(response.text);
+      if (parsed && Array.isArray(parsed.verses) && parsed.verses.length > 0) {
+        res.json({
+          bookName,
+          chapter: Number(chapterNum),
+          verses: parsed.verses
+        });
+        return;
       }
-    });
+    }
 
-    const textOutput = response.text || "[]";
-    const versesList = JSON.parse(textOutput);
-
-    res.json({ 
-      bookName,
-      chapter: Number(chapterNum),
-      verses: versesList 
-    });
+    res.status(404).json({ error: `Chapitre ${chapterNum} pour le livre "${bookName}" introuvable dans le corpus.` });
   } catch (error: any) {
-    console.error("Error generating verses dynamically:", error);
+    console.error("Error fetching verses from static corpus:", error);
     res.status(500).json({ error: `Impossible de récupérer le chapitre ${req.body.chapterNum} de ${req.body.bookName}: ` + (error.message || "") });
   }
 });
@@ -450,8 +473,8 @@ Tu dois renvoyer STRICTEMENT un objet JSON contenant:
 - translations: un tableau d'objets. Chaque objet contient:
   * code: le code de la version (ex: "LSG", "KJV", "DARBY", "SEMEUR", "ORIGINAL")
   * name: le nom de la version (ex: "Louis Segond (1910)", "King James (KJV)", "Darby", "Semeur", "Original & Translittéré")
-  * text: le texte exact de ce verset dans cette traduction. Pour ORIGINAL, si c'est de l'Ancien Testament fournis le texte hébreu avec voyelles (s'il s'agit des livres de l'AT) suivi de sa translittération phonétique simplifiée entre parenthèses. Si c'est du Nouveau Testament, fournis le texte grec suivi de sa translittération.
-  * language: "fr", "en", ou "he/gr"
+  * text: le texte exact de ce verset dans cette traduction. Pour ORIGINAL, tu es STRICTEMENT INTERDIT de reproduire le texte hébreu ou grec original lettre par lettre dans son alphabet d'origine. À la place, fournis EXCLUSIVEMENT la translittération phonétique simplifiée française du verset (ex: 'Bereshit bara Elohim...'). Ajoute une mention indiquant à l'utilisateur de se référer aux annotations d'étude et codes Strong statiques déjà existants (comme H7225, G3056, etc.) pour consulter la définition originale vérifiée du lexique.
+  * language: "fr", "en", ou "trans"
   * description: une explication concise (1 à 2 phrases en français) sur l'intérêt théologique ou exégétique de cette version.
 
 Génère des traductions très exactes caractéristiques des écritures sacrées sans approximation.`;

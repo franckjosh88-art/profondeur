@@ -2,14 +2,19 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Menu, Bell, ChevronLeft, ChevronRight, Home, FolderClosed, 
-  Sparkles, X, Heart, HelpCircle, Settings, Quote, BookOpen
+  Sparkles, X, Heart, HelpCircle, Settings, Quote, BookOpen, Flame, Play, Volume2
 } from 'lucide-react';
+import { ReadingHistory } from '../types/bible';
 
 interface ContemplativeHomeProps {
   onNavigateToTab: (tab: 'home' | 'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize' | 'notes') => void;
   onOpenSettings?: () => void;
   notesCount?: number;
   goalPercent?: number;
+  currentStreak?: number;
+  readingHistory?: ReadingHistory[];
+  onNavigateToChapter?: (bookId: number, chapterNum: number, verseNum?: number) => void;
+  onPlayAudioCurrentChapter?: () => void;
 }
 
 interface ContemplativeVerse {
@@ -60,7 +65,11 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   onNavigateToTab,
   onOpenSettings,
   notesCount = 0,
-  goalPercent = 0
+  goalPercent = 0,
+  currentStreak = 0,
+  readingHistory = [],
+  onNavigateToChapter,
+  onPlayAudioCurrentChapter
 }) => {
   const [currentIdx, setCurrentIdx] = useState<number>(4); // Default to "Verset 5/7" as requested
   const [direction, setDirection] = useState<number>(0); // -1 for left, 1 for right
@@ -68,6 +77,18 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   const [showNotifPanel, setShowNotifPanel] = useState<boolean>(false);
   const [likedVerses, setLikedVerses] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<'contemplation' | 'dashboard'>('contemplation');
+
+  const latestReading = readingHistory && readingHistory.length > 0
+    ? [...readingHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+    : null;
+
+  const handleResumeReading = () => {
+    if (latestReading && onNavigateToChapter) {
+      onNavigateToChapter(latestReading.book_id, latestReading.chapter, latestReading.last_verse || 1);
+    } else {
+      onNavigateToTab('read');
+    }
+  };
 
   const activeVerse = CONTEMPLATIVE_VERSES[currentIdx];
 
@@ -216,7 +237,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             </motion.div>
 
             {/* Référence biblique or, plus petite */}
-            <div className="pt-2 text-center select-none">
+            <div className="pt-2 text-center select-none w-full">
               <AnimatePresence mode="wait">
                 <motion.div
                   key={currentIdx}
@@ -224,12 +245,12 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.3 }}
-                  className="space-y-1"
+                  className="space-y-3"
                 >
                   <p className="font-serif font-black text-[11px] uppercase tracking-[0.24em] text-[#c9a84c]">
                     {activeVerse.reference}
                   </p>
-                  <div className="flex justify-center items-center gap-3 pt-4">
+                  <div className="flex justify-center items-center gap-3 pt-1">
                     <button 
                       onClick={() => toggleLike(currentIdx)}
                       className={`w-8 h-8 rounded-full flex items-center justify-center transition cursor-pointer border ${
@@ -249,6 +270,55 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   </div>
                 </motion.div>
               </AnimatePresence>
+
+              {/* Reprendre la Lecture & Lecture Audio Buttons */}
+              <div className="pt-4 w-full space-y-2.5">
+                <button
+                  onClick={handleResumeReading}
+                  className="w-full px-4 py-3 rounded-2xl bg-[#12100c]/90 border border-[#c9a84c]/40 hover:border-[#c9a84c] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-soft cursor-pointer text-left backdrop-blur-sm"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-xl bg-[#c9a84c]/10 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] group-hover:bg-[#c9a84c] group-hover:text-[#0d0b07] transition duration-300">
+                      <Play className="w-4 h-4 fill-current ml-0.5" />
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-wider block font-bold">Reprendre la lecture</span>
+                      <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#c9a84c] transition">
+                        {latestReading ? `${latestReading.book_name} ${latestReading.chapter} ${latestReading.last_verse ? `· Verset ${latestReading.last_verse}` : ''}` : 'Ouvrir la Sainte Bible'}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-mono uppercase font-bold text-[#c9a84c] px-2.5 py-1 rounded-lg bg-[#c9a84c]/10 group-hover:bg-[#c9a84c] group-hover:text-[#0d0b07] transition">
+                    Reprendre →
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onPlayAudioCurrentChapter) {
+                      onPlayAudioCurrentChapter();
+                    }
+                  }}
+                  className="w-full px-4 py-3 rounded-2xl bg-[#c9a84c]/15 border border-[#c9a84c]/60 hover:border-[#c9a84c] hover:bg-[#c9a84c]/25 text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-soft cursor-pointer text-left backdrop-blur-sm"
+                  title="Lancer la lecture audio du chapitre courant sans ouvrir le lecteur manuel"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-xl bg-[#c9a84c] text-[#0d0b07] flex items-center justify-center font-bold shadow-md group-hover:scale-105 transition">
+                      <Volume2 className="w-4 h-4 fill-current" />
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono uppercase text-[#c9a84c] tracking-wider block font-bold">Écoute Vocale Directe</span>
+                      <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#c9a84c] transition">
+                        Lecture Audio
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-mono uppercase font-bold text-[#0d0b07] px-2.5 py-1 rounded-lg bg-[#c9a84c] group-hover:bg-[#e8c97a] transition shadow-sm">
+                    Écouter ▶
+                  </span>
+                </button>
+              </div>
             </div>
 
           </div>
@@ -264,21 +334,48 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             <span className="font-mono text-[8px] text-[#6b6355] tracking-widest uppercase font-black">{activeVerse.reference}</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 md:gap-4">
+          <div className="grid grid-cols-3 gap-2.5">
             <button
               onClick={() => onNavigateToTab('read')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
             >
               <BookOpen className="w-4 h-4 text-[#c9a84c]" />
               <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Lecture</span>
             </button>
             <button
+              type="button"
+              onClick={() => {
+                if (onPlayAudioCurrentChapter) {
+                  onPlayAudioCurrentChapter();
+                }
+              }}
+              className="bg-[#12100c] hover:bg-[#15130f] border border-[#c9a84c]/40 hover:border-[#c9a84c] rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              title="Lecture Audio Directe"
+            >
+              <Volume2 className="w-4 h-4 text-[#c9a84c]" />
+              <span className="text-[9px] font-mono uppercase tracking-wider text-[#c9a84c]">Audio ▶</span>
+            </button>
+            <button
               onClick={() => onNavigateToTab('assistant')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-4 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
             >
               <HelpCircle className="w-4 h-4 text-[#c9a84c]" />
               <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Assistant</span>
             </button>
+          </div>
+
+          {/* STREAK */}
+          <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-xl p-4 sm:p-5 flex items-center justify-between">
+            <div>
+              <span className="text-[8px] font-mono text-[#6b6355] uppercase tracking-wider">Fidélité spirituelle</span>
+              <span className="text-xs font-serif font-black text-[#e8e0d0] block">
+                Série de {currentStreak} {currentStreak > 1 ? 'jours' : 'jour'}
+              </span>
+            </div>
+            <div className="text-[10px] font-mono font-bold text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 px-2.5 py-1 rounded-md flex items-center gap-1.5">
+              <Flame className={`w-3.5 h-3.5 ${currentStreak > 0 ? 'text-[#c9a84c] animate-pulse' : 'text-[#6b6355]'}`} fill={currentStreak > 0 ? '#c9a84c' : 'none'} />
+              <span>{currentStreak}</span>
+            </div>
           </div>
 
           {/* OBJECTIF LECTURE */}

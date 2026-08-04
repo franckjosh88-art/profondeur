@@ -54,7 +54,12 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({
             {getHeaderLabel()}
           </span>
         </div>
-        <div className="opacity-70">{getHeaderIcon()}</div>
+        <div className="flex items-center gap-2">
+          <span className="px-1.5 py-0.5 text-[7px] md:text-[8px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded select-none">
+            Analyse générée par IA — à vérifier
+          </span>
+          <div className="opacity-70">{getHeaderIcon()}</div>
+        </div>
       </div>
 
       {title && (
