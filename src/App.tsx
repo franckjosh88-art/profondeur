@@ -40,52 +40,48 @@ import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
 import { natureSounds, NATURE_SOUNDS, NatureSoundType } from './utils/natureSounds';
 import { MemorizeModule } from './components/MemorizeModule';
-import { ContemplativeHome } from './components/ContemplativeHome';
+import { 
+  ContemplativeHome, 
+  PRAYER_BG_SANCTUARY, 
+  PRAYER_BG_VALLEY, 
+  PRAYER_BG_BIBLE 
+} from './components/ContemplativeHome';
 import { audioPurifier } from './utils/audioProcessor';
 import { explainCache, CachedExplanation } from './utils/indexedDBCache';
 import { playCompletionChime, triggerGoldenSparks } from './utils/soundEffects';
+import { 
+  getSortedFrenchVoices, 
+  resolveStrictFrenchVoice, 
+  classifyFrenchVoiceGender,
+  waitForSpeechVoices 
+} from './utils/frenchTts';
 
-const LOWER_MALE_NAMES = [
-  'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-  'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
-  'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-  'x-frd', 'x-frb', 'x-fri', 'vcb', 'vcd', 'vch', 'vci', 'vcj', 'vck', 'male', 'man', 'boy', 'guy'
-];
-
-const LOWER_FEMALE_NAMES = [
-  'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
-  'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
-  'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
-  'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-  'zira', 'google français', 'harmonie', 'samantha', 'siri', 'vca', 'vcc', 'vce', 'vcf', 'vcg'
-];
-
-// Images d'ambiance spirituelle (Portrait sombre & chaleureux, lueur dorée)
+// Images d'ambiance spirituelle (Assets statiques bundlés & compatibles prod/preview)
 export const SANCTUARY_BG_PRESETS = [
   {
     id: 'sanctuary',
     name: 'Sanctuaire & Bokeh',
     label: 'Neutre',
     icon: Leaf,
-    url: '/src/assets/images/prayer_bg_sanctuary_1790148027998.jpg'
+    url: PRAYER_BG_SANCTUARY
   },
   {
     id: 'valley',
     name: 'Psaume 23 Vallée',
     label: 'Psaume 23',
     icon: Mountain,
-    url: '/src/assets/images/prayer_bg_valley_1790148041309.jpg'
+    url: PRAYER_BG_VALLEY
   },
   {
     id: 'bible',
     name: 'Bible & Boiserie',
     label: 'Méditation',
     icon: Flame,
-    url: '/src/assets/images/prayer_bg_bible_1790148055006.jpg'
+    url: PRAYER_BG_BIBLE
   }
 ];
 
-const PRAYER_IN_LIGHT_BG = SANCTUARY_BG_PRESETS[0].url;
+const PRAYER_IN_LIGHT_BG = PRAYER_BG_SANCTUARY;
 
 export default function App() {
   // Authentication states
@@ -99,10 +95,17 @@ export default function App() {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState<boolean>(false);
 
-  // Arrière-plan dynamique immersif
+  // Arrière-plan dynamique immersif (avec migration automatique des anciens chemins de preview)
   const [sanctuaryBgImage, setSanctuaryBgImage] = useState<string>(() => {
     try {
-      return localStorage.getItem('bible_sanctuary_bg') || PRAYER_IN_LIGHT_BG;
+      const saved = localStorage.getItem('bible_sanctuary_bg');
+      if (saved) {
+        if (saved.includes('sanctuary')) return PRAYER_BG_SANCTUARY;
+        if (saved.includes('valley')) return PRAYER_BG_VALLEY;
+        if (saved.includes('bible')) return PRAYER_BG_BIBLE;
+        if (!saved.startsWith('/src/')) return saved;
+      }
+      return PRAYER_IN_LIGHT_BG;
     } catch (_) {
       return PRAYER_IN_LIGHT_BG;
     }
@@ -666,31 +669,31 @@ export default function App() {
     if (!sqliteDbReady) return;
     
     let active = true;
-    setLoadingVerses(true);
     setSelectedVerseId(null);
     setChapterSummary(null); // Clear active summary cache
     
-    // Quick synchronous check to see if everything in loadedChapters is already fully loaded in cache
-    const allCachedAndArray = loadedChapters.every(ch => {
-      const key = `${selectedTranslation}_${selectedBook.id}_${ch}`;
-      return Array.isArray(versesCache.current[key]);
-    });
-
-    // If completely cached in memory as resolved arrays, skip showing active loading spinners
-    if (allCachedAndArray) {
-      const allVerses: Verse[] = [];
-      loadedChapters.forEach(ch => {
-        const key = `${selectedTranslation}_${selectedBook.id}_ch_${ch}`;
-        const keyAlt = `${selectedTranslation}_${selectedBook.id}_${ch}`;
-        const cached = (versesCache.current[keyAlt] || versesCache.current[key]) as Verse[];
-        if (cached) {
-          allVerses.push(...cached);
+    // Quick synchronous check for the target chapter to eliminate visual flicker / saccades
+    const targetKey = `${selectedTranslation}_${selectedBook.id}_${selectedChapter}`;
+    const directCached = versesCache.current[targetKey];
+    
+    let immediateVerses: Verse[] | null = null;
+    if (!isContinuousScroll) {
+      if (Array.isArray(directCached) && directCached.length > 0) {
+        immediateVerses = directCached;
+      } else if (selectedTranslation === 'local') {
+        const sqlRes = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
+        if (sqlRes && sqlRes.length > 0) {
+          immediateVerses = sqlRes;
+          versesCache.current[targetKey] = sqlRes;
         }
-      });
-      if (allVerses.length > 0) {
-        setChapterVerses(allVerses);
-        setLoadingVerses(false);
       }
+    }
+
+    if (immediateVerses) {
+      setChapterVerses(immediateVerses);
+      setLoadingVerses(false);
+    } else {
+      setLoadingVerses(true);
     }
 
     const loadVerses = async () => {
@@ -1386,6 +1389,7 @@ export default function App() {
       return '';
     }
   });
+  const [ttsWarning, setTtsWarning] = useState<string | null>(null);
 
   const [isZenMode, setIsZenMode] = useState<boolean>(() => {
     try {
@@ -1415,58 +1419,13 @@ export default function App() {
     } catch (_) {}
   }, [isRawReading]);
 
-  // Load and listen to the exhaustive list of French voices
+  // Load and listen to the exhaustive list of strictly French voices
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
     const updateVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      
-      if (isRawReading) {
-        // Raw Reading bypasses all filtering and sorting: return everything natively
-        setAvailableVoices(voices);
-        return;
-      }
-
-      // Filter voices for French lang
-      const frVoices = voices.filter(v => v.lang.startsWith('fr') || v.lang.includes('FR'));
-      
-      const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
-      
-      // Sort French voices: prioritize explicit masculine, then general male, then premium/high quality
-      const sortedFrVoices = [...frVoices].sort((a, b) => {
-        const aName = a.name.toLowerCase();
-        const bName = b.name.toLowerCase();
-        
-        // 1. Explicitly marked masculine voices
-        const aHasPriorityMale = priorityMaleKeywords.some(keyword => aName.includes(keyword));
-        const bHasPriorityMale = priorityMaleKeywords.some(keyword => bName.includes(keyword));
-        
-        if (aHasPriorityMale && !bHasPriorityMale) return -1;
-        if (!aHasPriorityMale && bHasPriorityMale) return 1;
-        
-        // 2. Other male voices
-        const aIsMale = LOWER_MALE_NAMES.some(name => aName.includes(name));
-        const bIsMale = LOWER_MALE_NAMES.some(name => bName.includes(name));
-        
-        if (aIsMale && !bIsMale) return -1;
-        if (!aIsMale && bIsMale) return 1;
-        
-        // 3. Premium/High fidelity voices
-        const aIsPremium = aName.includes('google') || aName.includes('natural') || aName.includes('neural') || aName.includes('premium') || aName.includes('high');
-        const bIsPremium = bName.includes('google') || bName.includes('natural') || bName.includes('neural') || bName.includes('premium') || bName.includes('high');
-        
-        if (aIsPremium && !bIsPremium) return -1;
-        if (!aIsPremium && bIsPremium) return 1;
-        
-        // 4. Local service preferences
-        if (a.localService === false && b.localService === true) return -1;
-        if (a.localService === true && b.localService === false) return 1;
-        
-        return 0;
-      });
-
-      setAvailableVoices(sortedFrVoices);
+      const frVoices = getSortedFrenchVoices();
+      setAvailableVoices(frVoices);
     };
 
     updateVoices();
@@ -1480,7 +1439,7 @@ export default function App() {
         window.speechSynthesis.onvoiceschanged = null;
       }
     };
-  }, [isRawReading]);
+  }, []);
 
   const currentVerseToSpeakRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
@@ -1720,7 +1679,25 @@ export default function App() {
   }, [isSpeaking, isPaused]);
 
   const speakVerse = (index: number) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      setTtsWarning("La synthèse vocale n'est pas disponible sur votre navigateur.");
+      return;
+    }
+
+    const currentVoices = window.speechSynthesis.getVoices();
+    if (currentVoices.length === 0) {
+      // Async voice population fallback (Chrome/iOS initial load)
+      waitForSpeechVoices(700).then((voices) => {
+        if (voices.length > 0) {
+          setAvailableVoices(getSortedFrenchVoices(voices));
+          speakVerse(index);
+        } else {
+          setTtsWarning("Aucune voix de synthèse vocale n'est détectée sur votre appareil.");
+          stopSpeaking();
+        }
+      });
+      return;
+    }
 
     if (index < 0 || index >= chapterVerses.length) {
       if (index >= chapterVerses.length && autoAdvanceChapterSpeech) {
@@ -1735,6 +1712,29 @@ export default function App() {
       }
       stopSpeaking();
       return;
+    }
+
+    // Strictly resolve French voice matching the user's requested gender
+    const resolution = resolveStrictFrenchVoice({
+      gender: voiceGender,
+      preferredVoiceURI: selectedVoiceURI,
+      basePitch: isRawReading ? 1.0 : voicePitch,
+      availableVoices: currentVoices
+    });
+
+    logTts(`[TTS Debug Selector] Requested gender: "${voiceGender}", Selected URI: "${selectedVoiceURI || 'none'}", Resolved voice: ${resolution.voice ? resolution.voice.name : 'NONE'}`);
+
+    // If no French voice is available, safely halt speech and alert user
+    if (!resolution.voice) {
+      logTts("[TTS Debug] No French voice available! Halting speech.", 'warn');
+      setTtsWarning(resolution.warningMessage || "Aucune voix française n'est installée sur cet appareil ou navigateur.");
+      stopSpeaking();
+      return;
+    }
+
+    // Inform user once if fallback pitch compensation was needed (e.g. no native female voice installed)
+    if (resolution.fallbackApplied && resolution.warningMessage && index === 0) {
+      setTtsWarning(resolution.warningMessage);
     }
 
     // Request wake lock to keep mobile screen awake and keep audio running in background
@@ -1769,8 +1769,11 @@ export default function App() {
 
     logTts(`[TTS Debug] Creating new SpeechSynthesisUtterance for verse ${index}. Text length: ${textToSpeak.length}`);
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.lang = 'fr-FR';
+    utterance.lang = resolution.voice.lang || 'fr-FR';
+    utterance.voice = resolution.voice;
     utterance.rate = playbackRate;
+    utterance.pitch = isRawReading ? 1.0 : resolution.recommendedPitch;
+    utterance.volume = voiceVolume;
 
     // Prevent garbage collection on mobile browsers (e.g. Chrome/iOS/Android)
     if (!(window as any)._activeUtterances) {
@@ -1786,137 +1789,6 @@ export default function App() {
         logTts(`[TTS Debug] cleanUtterance for verse ${index}. Filtered from ${initialLen} to ${(window as any)._activeUtterances.length} references.`);
       }
     };
-
-    // Dynamically look up French voice for Louis Segond French reading with gender support
-    const voices = window.speechSynthesis.getVoices();
-    logTts(`[TTS Debug Selector] Total voices available in browser: ${voices.length}`);
-    logTts(`[TTS Debug Selector] User configuration -> voiceGender: "${voiceGender}", selectedVoiceURI: "${selectedVoiceURI || 'none'}", isRawReading: ${isRawReading}`);
-    
-    let selectedVoice: SpeechSynthesisVoice | null = null;
-
-    if (isRawReading) {
-      logTts(`[TTS Debug Selector] isRawReading is TRUE. Trying manual selection first...`);
-      if (selectedVoiceURI) {
-        selectedVoice = voices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
-        logTts(`[TTS Debug Selector] Manual selection search with URI "${selectedVoiceURI}" returned: ${selectedVoice ? selectedVoice.name : 'null'}`);
-      }
-      if (!selectedVoice && voices.length > 0) {
-        selectedVoice = voices[0];
-        logTts(`[TTS Debug Selector] Fallback to first available voice as raw reading: ${selectedVoice.name}`);
-      }
-    } else {
-      const frenchVoices = voices.filter(voice => voice.lang.startsWith('fr') || voice.lang.includes('FR'));
-      logTts(`[TTS Debug Selector] Found ${frenchVoices.length} French voices overall.`);
-      frenchVoices.forEach((v, idx) => {
-        const isMaleMatched = LOWER_MALE_NAMES.some(name => v.name.toLowerCase().includes(name));
-        const isFemaleMatched = LOWER_FEMALE_NAMES.some(name => v.name.toLowerCase().includes(name));
-        logTts(`[TTS Debug Voice List] Voice #${idx}: "${v.name}" | URI: "${v.voiceURI}" | lang: "${v.lang}" | isMaleMatched: ${isMaleMatched} | isFemaleMatched: ${isFemaleMatched} | localService: ${v.localService}`);
-      });
-      
-      // Sort French voices: prioritize explicit masculine first, then general male, then higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
-      const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
-        const aLower = a.name.toLowerCase();
-        const bLower = b.name.toLowerCase();
-        
-        const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
-        const aHasPriorityMale = priorityMaleKeywords.some(keyword => aLower.includes(keyword));
-        const bHasPriorityMale = priorityMaleKeywords.some(keyword => bLower.includes(keyword));
-        
-        if (aHasPriorityMale && !bHasPriorityMale) return -1;
-        if (!aHasPriorityMale && bHasPriorityMale) return 1;
-        
-        const aIsMale = LOWER_MALE_NAMES.some(name => aLower.includes(name));
-        const bIsMale = LOWER_MALE_NAMES.some(name => bLower.includes(name));
-        
-        if (aIsMale && !bIsMale) return -1;
-        if (!aIsMale && bIsMale) return 1;
-        
-        const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
-        const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
-        
-        if (aIsPremium && !bIsPremium) return -1;
-        if (!aIsPremium && bIsPremium) return 1;
-        
-        // Also prefer voices that are not localService when available on some platforms (though browser-dependent)
-        if (a.localService === false && b.localService === true) return -1;
-        if (a.localService === true && b.localService === false) return 1;
-        
-        return 0;
-      });
-      
-      // 1. Use manual voice choice if authorized and present
-      if (selectedVoiceURI) {
-        selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === selectedVoiceURI) || null;
-        logTts(`[TTS Debug Selector] Tried manual voiceURI match for "${selectedVoiceURI}". Found: ${selectedVoice ? selectedVoice.name : 'null'}`);
-      }
-
-      // 2. Fall back on automatic gender-matching lists or defaults if no manual voice is chosen
-      if (!selectedVoice) {
-        logTts(`[TTS Debug Selector] No manual voice matched. Resolving voice for gender: "${voiceGender}"`);
-        if (voiceGender === 'male') {
-          // 1. Try exact male names from sorted high quality voices first
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-          logTts(`[TTS Debug Selector] Male matching - Step 1 (exact names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          
-          // 2. Try excluding female named voices
-          if (!selectedVoice) {
-            selectedVoice = sortedFrenchVoices.find(voice => 
-              !LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-            ) || null;
-            logTts(`[TTS Debug Selector] Male matching - Step 2 (not female names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          }
-        } else if (voiceGender === 'female') {
-          // 1. Try exact female names from sorted high quality voices first
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            LOWER_FEMALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-          logTts(`[TTS Debug Selector] Female matching - Step 1 (exact names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          
-          // 2. Try excluding male named voices
-          if (!selectedVoice) {
-            selectedVoice = sortedFrenchVoices.find(voice => 
-              !LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-            ) || null;
-            logTts(`[TTS Debug Selector] Female matching - Step 2 (not male names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          }
-        } else {
-          // 'auto' mode - Prioritize explicit masculine voices ('male', 'homme', 'paul', 'nicolas')
-          // to guarantee a deep and solemn spiritual reading experience by default!
-          const priorityMaleKeywords = ['male', 'homme', 'paul', 'nicolas'];
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            priorityMaleKeywords.some(keyword => voice.name.toLowerCase().includes(keyword))
-          ) || null;
-          logTts(`[TTS Debug Selector] Auto matching - Step 1 (priority keywords): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          
-          // Secondary fallback for auto mode: any general male voice
-          if (!selectedVoice) {
-            selectedVoice = sortedFrenchVoices.find(voice => 
-              LOWER_MALE_NAMES.some(name => voice.name.toLowerCase().includes(name))
-            ) || null;
-            logTts(`[TTS Debug Selector] Auto matching - Step 2 (general male names): ${selectedVoice ? selectedVoice.name : 'none found'}`);
-          }
-        }
-      }
-
-      // Fallback if no specific voice was determined
-      if (!selectedVoice && sortedFrenchVoices.length > 0) {
-        selectedVoice = sortedFrenchVoices[0];
-        logTts(`[TTS Debug Selector] Gender fallback matching failed. Picking first sorted French voice: ${selectedVoice.name}`);
-      }
-    }
-
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-      logTts(`[TTS Debug] FINAL Selected Voice object: "${selectedVoice.name}" (${selectedVoice.lang}) | URI: "${selectedVoice.voiceURI}" | LocalService: ${selectedVoice.localService}`);
-    } else {
-      logTts("[TTS Debug] FINAL Selected Voice: None. Browser default will be used.");
-    }
-
-    // Force pitch = 1.0 in raw reading mode, otherwise keep adjusted voicePitch
-    utterance.pitch = isRawReading ? 1.0 : voicePitch;
-    utterance.volume = voiceVolume;
 
     // Detailed debug logs for all event listeners
     const logState = (eventName: string, details?: any) => {
@@ -2858,12 +2730,16 @@ export default function App() {
                         }}
                         className="flex-1 text-[9px] bg-[#14120e] border border-[#2e2a1e]/80 text-[#e8e0d0] rounded p-1 focus:outline-none focus:border-[#c9a84c] min-w-0"
                       >
-                        <option value="">-- Mode Automatique --</option>
+                        <option value="">
+                          -- Mode Automatique ({voiceGender === 'female' ? 'Femme ♀' : voiceGender === 'male' ? 'Homme ♂' : 'Auto'}) --
+                        </option>
                         {availableVoices.map((voice) => {
                           const isPremium = voice.name.toLowerCase().includes('google') || voice.name.toLowerCase().includes('natural') || voice.name.toLowerCase().includes('premium') || voice.name.toLowerCase().includes('high');
+                          const gender = classifyFrenchVoiceGender(voice);
+                          const genderLabel = gender === 'female' ? '♀ Femme' : gender === 'male' ? '♂ Homme' : 'FR';
                           return (
                             <option key={voice.voiceURI} value={voice.voiceURI}>
-                              {isPremium ? '💎 ' : ''}{voice.name}
+                              {isPremium ? '💎 ' : ''}{voice.name} ({genderLabel})
                             </option>
                           );
                         })}
@@ -2877,20 +2753,24 @@ export default function App() {
                               // Play the purifier test chime
                               audioPurifier.playTestChime();
 
-                              // Speak sample
-                              const utterance = new SpeechSynthesisUtterance("Que la paix soit avec vous.");
-                              utterance.lang = 'fr-FR';
-                              utterance.rate = playbackRate * 0.9;
-                              
-                              const targetVoic = availableVoices.find(v => v.voiceURI === selectedVoiceURI);
-                              if (targetVoic) {
-                                utterance.voice = targetVoic;
-                              }
+                              const resolution = resolveStrictFrenchVoice({
+                                gender: voiceGender,
+                                preferredVoiceURI: selectedVoiceURI,
+                                basePitch: isRawReading ? 1.0 : voicePitch,
+                                availableVoices: availableVoices
+                              });
 
-                              // Keep clear native voice pitch or force 1.0 in raw reading to prevent robotic/distorted sounds
-                              utterance.pitch = isRawReading ? 1.0 : voicePitch;
-                              utterance.volume = voiceVolume;
-                              window.speechSynthesis.speak(utterance);
+                              if (resolution.voice) {
+                                const utterance = new SpeechSynthesisUtterance("Que la paix de Dieu soit avec vous.");
+                                utterance.lang = resolution.voice.lang || 'fr-FR';
+                                utterance.voice = resolution.voice;
+                                utterance.rate = playbackRate * 0.9;
+                                utterance.pitch = isRawReading ? 1.0 : resolution.recommendedPitch;
+                                utterance.volume = voiceVolume;
+                                window.speechSynthesis.speak(utterance);
+                              } else if (resolution.warningMessage) {
+                                setTtsWarning(resolution.warningMessage);
+                              }
                             }
                           }}
                           className="px-1.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/35 rounded text-[8px] hover:bg-[#c9a84c]/20 cursor-pointer flex items-center justify-center font-mono uppercase font-bold"
@@ -3751,7 +3631,20 @@ export default function App() {
 
                             {/* voiceGender Selector */}
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                              <span className="text-xs text-[#6b6355] font-sans font-medium">Timbre du lecteur</span>
+                              <div>
+                                <span className="text-xs text-[#a89d8b] font-sans font-medium block">Timbre du lecteur</span>
+                                <span className="text-[9px] text-[#6b6355] font-mono">
+                                  {voiceGender === 'female' 
+                                    ? (availableVoices.some(v => classifyFrenchVoiceGender(v) === 'female') 
+                                        ? 'Voix féminine française active' 
+                                        : 'Timbre féminin harmonisé (ajusté sur voix française)')
+                                    : voiceGender === 'male'
+                                    ? (availableVoices.some(v => classifyFrenchVoiceGender(v) === 'male') 
+                                        ? 'Voix masculine française active' 
+                                        : 'Timbre masculin ajusté')
+                                    : 'Choix automatique solennel'}
+                                </span>
+                              </div>
                               <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 self-start sm:self-auto">
                                 {[
                                   { label: 'Auto', value: 'auto' },
@@ -4322,12 +4215,10 @@ export default function App() {
                     <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Aucun verset disponible</p>
                   </div>
                 ) : (
-                  <motion.div 
+                  <div 
                     key={`${selectedBook.id}_${selectedChapter}_${selectedTranslation}_${isContinuousScroll}`}
-                    initial={{ opacity: 0, y: 12 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-                    className="space-y-1"
+                    className="space-y-1 animate-fade-in transition-opacity duration-300"
+                    style={{ animation: 'fadeIn 300ms ease-out forwards' }}
                   >
                     {chapterVerses.map((item, idx) => {
                       const noteInfo = getVerseHasNote(item);
@@ -4390,7 +4281,7 @@ export default function App() {
                         <div id="continuous-scroll-trigger" className="h-[2px] w-full mt-2"></div>
                       </div>
                     )}
-                  </motion.div>
+                  </div>
                 )}
                 
                 {/* Chapter study validation */}
@@ -4935,6 +4826,26 @@ export default function App() {
           >
             <EyeOff className="w-3.5 h-3.5" />
             <span>Quitter</span>
+          </button>
+        </div>
+      )}
+
+      {/* French TTS Guidance / Warning Toast */}
+      {ttsWarning && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] max-w-md w-[92%] bg-[#12100c]/98 border border-amber-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md flex items-start gap-3 animate-fade-slide-up select-none">
+          <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+            <Volume2 className="w-4 h-4" />
+          </div>
+          <div className="flex-1 space-y-1 text-left min-w-0">
+            <p className="font-serif font-bold text-xs text-amber-300">Synthèse Vocale en Français</p>
+            <p className="text-[11px] text-[#e8e0d0]/90 leading-relaxed font-sans">{ttsWarning}</p>
+          </div>
+          <button 
+            onClick={() => setTtsWarning(null)} 
+            className="text-[#8c8270] hover:text-[#e8e0d0] p-1 cursor-pointer transition shrink-0"
+            title="Fermer l'alerte"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}

@@ -6,6 +6,7 @@ import {
   Undo2, Volume2, HelpCircle, Mic, MicOff
 } from 'lucide-react';
 import { FavoriteVerse } from '../types/bible';
+import { resolveStrictFrenchVoice } from '../utils/frenchTts';
 
 interface MemorizeModuleProps {
   favorites: FavoriteVerse[];
@@ -331,97 +332,35 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
     
     const textToSpeak = currentVerse.text;
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utterance.lang = 'fr-FR';
     
     // Read preferences from localStorage
-    let storedGender = 'auto';
+    let storedGender: 'auto' | 'male' | 'female' = 'auto';
     let storedVoiceURI = '';
     let storedPitch = 1.0;
     try {
-      storedGender = localStorage.getItem('bible_voice_gender') || 'auto';
+      const g = localStorage.getItem('bible_voice_gender');
+      if (g === 'male' || g === 'female' || g === 'auto') storedGender = g;
       storedVoiceURI = localStorage.getItem('bible_preferred_voice_uri') || '';
       const p = localStorage.getItem('bible_voice_pitch');
       if (p) storedPitch = Number(p);
     } catch (_) {}
 
-    // Select a premium French voice
-    const voices = window.speechSynthesis.getVoices();
-    const frenchVoices = voices.filter(v => v.lang.startsWith('fr') || v.lang.includes('FR'));
-    
-    // Sort French voices: prioritize higher fidelity/cloud-based voices (Google, Natural, Neural, Premium, High, etc.)
-    const sortedFrenchVoices = [...frenchVoices].sort((a, b) => {
-      const aLower = a.name.toLowerCase();
-      const bLower = b.name.toLowerCase();
-      const aIsPremium = aLower.includes('google') || aLower.includes('natural') || aLower.includes('neural') || aLower.includes('premium') || aLower.includes('high');
-      const bIsPremium = bLower.includes('google') || bLower.includes('natural') || bLower.includes('neural') || bLower.includes('premium') || bLower.includes('high');
-      if (aIsPremium && !bIsPremium) return -1;
-      if (!aIsPremium && bIsPremium) return 1;
-      if (a.localService === false && b.localService === true) return -1;
-      if (a.localService === true && b.localService === false) return 1;
-      return 0;
+    // Strictly resolve French voice
+    const resolution = resolveStrictFrenchVoice({
+      gender: storedGender,
+      preferredVoiceURI: storedVoiceURI,
+      basePitch: storedPitch,
+      availableVoices: window.speechSynthesis.getVoices()
     });
 
-    const lowerMaleNames = [
-      'paul', 'thomas', 'nicolas', 'daniel', 'guy', 'julien', 'bernard', 'male', 'homme', 'microsoft paul', 
-      'nils', 'sébastien', 'sebastien', 'alain', 'pierre', 'michel', 'jean', 'jacques', 'philippe', 'henri', 'microsoft henri',
-      'olivier', 'christophe', 'gilles', 'yves', 'luc', 'gérard', 'gerard', 'rene', 'rené', 'claude', 'andre', 'andré',
-      'x-frd', 'x-frb', 'x-fri', 'vcb', 'vcd', 'vch', 'vci', 'vcj', 'vck', 'male', 'man', 'boy', 'guy'
-    ];
-    const lowerFemaleNames = [
-      'hortense', 'julie', 'aurelie', 'aurélie', 'celeste', 'céleste', 'virginie', 'helene', 'hélène', 
-      'chloe', 'chloé', 'female', 'femme', 'amelie', 'amélie', 'marie', 'audrey', 'clara', 'alice', 
-      'laura', 'renee', 'renée', 'lucie', 'mathilde', 'valerie', 'valérie', 'celine', 'céline', 'elise', 
-      'élise', 'lea', 'léa', 'emma', 'manon', 'camille', 'zoe', 'zoé', 'sarah', 'louise', 'microsoft hortense', 
-      'zira', 'google français', 'harmonie', 'samantha', 'siri', 'vca', 'vcc', 'vce', 'vcf', 'vcg'
-    ];
-    
-    let selectedVoice: SpeechSynthesisVoice | null = null;
-    
-    if (storedVoiceURI) {
-      selectedVoice = sortedFrenchVoices.find(voice => voice.voiceURI === storedVoiceURI) || null;
+    if (!resolution.voice) {
+      console.warn("[TTS] Aucune voix française disponible pour la lecture.");
+      return;
     }
 
-    if (!selectedVoice) {
-      if (storedGender === 'male') {
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-        if (!selectedVoice) {
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            !lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-        }
-      } else if (storedGender === 'female') {
-        selectedVoice = sortedFrenchVoices.find(voice => 
-          lowerFemaleNames.some(name => voice.name.toLowerCase().includes(name))
-        ) || null;
-        if (!selectedVoice) {
-          selectedVoice = sortedFrenchVoices.find(voice => 
-            !lowerMaleNames.some(name => voice.name.toLowerCase().includes(name))
-          ) || null;
-        }
-      }
-    }
-
-    if (!selectedVoice && sortedFrenchVoices.length > 0) {
-      selectedVoice = sortedFrenchVoices.find(voice => voice.lang.includes('FR')) || sortedFrenchVoices[0];
-    }
-    
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-    }
-
-    // Apply gender-optimized pitch
-    if (storedGender === 'male') {
-      const isKnownMale = selectedVoice ? lowerMaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-      utterance.pitch = isKnownMale ? Math.max(0.65, storedPitch * 0.88) : Math.max(0.60, storedPitch * 0.74);
-    } else if (storedGender === 'female') {
-      const isKnownFemale = selectedVoice ? lowerFemaleNames.some(name => selectedVoice!.name.toLowerCase().includes(name)) : false;
-      utterance.pitch = isKnownFemale ? storedPitch * 1.02 : Math.min(1.8, storedPitch * 1.18);
-    } else {
-      utterance.pitch = storedPitch;
-    }
-
+    utterance.voice = resolution.voice;
+    utterance.lang = resolution.voice.lang || 'fr-FR';
+    utterance.pitch = resolution.recommendedPitch;
     utterance.rate = 0.85;
 
     window.speechSynthesis.speak(utterance);

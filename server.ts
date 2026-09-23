@@ -32,6 +32,7 @@ if (apiKey) {
 async function generateGeminiContent(params: {
   contents: any;
   config?: any;
+  model?: string;
 }) {
   if (!ai) {
     throw new Error("L'API Gemini n'est pas configurée.");
@@ -39,50 +40,53 @@ async function generateGeminiContent(params: {
   
   const originalConfig = params.config || {};
   let systemInstruction = originalConfig.systemInstruction || "";
+  const isJsonMode = originalConfig.responseMimeType === "application/json";
   
-  if (systemInstruction) {
-    // Inject conciseness instruction to reduce tokens and speed up generation
-    systemInstruction = `${systemInstruction} Écris de manière très concise, synthétique et directe, sans phrase introductive ni conclusion facultative, pour assurer un temps de réponse ultra-rapide.`;
-  } else {
-    systemInstruction = "Écris de manière claire, concise et structurée en français pour un temps de réponse rapide.";
+  if (!isJsonMode) {
+    if (systemInstruction) {
+      // Inject conciseness instruction to reduce tokens and speed up generation
+      systemInstruction = `${systemInstruction} Écris de manière très concise, synthétique et directe, sans phrase introductive ni conclusion facultative, pour assurer un temps de réponse ultra-rapide.`;
+    } else {
+      systemInstruction = "Écris de manière claire, concise et structurée en français pour un temps de réponse rapide.";
+    }
   }
 
   const optimizedConfig = {
     ...originalConfig,
-    systemInstruction
+    ...(systemInstruction ? { systemInstruction } : {})
   };
-  
-  try {
-    // Attempt the fast lite model (gemini-3.1-flash-lite) for ultra-low latency which is highly responsive
-    return await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
-      contents: params.contents,
-      config: optimizedConfig
-    });
-  } catch (error: any) {
-    const errorStr = String(error?.message || error || "");
-    const isTransientError = 
-      errorStr.includes("503") || 
-      errorStr.includes("UNAVAILABLE") || 
-      errorStr.includes("demand") || 
-      errorStr.includes("Resource has been exhausted") ||
-      errorStr.includes("429");
 
-    if (isTransientError) {
-      console.warn("⚠️ model gemini-3.1-flash-lite busy or unavailable (503), falling back to robust gemini-flash-latest...");
-      try {
-        return await ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: params.contents,
-          config: optimizedConfig
-        });
-      } catch (fallbackError: any) {
-        console.error("❌ Fallback model also failed:", fallbackError);
-        throw fallbackError;
+  const candidateModels = params.model 
+    ? [params.model, "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.8-flash"]
+    : ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.8-flash", "gemini-flash-latest"];
+
+  let lastError: any = null;
+  for (const modelName of candidateModels) {
+    try {
+      return await ai.models.generateContent({
+        model: modelName,
+        contents: params.contents,
+        config: optimizedConfig
+      });
+    } catch (error: any) {
+      lastError = error;
+      const errorStr = String(error?.message || error || "");
+      const isTransientError = 
+        errorStr.includes("503") || 
+        errorStr.includes("UNAVAILABLE") || 
+        errorStr.includes("demand") || 
+        errorStr.includes("Resource has been exhausted") ||
+        errorStr.includes("429");
+
+      if (isTransientError) {
+        console.warn(`⚠️ Model ${modelName} busy or unavailable (503/429), trying next candidate...`);
+        continue;
       }
+      throw error;
     }
-    throw error;
   }
+
+  throw lastError || new Error("Tous les modèles d'IA sont temporairement occupés.");
 }
 
 // -------------------------------------------------------------
@@ -371,6 +375,150 @@ app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> 
   }
 });
 
+// Generate a 30-day personalized biblical reading plan based on spiritual interests/themes using Gemini API
+app.post("/api/gemini/generate-reading-plan", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée. Veuillez vérifier GEMINI_API_KEY dans vos secrets." });
+      return;
+    }
+    const { theme, userContext } = req.body;
+    if (!theme || typeof theme !== "string" || !theme.trim()) {
+      res.status(400).json({ error: "Le thème ou centre d'intérêt spirituel est requis (ex: 'Paix intérieure', 'Courage')." });
+      return;
+    }
+
+    const cleanTheme = theme.trim();
+    const contextNote = userContext && typeof userContext === "string" && userContext.trim() 
+      ? `Intention personnelle / situation de l'utilisateur : "${userContext.trim()}".` 
+      : "";
+
+    // Load official 66 books from bible-classic.json for accurate validation and mapping
+    const biblePath = path.join(process.cwd(), "src/data/bible-classic.json");
+    let officialBooks: Array<{ id: number; name: string; chapters_count: number }> = [];
+    if (fs.existsSync(biblePath)) {
+      try {
+        const parsedData = JSON.parse(fs.readFileSync(biblePath, "utf8"));
+        officialBooks = parsedData.books || [];
+      } catch (e) {
+        console.warn("Could not load bible-classic.json for book validation:", e);
+      }
+    }
+
+    const prompt = `Génère un plan de lecture biblique personnalisé sur 30 jours axé sur le centre d'intérêt spirituel suivant : "${cleanTheme}".
+${contextNote}
+
+DIRECTIVES THÉOLOGIQUES ET SPIRITUELLES :
+1. Le plan doit comporter EXACTEMENT 30 jours (du Jour 1 au Jour 30) avec une véritable progression spirituelle :
+   - Jours 1 à 7 : Fondations, accueil de la grâce, promesses divines et dépose des fardeaux.
+   - Jours 8 à 15 : Écoute profonde, affermissement de la foi et transformation du cœur.
+   - Jours 16 à 23 : Mise en pratique concrète, courage dans l'épreuve et renouvellement intérieur.
+   - Jours 24 à 30 : Persévérance, sérénité durable, louange et témoignage.
+2. Pour chaque jour, sélectionne un passage spécifique, authentique et pertinent de la Bible Louis Segond 1910 (Psaumes, Évangiles, Épîtres, Proverbes, Prophètes).
+3. Remplis fidèlement pour chacun des 30 jours :
+   - "day" : numéro du jour (1 à 30)
+   - "title" : titre inspirant du jour (ex: "Le refuge dans la tempête", "Ne vous inquiétez de rien")
+   - "bookName" : nom du livre biblique officiel en français (ex: "Psaumes", "Jean", "Philippiens", "Matthieu", "Romains", "Ésaïe", "Proverbes")
+   - "chapter" : numéro du chapitre
+   - "verseRange" : indication des versets recommandés pour la méditation (ex: "v. 1-8", "v. 4-7", ou "Chapitre entier")
+   - "keyVerse" : le verset clé du passage textuellement cité en français Louis Segond
+   - "meditationPrompt" : une courte pensée ou question méditative pour guider la prière personnelle.
+4. "title" global du plan : un titre édifiant et poétique (ex: "Sentier de Paix Intérieure : 30 jours avec la Parole").
+5. "description" : une introduction spirituelle chaleureuse et pastorale (2-3 phrases) sur le parcours proposé.
+6. "theme" : le nom du thème spirituel.`;
+
+    const response = await generateGeminiContent({
+      contents: prompt,
+      model: "gemini-3.8-flash",
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            description: { type: Type.STRING },
+            theme: { type: Type.STRING },
+            days: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  day: { type: Type.INTEGER },
+                  title: { type: Type.STRING },
+                  bookName: { type: Type.STRING },
+                  chapter: { type: Type.INTEGER },
+                  verseRange: { type: Type.STRING },
+                  keyVerse: { type: Type.STRING },
+                  meditationPrompt: { type: Type.STRING }
+                },
+                required: ["day", "title", "bookName", "chapter", "verseRange", "keyVerse", "meditationPrompt"]
+              }
+            }
+          },
+          required: ["title", "description", "theme", "days"]
+        },
+        systemInstruction: "Tu es un directeur de lecture biblique érudit et pasteur bienveillant. Tu aides les croyants à méditer les Saintes Écritures selon la version Louis Segond 1910."
+      }
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    if (!parsed || !Array.isArray(parsed.days) || parsed.days.length === 0) {
+      throw new Error("Format de réponse de l'IA invalide.");
+    }
+
+    const cleanStr = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+    // Validate and enrich each day with the canonical book ID and safety checks
+    const validatedDays = parsed.days.map((item: any, idx: number) => {
+      const dayNum = Number(item.day) || (idx + 1);
+      const rawBookName = String(item.bookName || "Psaumes").trim();
+      const rawClean = cleanStr(rawBookName);
+
+      let matchedBook = officialBooks.find(b => cleanStr(b.name) === rawClean);
+      if (!matchedBook) {
+        matchedBook = officialBooks.find(b => rawClean.includes(cleanStr(b.name)) || cleanStr(b.name).includes(rawClean));
+      }
+
+      const bookId = matchedBook ? matchedBook.id : 19;
+      const bookName = matchedBook ? matchedBook.name : "Psaumes";
+      const maxCh = matchedBook ? matchedBook.chapters_count : 150;
+      const chapter = Math.min(Math.max(Number(item.chapter) || 1, 1), maxCh);
+
+      return {
+        day: dayNum,
+        title: item.title || `Jour ${dayNum}`,
+        bookId,
+        bookName,
+        chapter,
+        verseRange: item.verseRange || "Chapitre entier",
+        keyVerse: item.keyVerse || "",
+        meditationPrompt: item.meditationPrompt || "Prenez un moment de recueillement et de prière pour confier cette parole à Dieu."
+      };
+    });
+
+    validatedDays.sort((a: any, b: any) => a.day - b.day);
+
+    const generatedPlan = {
+      id: `ai-plan-30d-${Date.now()}`,
+      title: parsed.title || `Plan 30 Jours : ${cleanTheme}`,
+      description: parsed.description || `Immersion biblique guidée de 30 jours sur le thème : ${cleanTheme}.`,
+      theme: cleanTheme,
+      durationDays: 30,
+      category: "ai_generated",
+      targetCategoryName: `Plan IA 30 Jours (${cleanTheme})`,
+      isCustom: true,
+      bookIds: Array.from(new Set(validatedDays.map((d: any) => d.bookId))),
+      days: validatedDays,
+      createdAt: new Date().toISOString()
+    };
+
+    res.json(generatedPlan);
+  } catch (error: any) {
+    console.error("Error in generate-reading-plan endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de la génération du plan personnalisé." });
+  }
+});
+
 // Dynamic verse fetcher for any of the 66 Books - Strictly from static verified Louis Segond 1910 corpus
 app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -599,7 +747,34 @@ async function setupServer() {
   } else {
     // Production serving static files
     const distPath = path.join(process.cwd(), "dist");
+    const publicPath = path.join(process.cwd(), "public");
+
     app.use(express.static(distPath));
+    if (fs.existsSync(publicPath)) {
+      app.use(express.static(publicPath));
+    }
+
+    // Robust static fallback for any direct image requests (/src/assets/images/* and /assets/images/*)
+    const handleImageRequest = (req: Request, res: Response) => {
+      const fileName = req.params.file;
+      const candidates = [
+        path.join(publicPath, "assets/images", fileName),
+        path.join(distPath, "assets/images", fileName),
+        path.join(process.cwd(), "src/assets/images", fileName),
+      ];
+      for (const filePath of candidates) {
+        if (fs.existsSync(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          res.setHeader("Content-Type", "image/jpeg");
+          return res.sendFile(filePath);
+        }
+      }
+      res.status(404).send("Image not found");
+    };
+
+    app.get("/src/assets/images/:file", handleImageRequest);
+    app.get("/assets/images/:file", handleImageRequest);
+
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

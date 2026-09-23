@@ -17,12 +17,16 @@ import {
   ChevronDown,
   X,
   Share2,
-  Sparkles
+  Sparkles,
+  Flame,
+  Layers,
+  Filter
 } from 'lucide-react';
 import { Book as BibleBook, ReadingHistory } from '../types/bible';
-import { ReadingPlan, PlanUserProgress } from '../types/challenges';
+import { ReadingPlan, PlanUserProgress, ReadingPlanDay } from '../types/challenges';
 import { BOOKS } from '../data/bibleData';
 import { ChallengeShareModal } from './ChallengeShareModal';
+import { AiReadingPlanModal } from './AiReadingPlanModal';
 
 interface ReadingChallengesProps {
   readingHistory: ReadingHistory[];
@@ -66,7 +70,7 @@ const DEFAULT_PLANS: ReadingPlan[] = [
 
 // Helper to check if a book belongs to a challenge
 const isBookInPlan = (book: BibleBook, planCategory: ReadingPlan['category'], planBookIds?: number[]): boolean => {
-  if (planCategory === 'custom') {
+  if (planCategory === 'custom' || planCategory === 'ai_generated') {
     return planBookIds ? planBookIds.includes(book.id) : false;
   }
   switch (planCategory) {
@@ -94,6 +98,13 @@ const getPlanTotalChapters = (planCategory: ReadingPlan['category'], planBookIds
   return matching.reduce((sum, b) => sum + b.chapters_count, 0);
 };
 
+// Helper to check if a day in an AI plan is completed
+const isDayDone = (prog: PlanUserProgress | undefined, day: ReadingPlanDay): boolean => {
+  if (!prog) return false;
+  return prog.completedChapters.includes(`day_${day.day}`) || 
+         prog.completedChapters.includes(`${day.bookId}:${day.chapter}`);
+};
+
 export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   readingHistory,
   onNavigateToChapter
@@ -104,7 +115,7 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   // State for joined progress
   const [userProgresses, setUserProgresses] = useState<PlanUserProgress[]>([]);
 
-  // State for user custom plans
+  // State for user custom & AI plans
   const [customPlans, setCustomPlans] = useState<ReadingPlan[]>([]);
   
   // Selected challenge for detail view
@@ -113,13 +124,19 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   // Selected book folder in chapter checklist detail view (for collapsible navigation)
   const [expandedBookId, setExpandedBookId] = useState<number | null>(null);
 
-  // Succesful tracking Toast/notification when a chapter is auto-completed
+  // Day filter in AI plan detail view ('all' | 'pending' | 'completed')
+  const [dayFilter, setDayFilter] = useState<'all' | 'pending' | 'completed'>('all');
+
+  // Successful tracking Toast/notification when a chapter is auto-completed
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // State to control visual challenge share modal
   const [isShareModalOpen, setIsShareModalOpen] = useState<boolean>(false);
 
-  // Form states for creating custom reading plan
+  // State to control AI reading plan generator modal
+  const [isAiModalOpen, setIsAiModalOpen] = useState<boolean>(false);
+
+  // Form states for creating custom reading plan manually
   const [isCreatingCustom, setIsCreatingCustom] = useState<boolean>(false);
   const [customTitle, setCustomTitle] = useState<string>('');
   const [customDescription, setCustomDescription] = useState<string>('');
@@ -177,23 +194,40 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
     let progressChanged = false;
     const updatedProgress = userProgresses.map(prog => {
-      // Find corresponding plan config
       const plan = ALL_PLANS.find(p => p.id === prog.planId);
       if (!plan) return prog;
 
+      // Case A: Plan with structured days (AI Generated 30-Day Plan)
+      if (plan.days && plan.days.length > 0) {
+        const matchingDay = plan.days.find(d => d.bookId === latestReading.book_id && d.chapter === latestReading.chapter);
+        if (matchingDay && !isDayDone(prog, matchingDay)) {
+          const dayKey = `day_${matchingDay.day}`;
+          const newCompleted = [...prog.completedChapters, dayKey, key];
+          const isNowCompleted = plan.days.every(d => d.day === matchingDay.day || isDayDone(prog, d));
+
+          progressChanged = true;
+          setToastMessage(`✓ Jour ${matchingDay.day} validé : ${latestReading.book_name} ${latestReading.chapter} validé dans "${plan.title}" !`);
+
+          return {
+            ...prog,
+            completedChapters: newCompleted,
+            isCompleted: isNowCompleted
+          };
+        }
+        return prog;
+      }
+
+      // Case B: Standard whole book/category plan
       const book = BOOKS.find(b => b.id === latestReading.book_id);
       if (!book) return prog;
 
-      // Check if book matches plan category
       if (isBookInPlan(book, plan.category, plan.bookIds)) {
-        // If not already completed
         if (!prog.completedChapters.includes(key)) {
           const newCompleted = [...prog.completedChapters, key];
           const totalChaptersCount = getPlanTotalChapters(plan.category, plan.bookIds);
           const isNowCompleted = newCompleted.length >= totalChaptersCount;
 
           progressChanged = true;
-          // Notify the user elegantly
           setToastMessage(`✓ Chapitre Validé : ${latestReading.book_name} ${latestReading.chapter} ajouté à votre plan ${plan.title} !`);
           
           return {
@@ -221,7 +255,7 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
     }
   }, [toastMessage]);
 
-  // Toggle chapter completed manually
+  // Toggle chapter completed manually in standard plans
   const toggleChapterCompletion = (planId: string, bookId: number, chapterNum: number) => {
     const key = `${bookId}:${chapterNum}`;
     const updated = userProgresses.map(prog => {
@@ -235,6 +269,35 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
       const totalChaptersCount = plan ? getPlanTotalChapters(plan.category, plan.bookIds) : 0;
       const isNowCompleted = newCompleted.length >= totalChaptersCount;
+
+      return {
+        ...prog,
+        completedChapters: newCompleted,
+        isCompleted: isNowCompleted
+      };
+    });
+
+    saveProgress(updated);
+  };
+
+  // Toggle Day completion in AI 30-day plans
+  const toggleDayCompletion = (planId: string, dayNum: number, bookId: number, chapterNum: number) => {
+    const dayKey = `day_${dayNum}`;
+    const chKey = `${bookId}:${chapterNum}`;
+
+    const updated = userProgresses.map(prog => {
+      if (prog.planId !== planId) return prog;
+      const plan = ALL_PLANS.find(p => p.id === planId);
+      if (!plan || !plan.days) return prog;
+
+      const alreadyDone = prog.completedChapters.includes(dayKey) || prog.completedChapters.includes(chKey);
+      const newCompleted = alreadyDone
+        ? prog.completedChapters.filter(k => k !== dayKey && k !== chKey)
+        : [...prog.completedChapters, dayKey, chKey];
+
+      const isNowCompleted = plan.days.every(d => 
+        d.day === dayNum ? !alreadyDone : (newCompleted.includes(`day_${d.day}`) || newCompleted.includes(`${d.bookId}:${d.chapter}`))
+      );
 
       return {
         ...prog,
@@ -265,15 +328,12 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
   // Quit/Delete progress of a plan
   const quitPlan = (planId: string) => {
-    const isCustom = customPlans.some(p => p.id === planId);
-    if (isCustom) {
-      const option = window.confirm("Souhaitez-vous abandonner ce plan personnalisé ? Si vous choisissez OK, ses progrès seront réinitialisés. Voulez-vous également supprimer ce plan de votre bibliothèque ?");
+    const isCustomOrAi = customPlans.some(p => p.id === planId);
+    if (isCustomOrAi) {
+      const option = window.confirm("Souhaitez-vous abandonner ce plan personnalisé ? Ses progrès seront réinitialisés. Voulez-vous également le supprimer définitivement ?");
       if (option) {
-        const deletePlan = window.confirm("Supprimer définitivement ce plan de votre bibliothèque ?");
-        if (deletePlan) {
-          const updatedCustom = customPlans.filter(p => p.id !== planId);
-          saveCustomPlans(updatedCustom);
-        }
+        const updatedCustom = customPlans.filter(p => p.id !== planId);
+        saveCustomPlans(updatedCustom);
       }
     } else {
       if (!window.confirm("Êtes-vous sûr de vouloir abandonner ce défi ? Vos progrès seront réinitialisés pour ce plan.")) {
@@ -285,7 +345,7 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
     setSelectedPlanId(null);
   };
 
-  // Find the next unread chapter for a plan to quickly continue reading
+  // Find the next unread chapter for a standard plan
   const getNextUnreadChapter = (planId: string, planCategory: ReadingPlan['category'], planBookIds?: number[]) => {
     const progress = userProgresses.find(p => p.planId === planId);
     if (!progress) return null;
@@ -299,11 +359,37 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
         }
       }
     }
-    // All read!
     return null;
   };
 
-  // Submit custom plan handler
+  // Find the next unread day for an AI plan
+  const getNextUnreadDay = (plan: ReadingPlan, progress: PlanUserProgress): ReadingPlanDay | null => {
+    if (!plan.days) return null;
+    return plan.days.find(d => !isDayDone(progress, d)) || null;
+  };
+
+  // Callback when AI creates a new 30-day reading plan
+  const handleAiPlanCreated = (newPlan: ReadingPlan) => {
+    // 1. Add to customPlans list
+    const updatedCustomPlans = [newPlan, ...customPlans];
+    saveCustomPlans(updatedCustomPlans);
+
+    // 2. Automatically join the newly created plan
+    const newProg: PlanUserProgress = {
+      planId: newPlan.id,
+      joinedAt: new Date().toLocaleDateString('fr-FR'),
+      completedChapters: [],
+      isCompleted: false
+    };
+    saveProgress([newProg, ...userProgresses]);
+
+    // 3. Switch to joined tab and open the plan detail view
+    setActiveSegment('joined');
+    setSelectedPlanId(newPlan.id);
+    setToastMessage(`✨ Plan de 30 jours "${newPlan.title}" généré et activé avec succès !`);
+  };
+
+  // Submit manual custom plan handler
   const handleCreateCustomPlan = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customTitle.trim()) {
@@ -375,14 +461,27 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
         const progress = userProgresses.find(p => p.planId === selectedPlanId);
         if (!plan || !progress) return null;
 
-        const totalChapters = getPlanTotalChapters(plan.category, plan.bookIds);
-        const completedCount = progress.completedChapters.length;
-        const progressPercent = totalChapters > 0 ? Math.round((completedCount / totalChapters) * 100) : 0;
-        const nextToRead = getNextUnreadChapter(plan.id, plan.category, plan.bookIds);
-        const planBooks = getPlanBooks(plan.category, plan.bookIds);
+        const isAiPlan = !!(plan.days && plan.days.length > 0);
+        const totalItems = isAiPlan ? plan.days!.length : getPlanTotalChapters(plan.category, plan.bookIds);
+        const completedCount = isAiPlan 
+          ? plan.days!.filter(d => isDayDone(progress, d)).length
+          : progress.completedChapters.length;
+        const progressPercent = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
+        
+        const nextDay = isAiPlan ? getNextUnreadDay(plan, progress) : null;
+        const nextToRead = !isAiPlan ? getNextUnreadChapter(plan.id, plan.category, plan.bookIds) : null;
+        const planBooks = !isAiPlan ? getPlanBooks(plan.category, plan.bookIds) : [];
+
+        // Filtered days for AI plans
+        const displayedDays = isAiPlan ? plan.days!.filter(d => {
+          const done = isDayDone(progress, d);
+          if (dayFilter === 'completed') return done;
+          if (dayFilter === 'pending') return !done;
+          return true;
+        }) : [];
 
         return (
-          <div className="bg-[#12100c] rounded-2xl border border-[#2e2a1e] p-4 space-y-4 animate-fade-slide-up">
+          <div className="bg-[#12100c] rounded-2xl border border-[#2e2a1e] p-4 sm:p-5 space-y-4 animate-fade-slide-up">
             {/* Header control */}
             <div className="flex items-center justify-between border-b border-[#2e2a1e] pb-3">
               <button 
@@ -394,165 +493,322 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
               </button>
               <button 
                 onClick={() => quitPlan(plan.id)}
-                className="text-[9px] text-rose-400 font-mono tracking-wider hover:underline"
+                className="text-[9px] text-rose-400 font-mono tracking-wider hover:underline cursor-pointer"
               >
-                ABANDONNER
+                ABANDONNER LE PLAN
               </button>
             </div>
 
             {/* Title & Badge */}
             <div>
-              <div className="inline-block bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 rounded px-2 py-0.5 text-[8px] font-mono font-bold tracking-widest uppercase mb-1.5">
-                {plan.targetCategoryName || "PLAN ACTIF"}
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="inline-block bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/25 rounded px-2 py-0.5 text-[8px] font-mono font-bold tracking-widest uppercase">
+                  {plan.targetCategoryName || (isAiPlan ? "Plan IA 30 Jours" : "Plan Actif")}
+                </span>
+                {plan.theme && (
+                  <span className="text-[9px] font-serif italic text-[#a89d8b]">
+                    Thème : {plan.theme}
+                  </span>
+                )}
               </div>
-              <h3 className="font-serif font-extrabold text-sm text-[#e8e0d0] tracking-tight">{plan.title}</h3>
-              <p className="text-[10px] text-[#6b6355] leading-relaxed mt-1">{plan.description}</p>
+              <h3 className="font-serif font-extrabold text-base sm:text-lg text-[#e8e0d0] tracking-tight">{plan.title}</h3>
+              <p className="text-xs text-[#8c8270] leading-relaxed mt-1">{plan.description}</p>
             </div>
 
             {/* Progress status card with luxury bars */}
-            <div className="bg-[#1a1712] p-3 rounded-xl border border-[#2e2a1e] space-y-2.5">
+            <div className="bg-[#181510] p-3.5 rounded-xl border border-[#2e2a1e] space-y-2.5">
               <div className="flex justify-between items-center text-[10px] font-mono">
-                <span className="text-[#6b6355]">PROGRÈS GLOBAL</span>
-                <span className="text-[#c9a84c] font-bold">{progressPercent}% ({completedCount}/{totalChapters} chap.)</span>
+                <span className="text-[#8c8270]">AVANCEMENT DU PARCOURS</span>
+                <span className="text-[#c9a84c] font-bold">
+                  {progressPercent}% ({completedCount}/{totalItems} {isAiPlan ? 'jours' : 'chap.'})
+                </span>
               </div>
               
               {/* Luxury progress bar */}
               <div className="w-full h-2 bg-[#0d0b07] rounded-full overflow-hidden border border-[#2e2a1e]">
                 <div 
-                  className="h-full bg-gradient-to-r from-[#a08232] to-[#c9a84c] rounded-full transition-all duration-500 ease-out shadow-[0_0_8px_rgba(201,168,76,0.5)]"
+                  className="h-full bg-gradient-to-r from-[#a08232] via-[#c9a84c] to-[#dfba5a] rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(201,168,76,0.4)]"
                   style={{ width: `${progressPercent}%` }}
                 ></div>
               </div>
 
-              <div className="flex items-center gap-1.5 pt-1 text-[9px] font-mono text-[#6b6355]">
-                <Calendar className="w-3 h-3 text-[#c9a84c]" />
-                <span>Rejoint le {progress.joinedAt} · Objectif {plan.durationDays} Jours</span>
+              <div className="flex items-center justify-between pt-1 text-[9px] font-mono text-[#6b6355]">
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="w-3 h-3 text-[#c9a84c]" />
+                  Rejoint le {progress.joinedAt}
+                </span>
+                <span>Objectif : {plan.durationDays} Jours</span>
               </div>
             </div>
 
-            {/* "Continuer la lecture" direct action and visual sharing card generation buttons */}
+            {/* CTA action buttons */}
             <div className="flex flex-col sm:flex-row gap-2">
-              {nextToRead ? (
-                <button
-                  onClick={() => onNavigateToChapter(nextToRead.book.id, nextToRead.chapterNum)}
-                  className="flex-1 py-2.5 bg-[#c9a84c] text-[#0d0b07] font-bold text-xs rounded-xl hover:bg-[#dfba5a] active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer outline-none shadow-gold-glow"
-                >
-                  <Play className="w-3.5 h-3.5 fill-[#0d0b07]" />
-                  <span>LIRE CHAP. SUIVANT : {nextToRead.book.name} {nextToRead.chapterNum}</span>
-                </button>
-              ) : (
-                <div className="flex-1 bg-[#c9a84c]/10 rounded-xl p-3 border border-[#c9a84c]/20 flex items-center gap-3">
-                  <Award className="w-8 h-8 text-[#c9a84c] shrink-0" />
-                  <div>
-                    <h4 className="font-serif font-extrabold text-[#c9a84c] text-xs">Félicitations pour votre fidélité !</h4>
-                    <p className="text-[9px] text-[#6b6355] mt-0.5">Vous avez lu l'ensemble des {totalChapters} chapitres de ce plan.</p>
+              {isAiPlan ? (
+                nextDay ? (
+                  <button
+                    onClick={() => onNavigateToChapter(nextDay.bookId, nextDay.chapter)}
+                    className="flex-1 py-2.5 px-4 bg-[#c9a84c] text-[#0d0b07] font-serif font-extrabold text-xs rounded-xl hover:bg-[#dfba5a] active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer shadow-gold-glow"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-[#0d0b07]" />
+                    <span>LIRE JOUR {nextDay.day} : {nextDay.bookName} {nextDay.chapter} ({nextDay.verseRange})</span>
+                  </button>
+                ) : (
+                  <div className="flex-1 bg-[#c9a84c]/10 rounded-xl p-3 border border-[#c9a84c]/30 flex items-center gap-3">
+                    <Award className="w-8 h-8 text-[#c9a84c] shrink-0" />
+                    <div>
+                      <h4 className="font-serif font-extrabold text-[#c9a84c] text-xs">Parcours de 30 Jours Accompli !</h4>
+                      <p className="text-[10px] text-[#8c8270] mt-0.5">Que cette méditation fidèle continue de porter du fruit dans votre vie.</p>
+                    </div>
                   </div>
-                </div>
+                )
+              ) : (
+                nextToRead ? (
+                  <button
+                    onClick={() => onNavigateToChapter(nextToRead.book.id, nextToRead.chapterNum)}
+                    className="flex-1 py-2.5 bg-[#c9a84c] text-[#0d0b07] font-bold text-xs rounded-xl hover:bg-[#dfba5a] active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer shadow-gold-glow"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-[#0d0b07]" />
+                    <span>LIRE CHAP. SUIVANT : {nextToRead.book.name} {nextToRead.chapterNum}</span>
+                  </button>
+                ) : (
+                  <div className="flex-1 bg-[#c9a84c]/10 rounded-xl p-3 border border-[#c9a84c]/20 flex items-center gap-3">
+                    <Award className="w-8 h-8 text-[#c9a84c] shrink-0" />
+                    <div>
+                      <h4 className="font-serif font-extrabold text-[#c9a84c] text-xs">Félicitations pour votre fidélité !</h4>
+                      <p className="text-[9px] text-[#6b6355] mt-0.5">Vous avez lu l'ensemble des {totalItems} chapitres de ce plan.</p>
+                    </div>
+                  </div>
+                )
               )}
 
-              {/* Beautiful custom vector card generator */}
+              {/* Share modal button */}
               <button
                 onClick={() => setIsShareModalOpen(true)}
-                className="py-2.5 px-4 bg-[#1a1712] hover:bg-[#c9a84c]/15 text-[#c9a84c] hover:text-[#e8e0d0] border border-[#c9a84c]/20 hover:border-[#c9a84c] text-xs font-bold rounded-xl active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer outline-none"
-                title="Générer une magnifique image souvenir de ce défi"
+                className="py-2.5 px-4 bg-[#181510] hover:bg-[#c9a84c]/15 text-[#c9a84c] hover:text-[#e8e0d0] border border-[#c9a84c]/20 hover:border-[#c9a84c] text-xs font-serif font-bold rounded-xl active:scale-[0.98] transition duration-150 inline-flex items-center justify-center gap-2 cursor-pointer"
+                title="Générer une image souvenir"
               >
                 <Share2 className="w-3.5 h-3.5 text-[#c9a84c]" />
                 <span>Partager ma Réussite 🎨</span>
               </button>
             </div>
 
-            {/* Collapsible Books & Chapters Grid */}
-            <div className="space-y-2">
-              <span className="block text-[9px] font-mono tracking-[0.15em] text-[#6b6355] uppercase font-bold border-b border-[#2e2a1e] pb-1.5">
-                INDEX DES CHAPITRES DU PLAN
-              </span>
+            {/* AI 30-DAY JOURNEY ACCORDION/LIST */}
+            {isAiPlan ? (
+              <div className="space-y-3 pt-1">
+                {/* Filter bar */}
+                <div className="flex items-center justify-between border-b border-[#2e2a1e] pb-2 text-[10px] font-mono">
+                  <span className="text-[#a89d8b] uppercase font-bold tracking-wider">
+                    ITINÉRAIRE DE 30 JOURS
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setDayFilter('all')}
+                      className={`px-2 py-0.5 rounded cursor-pointer transition ${
+                        dayFilter === 'all' 
+                          ? 'bg-[#c9a84c] text-[#0d0b07] font-bold' 
+                          : 'bg-[#181510] text-[#6b6355] hover:text-[#e8e0d0]'
+                      }`}
+                    >
+                      Tous (30)
+                    </button>
+                    <button
+                      onClick={() => setDayFilter('pending')}
+                      className={`px-2 py-0.5 rounded cursor-pointer transition ${
+                        dayFilter === 'pending' 
+                          ? 'bg-[#c9a84c] text-[#0d0b07] font-bold' 
+                          : 'bg-[#181510] text-[#6b6355] hover:text-[#e8e0d0]'
+                      }`}
+                    >
+                      À lire ({30 - completedCount})
+                    </button>
+                    <button
+                      onClick={() => setDayFilter('completed')}
+                      className={`px-2 py-0.5 rounded cursor-pointer transition ${
+                        dayFilter === 'completed' 
+                          ? 'bg-[#c9a84c] text-[#0d0b07] font-bold' 
+                          : 'bg-[#181510] text-[#6b6355] hover:text-[#e8e0d0]'
+                      }`}
+                    >
+                      Terminés ({completedCount})
+                    </button>
+                  </div>
+                </div>
 
-              <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 no-scrollbar">
-                {planBooks.map(b => {
-                  const isExpanded = expandedBookId === b.id;
-                  
-                  // Calculate book-specific chapters completed count
-                  const bookChapters = Array.from({ length: b.chapters_count }, (_, i) => i + 1);
-                  const bookCompletedKeys = bookChapters.filter(ch => 
-                    progress.completedChapters.includes(`${b.id}:${ch}`)
-                  );
-                  const allCompletedInBook = bookCompletedKeys.length === b.chapters_count;
-
-                  return (
-                    <div key={b.id} className="bg-[#161410] rounded-lg border border-[#2e2a1e]/65 overflow-hidden">
-                      {/* Accordion Header */}
-                      <button
-                        onClick={() => setExpandedBookId(isExpanded ? null : b.id)}
-                        className="w-full p-2.5 flex items-center justify-between text-left hover:bg-[#1a1712] transition duration-200 cursor-pointer"
+                {/* Days list */}
+                <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1 no-scrollbar">
+                  {displayedDays.map((day) => {
+                    const isCompleted = isDayDone(progress, day);
+                    return (
+                      <div 
+                        key={day.day}
+                        className={`rounded-xl border p-3.5 transition-all space-y-2.5 text-left ${
+                          isCompleted
+                            ? 'bg-[#12100c]/70 border-[#c9a84c]/30 opacity-80 hover:opacity-100'
+                            : 'bg-[#161410] border-[#2e2a1e] hover:border-[#c9a84c]/50 shadow-soft'
+                        }`}
                       >
-                        <div className="flex items-center gap-2">
-                          {allCompletedInBook ? (
-                            <CheckCircle2 className="w-4 h-4 text-[#c9a84c] shrink-0" />
-                          ) : (
-                            <BookMarked className="w-4 h-4 text-[#6b6355] shrink-0" />
-                          )}
-                          <span className="font-serif text-xs font-bold text-[#e8e0d0]">{b.name}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-[9px] font-mono text-[#6b6355]">
-                            {bookCompletedKeys.length}/{b.chapters_count}
-                          </span>
-                          <ChevronDown className={`w-3.5 h-3.5 text-[#6b6355] transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                        </div>
-                      </button>
-
-                      {/* Chapters Grid Panel (shown when expanded) */}
-                      {isExpanded && (
-                        <div className="p-3 bg-[#0d0b07] border-t border-[#2e2a1e]/40">
-                          <div className="grid grid-cols-5 gap-1.5">
-                            {bookChapters.map(ch => {
-                              const isChCompleted = progress.completedChapters.includes(`${b.id}:${ch}`);
-                              return (
-                                <button
-                                  key={ch}
-                                  onClick={() => toggleChapterCompletion(plan.id, b.id, ch)}
-                                  className="aspect-square rounded-md p-1 border flex flex-col items-center justify-center transition duration-150 cursor-pointer text-center relative group"
-                                  style={{
-                                    backgroundColor: isChCompleted ? 'rgba(201,168,76,0.1)' : '#161410',
-                                    borderColor: isChCompleted ? '#c9a84c' : '#2e2a1e',
-                                  }}
-                                >
-                                  {/* Chapter index label */}
-                                  <span 
-                                    className="font-mono text-[10px] font-bold"
-                                    style={{ color: isChCompleted ? '#c9a84c' : '#6b6355' }}
-                                  >
-                                    {ch}
-                                  </span>
-
-                                  {/* Small helper indicating checkmark or click to read */}
-                                  <div className="absolute top-0 right-0 p-0.5">
-                                    {isChCompleted ? (
-                                      <div className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full"></div>
-                                    ) : null}
-                                  </div>
-                                  
-                                  {/* Tap to read option */}
-                                  <span 
-                                    onClick={(e) => {
-                                      e.stopPropagation(); // Avoid checking
-                                      onNavigateToChapter(b.id, ch);
-                                    }}
-                                    className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-[#c9a84c] text-[#0d0b07] text-[8px] font-mono tracking-tighter uppercase font-extrabold rounded-md shadow transition-opacity"
-                                  >
-                                    Lire
-                                  </span>
-                                </button>
-                              );
-                            })}
+                        {/* Day header */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
+                              isCompleted 
+                                ? 'bg-[#c9a84c]/20 text-[#c9a84c]' 
+                                : 'bg-[#2e2a1e] text-[#e8e0d0]'
+                            }`}>
+                              Jour {day.day} / 30
+                            </span>
+                            <span className="text-xs font-serif font-bold text-[#c9a84c]">
+                              {day.bookName} {day.chapter} {day.verseRange ? `(${day.verseRange})` : ''}
+                            </span>
                           </div>
+
+                          <button
+                            onClick={() => toggleDayCompletion(plan.id, day.day, day.bookId, day.chapter)}
+                            className={`flex items-center gap-1.5 text-[10px] font-mono px-2 py-1 rounded-lg border transition cursor-pointer ${
+                              isCompleted
+                                ? 'bg-[#c9a84c]/15 border-[#c9a84c]/40 text-[#c9a84c]'
+                                : 'bg-[#181510] border-[#2e2a1e] text-[#6b6355] hover:text-[#e8e0d0]'
+                            }`}
+                          >
+                            {isCompleted ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-[#c9a84c]" />
+                                <span>Complété</span>
+                              </>
+                            ) : (
+                              <>
+                                <Circle className="w-3.5 h-3.5" />
+                                <span>Marquer lu</span>
+                              </>
+                            )}
+                          </button>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+
+                        {/* Title of the day */}
+                        <h5 className="font-serif font-bold text-sm text-[#e8e0d0]">
+                          {day.title}
+                        </h5>
+
+                        {/* Key Verse Quote */}
+                        {day.keyVerse && (
+                          <div className="bg-[#12100c] border-l-2 border-[#c9a84c] px-3 py-2 rounded-r-lg text-xs font-serif italic text-[#e8e0d0]/90 leading-relaxed">
+                            « {day.keyVerse} »
+                          </div>
+                        )}
+
+                        {/* Pastoral Meditation Prompt */}
+                        {day.meditationPrompt && (
+                          <div className="bg-[#0f0d0a] border border-[#2e2a1e]/60 rounded-lg p-2.5 flex items-start gap-2 text-[11px] text-[#8c8270] leading-relaxed">
+                            <span className="text-xs">🕊️</span>
+                            <div>
+                              <strong className="text-[#c9a84c] font-serif">Méditation : </strong>
+                              <span className="font-sans text-[#a89d8b]">{day.meditationPrompt}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Read action button */}
+                        <div className="flex justify-end pt-1">
+                          <button
+                            onClick={() => onNavigateToChapter(day.bookId, day.chapter)}
+                            className="px-3 py-1.5 bg-[#c9a84c]/10 hover:bg-[#c9a84c] text-[#c9a84c] hover:text-[#0d0b07] border border-[#c9a84c]/30 hover:border-[#c9a84c] text-[10px] font-serif font-bold rounded-lg transition duration-150 inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <span>Ouvrir dans la Bible</span>
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            ) : (
+              /* STANDARD PLAN: Collapsible Books & Chapters Grid */
+              <div className="space-y-2">
+                <span className="block text-[9px] font-mono tracking-[0.15em] text-[#6b6355] uppercase font-bold border-b border-[#2e2a1e] pb-1.5">
+                  INDEX DES CHAPITRES DU PLAN
+                </span>
+
+                <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 no-scrollbar">
+                  {planBooks.map(b => {
+                    const isExpanded = expandedBookId === b.id;
+                    const bookChapters = Array.from({ length: b.chapters_count }, (_, i) => i + 1);
+                    const bookCompletedKeys = bookChapters.filter(ch => 
+                      progress.completedChapters.includes(`${b.id}:${ch}`)
+                    );
+                    const allCompletedInBook = bookCompletedKeys.length === b.chapters_count;
+
+                    return (
+                      <div key={b.id} className="bg-[#161410] rounded-lg border border-[#2e2a1e]/65 overflow-hidden">
+                        {/* Accordion Header */}
+                        <button
+                          onClick={() => setExpandedBookId(isExpanded ? null : b.id)}
+                          className="w-full p-2.5 flex items-center justify-between text-left hover:bg-[#1a1712] transition duration-200 cursor-pointer"
+                        >
+                          <div className="flex items-center gap-2">
+                            {allCompletedInBook ? (
+                              <CheckCircle2 className="w-4 h-4 text-[#c9a84c] shrink-0" />
+                            ) : (
+                              <BookMarked className="w-4 h-4 text-[#6b6355] shrink-0" />
+                            )}
+                            <span className="font-serif text-xs font-bold text-[#e8e0d0]">{b.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[9px] font-mono text-[#6b6355]">
+                              {bookCompletedKeys.length}/{b.chapters_count}
+                            </span>
+                            <ChevronDown className={`w-3.5 h-3.5 text-[#6b6355] transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                          </div>
+                        </button>
+
+                        {/* Chapters Grid Panel */}
+                        {isExpanded && (
+                          <div className="p-3 bg-[#0d0b07] border-t border-[#2e2a1e]/40">
+                            <div className="grid grid-cols-5 gap-1.5">
+                              {bookChapters.map(ch => {
+                                const isChCompleted = progress.completedChapters.includes(`${b.id}:${ch}`);
+                                return (
+                                  <button
+                                    key={ch}
+                                    onClick={() => toggleChapterCompletion(plan.id, b.id, ch)}
+                                    className="aspect-square rounded-md p-1 border flex flex-col items-center justify-center transition duration-150 cursor-pointer text-center relative group"
+                                    style={{
+                                      backgroundColor: isChCompleted ? 'rgba(201,168,76,0.1)' : '#161410',
+                                      borderColor: isChCompleted ? '#c9a84c' : '#2e2a1e',
+                                    }}
+                                  >
+                                    <span 
+                                      className="font-mono text-[10px] font-bold"
+                                      style={{ color: isChCompleted ? '#c9a84c' : '#6b6355' }}
+                                    >
+                                      {ch}
+                                    </span>
+                                    <div className="absolute top-0 right-0 p-0.5">
+                                      {isChCompleted && (
+                                        <div className="w-1.5 h-1.5 bg-[#c9a84c] rounded-full"></div>
+                                      )}
+                                    </div>
+                                    <span 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onNavigateToChapter(b.id, ch);
+                                      }}
+                                      className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-[#c9a84c] text-[#0d0b07] text-[8px] font-mono tracking-tighter uppercase font-extrabold rounded-md shadow transition-opacity"
+                                    >
+                                      Lire
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
           </div>
         );
@@ -587,6 +843,29 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
           {/* MES DÉFIS INTERACTIVE CARDS */}
           {activeSegment === 'joined' && (
             <div className="space-y-3.5">
+              {/* HERO BANNER TO GENERATE AI 30-DAY PLAN */}
+              <div className="bg-gradient-to-br from-[#1c1811] via-[#14120e] to-[#1a160f] border border-[#c9a84c]/35 rounded-2xl p-4 sm:p-5 shadow-gold-glow flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 relative overflow-hidden">
+                <div className="space-y-1 relative z-10 text-left">
+                  <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#c9a84c]/15 border border-[#c9a84c]/30 text-[#c9a84c] text-[9px] font-mono font-bold uppercase tracking-wider">
+                    <Sparkles className="w-3 h-3" />
+                    Plan Personnalisé IA
+                  </div>
+                  <h3 className="font-serif font-extrabold text-sm sm:text-base text-[#e8e0d0]">
+                    Plan de Lecture Biblique sur 30 Jours
+                  </h3>
+                  <p className="text-[11px] text-[#8c8270] max-w-md font-sans">
+                    Choisissez votre centre d'intérêt spirituel (Paix intérieure, Courage, Pardon, Espérance...) et recevez un parcours guidé avec versets clés et méditations.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsAiModalOpen(true)}
+                  className="px-4 py-2.5 bg-gradient-to-r from-[#b59238] to-[#c9a84c] hover:from-[#c9a84c] hover:to-[#dec16a] text-[#0d0b07] font-serif font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-gold-glow flex items-center gap-2 shrink-0 transition cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[#0d0b07]" />
+                  <span>Créer mon Plan IA ✨</span>
+                </button>
+              </div>
+
               {userProgresses.length === 0 ? (
                 <div className="py-8 px-4 text-center border-2 border-dashed border-[#2e2a1e] rounded-2xl bg-[#12100c]/40 space-y-3">
                   <div className="w-10 h-10 rounded-full bg-[#161410] border border-[#2e2a1e] flex items-center justify-center text-[#6b6355] mx-auto">
@@ -594,16 +873,24 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                   </div>
                   <div className="space-y-1">
                     <p className="font-serif font-bold text-xs text-[#e8e0d0]">Aucun chemin tracé</p>
-                    <p className="text-[10px] text-[#6b6355] leading-relaxed max-w-[240px] mx-auto">
+                    <p className="text-[10px] text-[#6b6355] leading-relaxed max-w-[240px] mx-auto font-sans">
                       Engagez-vous dans un plan d'étude régulier pour fortifier votre esprit et suivre votre avancement.
                     </p>
                   </div>
-                  <button
-                    onClick={() => setActiveSegment('discover')}
-                    className="px-3.5 py-1.5 bg-[#c9a84c]/10 hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-lg text-[10px] font-bold uppercase transition"
-                  >
-                    Découvrir les Plans
-                  </button>
+                  <div className="flex justify-center gap-2">
+                    <button
+                      onClick={() => setIsAiModalOpen(true)}
+                      className="px-3.5 py-1.5 bg-[#c9a84c] text-[#0d0b07] font-serif font-bold rounded-lg text-[10px] uppercase transition cursor-pointer shadow-gold-glow"
+                    >
+                      Générer avec l'IA ✨
+                    </button>
+                    <button
+                      onClick={() => setActiveSegment('discover')}
+                      className="px-3.5 py-1.5 bg-[#c9a84c]/10 hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-lg text-[10px] font-bold uppercase transition cursor-pointer"
+                    >
+                      Découvrir la Bibliothèque
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -611,22 +898,34 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                     const plan = ALL_PLANS.find(p => p.id === prog.planId);
                     if (!plan) return null;
 
-                    const totalChapters = getPlanTotalChapters(plan.category, plan.bookIds);
-                    const completedCount = prog.completedChapters.length;
-                    const progressPercent = totalChapters > 0 ? Math.round((completedCount / totalChapters) * 100) : 0;
-                    const nextToRead = getNextUnreadChapter(plan.id, plan.category, plan.bookIds);
+                    const isAiPlan = !!(plan.days && plan.days.length > 0);
+                    const totalItems = isAiPlan ? plan.days!.length : getPlanTotalChapters(plan.category, plan.bookIds);
+                    const completedCount = isAiPlan
+                      ? plan.days!.filter(d => isDayDone(prog, d)).length
+                      : prog.completedChapters.length;
+                    const progressPercent = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
+                    
+                    const nextDay = isAiPlan ? getNextUnreadDay(plan, prog) : null;
+                    const nextToRead = !isAiPlan ? getNextUnreadChapter(plan.id, plan.category, plan.bookIds) : null;
 
                     return (
                       <div 
                         key={prog.planId}
                         onClick={() => setSelectedPlanId(plan.id)}
-                        className="bg-[#12100c] border border-[#2e2a1e] hover:border-[#c9a84c]/40 p-3.5 rounded-xl transition duration-300 cursor-pointer flex flex-col justify-between gap-3 group relative select-none"
+                        className="bg-[#12100c] border border-[#2e2a1e] hover:border-[#c9a84c]/40 p-3.5 rounded-xl transition duration-300 cursor-pointer flex flex-col justify-between gap-3 group relative select-none shadow-soft"
                       >
                         <div className="flex justify-between items-start">
                           <div>
-                            <span className="text-[8px] font-mono tracking-widest text-[#c9a84c] uppercase font-bold bg-[#c9a84c]/10 border border-[#c9a84c]/20 px-1.5 py-0.5 rounded mr-1">
-                              {plan.durationDays} Jours
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[8px] font-mono tracking-widest text-[#c9a84c] uppercase font-bold bg-[#c9a84c]/10 border border-[#c9a84c]/20 px-1.5 py-0.5 rounded">
+                                {plan.durationDays} Jours
+                              </span>
+                              {isAiPlan && (
+                                <span className="text-[8px] font-mono font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded">
+                                  IA Thématique
+                                </span>
+                              )}
+                            </div>
                             <h4 className="font-serif font-extrabold text-xs text-[#e8e0d0] mt-1.5 group-hover:text-[#c9a84c] transition-colors line-clamp-1">{plan.title}</h4>
                             <p className="text-[9px] text-[#6b6355] line-clamp-1 mt-0.5">{plan.description}</p>
                           </div>
@@ -638,19 +937,33 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                         <div className="space-y-2.5">
                           <div className="flex justify-between items-center text-[9px] font-mono">
                             <span className="text-[#6b6355] uppercase">Progression</span>
-                            <span className="text-[#c9a84c] font-bold">{progressPercent}% ({completedCount}/{totalChapters} ch.)</span>
+                            <span className="text-[#c9a84c] font-bold">
+                              {progressPercent}% ({completedCount}/{totalItems} {isAiPlan ? 'j.' : 'ch.'})
+                            </span>
                           </div>
                           
                           <div className="w-full h-1.5 bg-[#0d0b07] rounded-full overflow-hidden border border-[#2e2a1e]/70">
                             <div 
-                              className="h-full bg-[#c9a84c] rounded-full"
+                              className="h-full bg-gradient-to-r from-[#a08232] to-[#c9a84c] rounded-full"
                               style={{ width: `${progressPercent}%` }}
                             ></div>
                           </div>
                         </div>
 
                         {/* Direct action info bar */}
-                        {nextToRead && (
+                        {isAiPlan && nextDay && (
+                          <div className="flex justify-between items-center pt-2 border-t border-[#2e2a1e]/40 text-[9px]">
+                            <span className="text-[#8c8270] italic">
+                              Étape suivante : Jour {nextDay.day} • {nextDay.bookName} {nextDay.chapter}
+                            </span>
+                            <span className="text-[#c9a84c] font-bold flex items-center gap-1 hover:underline">
+                              <span>Ouvrir</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </span>
+                          </div>
+                        )}
+
+                        {!isAiPlan && nextToRead && (
                           <div className="flex justify-between items-center pt-2 border-t border-[#2e2a1e]/40 text-[9px]">
                             <span className="text-[#6b6355] italic">Prochaine étape : {nextToRead.book.name} {nextToRead.chapterNum}</span>
                             <span className="text-[#c9a84c] font-bold flex items-center gap-1 hover:underline">
@@ -679,13 +992,36 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
             
             return (
               <div className="space-y-4">
-                {/* CREATE CUSTOM PLAN FORM OR launcher CTA */}
+                {/* AI PLAN LAUNCHER CARD */}
+                <div className="bg-gradient-to-br from-[#1c1811] via-[#14120e] to-[#1a160f] border border-[#c9a84c]/35 rounded-2xl p-4 sm:p-5 shadow-gold-glow flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 relative overflow-hidden">
+                  <div className="space-y-1 relative z-10 text-left">
+                    <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#c9a84c]/15 border border-[#c9a84c]/30 text-[#c9a84c] text-[9px] font-mono font-bold uppercase tracking-wider">
+                      <Sparkles className="w-3 h-3" />
+                      Générateur Intelligent
+                    </div>
+                    <h3 className="font-serif font-extrabold text-sm sm:text-base text-[#e8e0d0]">
+                      Générer un Plan de 30 Jours avec l'IA
+                    </h3>
+                    <p className="text-[11px] text-[#8c8270] max-w-md font-sans">
+                      Paix intérieure, Courage, Foi dans l'épreuve... Décrivez votre besoin et Gemini structure un cheminement de 30 jours adapté.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsAiModalOpen(true)}
+                    className="px-4 py-2.5 bg-gradient-to-r from-[#b59238] to-[#c9a84c] hover:from-[#c9a84c] hover:to-[#dec16a] text-[#0d0b07] font-serif font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-gold-glow flex items-center gap-2 shrink-0 transition cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#0d0b07]" />
+                    <span>Lancer le Générateur ✨</span>
+                  </button>
+                </div>
+
+                {/* CREATE CUSTOM MANUAL PLAN FORM OR launcher CTA */}
                 {isCreatingCustom ? (
                   <form onSubmit={handleCreateCustomPlan} className="bg-[#1a1712] border border-[#c9a84c]/35 rounded-xl p-4 space-y-4 animate-fade-slide-up">
                     <div className="flex items-center justify-between border-b border-[#2e2a1e] pb-2">
                       <div className="flex items-center gap-1.5">
-                        <Sparkles className="w-4 h-4 text-[#c9a84c] animate-pulse" />
-                        <span className="font-serif font-extrabold text-[11px] text-[#c9a84c] uppercase tracking-wider">Créer mon Programme de Lecture</span>
+                        <Layers className="w-4 h-4 text-[#c9a84c]" />
+                        <span className="font-serif font-extrabold text-[11px] text-[#c9a84c] uppercase tracking-wider">Créer un Programme Manuel</span>
                       </div>
                       <button 
                         type="button"
@@ -749,7 +1085,6 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#2e2a1e]/50 pb-1.5 gap-2">
                         <label className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider font-extrabold block">SÉLECTION DES LIVRES ({selectedCustomBookIds.length})</label>
                         
-                        {/* Quick select buttons */}
                         <div className="flex flex-wrap gap-1 text-[8px] font-mono">
                           <button 
                             type="button"
@@ -783,7 +1118,6 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                       </div>
 
                       <div className="space-y-2.5 max-h-[160px] overflow-y-auto pr-1 no-scrollbar text-[10px]">
-                        {/* Ancien Testament */}
                         <div className="space-y-1">
                           <span className="text-[8px] font-mono text-[#6b6355] uppercase block tracking-widest font-black">Ancien Testament</span>
                           <div className="flex flex-wrap gap-1">
@@ -813,7 +1147,6 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                           </div>
                         </div>
 
-                        {/* Nouveau Testament */}
                         <div className="space-y-1 pt-1 border-t border-[#2e2a1e]/30">
                           <span className="text-[8px] font-mono text-[#6b6355] uppercase block tracking-widest font-black">Nouveau Testament</span>
                           <div className="flex flex-wrap gap-1">
@@ -865,15 +1198,15 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                 ) : (
                   <button
                     onClick={() => setIsCreatingCustom(true)}
-                    className="w-full bg-gradient-to-r from-[#161410]/80 to-[#c9a84c]/5 border border-[#c9a84c]/20 hover:border-[#c9a84c]/50 p-4 rounded-xl flex items-center justify-between transition cursor-pointer group shadow-soft"
+                    className="w-full bg-gradient-to-r from-[#161410]/80 to-[#c9a84c]/5 border border-[#c9a84c]/20 hover:border-[#c9a84c]/50 p-3.5 rounded-xl flex items-center justify-between transition cursor-pointer group shadow-soft"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-[#1a1712] border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] group-hover:scale-110 transition shrink-0">
-                        <Sparkles className="w-4 h-4" />
+                        <Layers className="w-4 h-4" />
                       </div>
                       <div className="text-left">
-                        <h4 className="font-serif font-extrabold text-[12px] text-[#e8e0d0]">Créer mon Plan Personnalisé</h4>
-                        <p className="text-[10px] text-[#6b6355] mt-0.5 leading-tight">Sélectionnez vos livres sacrés et organisez votre rythme sur mesure.</p>
+                        <h4 className="font-serif font-extrabold text-[12px] text-[#e8e0d0]">Composer un Plan Manuel par Livres</h4>
+                        <p className="text-[10px] text-[#6b6355] mt-0.5 leading-tight font-sans">Sélectionnez manuellement vos livres et la durée souhaitée.</p>
                       </div>
                     </div>
                     <ChevronRight className="w-4 h-4 text-[#6b6355] group-hover:text-[#c9a84c] transition" />
@@ -884,25 +1217,26 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
                   <div className="py-8 px-4 text-center border border-[#2e2a1e] rounded-2xl bg-[#12100c]/40">
                     <Award className="w-7 h-7 text-[#c9a84c] mx-auto mb-2" />
                     <p className="font-serif font-bold text-xs text-[#e8e0d0]">Tous les défis sont honorés !</p>
-                    <p className="text-[10px] text-[#6b6355] mt-1 max-w-[200px] mx-auto">Vous avez rejoint l'intégralité des plans sacrés disponibles. Méditez fidèlement.</p>
+                    <p className="text-[10px] text-[#6b6355] mt-1 max-w-[200px] mx-auto">Vous avez rejoint l'intégralité des plans disponibles. Méditez fidèlement.</p>
                   </div>
                 ) : (
                   <div className="space-y-2.5">
                     {unjoinedPlans.map(plan => {
-                      const totalChapters = getPlanTotalChapters(plan.category, plan.bookIds);
+                      const isAi = !!(plan.days && plan.days.length > 0);
+                      const totalChapters = isAi ? plan.days!.length : getPlanTotalChapters(plan.category, plan.bookIds);
                       
                       return (
                         <div 
                           key={plan.id}
-                          className="bg-[#12100c] border border-[#2e2a1e] p-3.5 rounded-xl space-y-3 flex flex-col justify-between text-left"
+                          className="bg-[#12100c] border border-[#2e2a1e] p-3.5 rounded-xl space-y-3 flex flex-col justify-between text-left shadow-soft"
                         >
                           <div>
                             <div className="flex justify-between items-start gap-2">
                               <span className="text-[8px] font-mono tracking-widest text-[#6b6355] uppercase font-bold border border-[#2e2a1e] px-1.5 py-0.5 rounded">
-                                {plan.durationDays} jours · {totalChapters} Chapitres
+                                {plan.durationDays} jours · {totalChapters} {isAi ? 'Jours' : 'Chapitres'}
                               </span>
                               <span className="text-[8px] font-bold text-[#c9a84c] uppercase">
-                                {plan.isCustom ? 'Personnalisé' : plan.id === 'nt-90' ? 'Populaire' : ''}
+                                {isAi ? 'IA Thématique' : plan.isCustom ? 'Personnalisé' : plan.id === 'nt-90' ? 'Populaire' : ''}
                               </span>
                             </div>
                             <h4 className="font-serif font-extrabold text-xs text-[#e8e0d0] mt-2 tracking-tight">{plan.title}</h4>
@@ -927,20 +1261,30 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
           </div>
         )}
 
+      {/* AI READING PLAN GENERATOR MODAL */}
+      <AiReadingPlanModal
+        isOpen={isAiModalOpen}
+        onClose={() => setIsAiModalOpen(false)}
+        onPlanCreated={handleAiPlanCreated}
+      />
+
       {/* SUCCESS CARD GENERATOR MODAL */}
       {isShareModalOpen && selectedPlanId && (() => {
         const plan = ALL_PLANS.find(p => p.id === selectedPlanId);
         const progress = userProgresses.find(p => p.planId === selectedPlanId);
         if (!plan || !progress) return null;
 
-        const totalChapters = getPlanTotalChapters(plan.category, plan.bookIds);
-        const completedCount = progress.completedChapters.length;
+        const isAiPlan = !!(plan.days && plan.days.length > 0);
+        const totalItems = isAiPlan ? plan.days!.length : getPlanTotalChapters(plan.category, plan.bookIds);
+        const completedCount = isAiPlan 
+          ? plan.days!.filter(d => isDayDone(progress, d)).length 
+          : progress.completedChapters.length;
 
         return (
           <ChallengeShareModal
             plan={plan}
             completedChaptersCount={completedCount}
-            totalChaptersCount={totalChapters}
+            totalChaptersCount={totalItems}
             onClose={() => setIsShareModalOpen(false)}
           />
         );

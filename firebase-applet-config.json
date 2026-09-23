@@ -6,5 +6,7 @@
   "firestoreDatabaseId": "ai-studio-1f341b39-c896-4f00-8ba3-4f9bbd271637",
   "storageBucket": "auspicious-parity-nlkqp.firebasestorage.app",
   "messagingSenderId": "1014458582435",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "1014458582435-6fmlo50u81knnv11tt3ihik8b22q3479.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

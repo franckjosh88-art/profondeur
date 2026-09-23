@@ -6,10 +6,13 @@ import {
   Sun, Leaf, Mountain
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
+import prayerBgSanctuary from '../assets/images/prayer_bg_sanctuary_1790148027998.jpg';
+import prayerBgValley from '../assets/images/prayer_bg_valley_1790148041309.jpg';
+import prayerBgBible from '../assets/images/prayer_bg_bible_1790148055006.jpg';
 
-export const PRAYER_BG_SANCTUARY = '/src/assets/images/prayer_bg_sanctuary_1790148027998.jpg';
-export const PRAYER_BG_VALLEY = '/src/assets/images/prayer_bg_valley_1790148041309.jpg';
-export const PRAYER_BG_BIBLE = '/src/assets/images/prayer_bg_bible_1790148055006.jpg';
+export const PRAYER_BG_SANCTUARY = prayerBgSanctuary;
+export const PRAYER_BG_VALLEY = prayerBgValley;
+export const PRAYER_BG_BIBLE = prayerBgBible;
 
 export const CONTEMPLATIVE_ATMOSPHERES = [
   {
