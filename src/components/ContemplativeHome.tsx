@@ -2,9 +2,57 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Menu, Bell, ChevronLeft, ChevronRight, Home, FolderClosed, 
-  Sparkles, X, Heart, HelpCircle, Settings, Quote, BookOpen, Flame, Play, Volume2
+  Sparkles, X, Heart, HelpCircle, Settings, Quote, BookOpen, Flame, Play, Volume2,
+  Sun, Leaf, Mountain
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
+
+export const PRAYER_BG_SANCTUARY = '/src/assets/images/prayer_bg_sanctuary_1790148027998.jpg';
+export const PRAYER_BG_VALLEY = '/src/assets/images/prayer_bg_valley_1790148041309.jpg';
+export const PRAYER_BG_BIBLE = '/src/assets/images/prayer_bg_bible_1790148055006.jpg';
+
+export const CONTEMPLATIVE_ATMOSPHERES = [
+  {
+    id: 'auto',
+    name: 'Auto (Verset)',
+    label: 'Harmonisé',
+    icon: Sun,
+    description: 'Arrière-plan adapté automatiquement au verset'
+  },
+  {
+    id: 'sanctuary',
+    name: 'Sanctuaire',
+    label: 'Neutre / Bokeh',
+    icon: Leaf,
+    url: PRAYER_BG_SANCTUARY,
+    description: 'Lumière dorée douce en clair-obscur, bokeh intime et sacré'
+  },
+  {
+    id: 'valley',
+    name: 'Psaume 23',
+    label: 'Vallée Dorée',
+    icon: Mountain,
+    url: PRAYER_BG_VALLEY,
+    description: 'Vallée brumeuse au crépuscule et rayons d\'or célestes'
+  },
+  {
+    id: 'coffee_bible',
+    name: 'Bible & Boiserie',
+    label: 'Méditation',
+    icon: Flame,
+    url: PRAYER_BG_BIBLE,
+    description: 'Bible ouverte, boiserie sombre et lueur dorée tamisée'
+  }
+];
+
+const REAL_SPIRITUAL_PHOTOS = [
+  PRAYER_BG_SANCTUARY,
+  PRAYER_BG_VALLEY,
+  PRAYER_BG_BIBLE,
+  'https://images.pexels.com/photos/8468580/pexels-photo-8468580.jpeg', // Homme en prière dans la lumière
+  'https://images.pexels.com/photos/13101383/pexels-photo-13101383.jpeg', // Mains en prière sur livre ouvert
+  'https://images.pexels.com/photos/6860496/pexels-photo-6860496.jpeg'  // Femme en prière et sérénité
+];
 
 interface ContemplativeHomeProps {
   onNavigateToTab: (tab: 'home' | 'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize' | 'notes') => void;
@@ -15,49 +63,59 @@ interface ContemplativeHomeProps {
   readingHistory?: ReadingHistory[];
   onNavigateToChapter?: (bookId: number, chapterNum: number, verseNum?: number) => void;
   onPlayAudioCurrentChapter?: () => void;
+  onSelectSanctuaryBg?: (bgUrl: string) => void;
+  currentSanctuaryBg?: string;
 }
 
 interface ContemplativeVerse {
   quote: string;
   reference: string;
   theme: string;
+  defaultBg: string;
 }
 
 const CONTEMPLATIVE_VERSES: ContemplativeVerse[] = [
   {
     quote: "Je t'aime, ô Éternel, ma force ! L'Éternel est mon roc, ma forteresse, mon libérateur ! Mon Dieu, mon rocher, où je trouve un abri !",
     reference: "Psaumes 18:2-3",
-    theme: "Force & Abri"
+    theme: "Force & Abri",
+    defaultBg: PRAYER_BG_SANCTUARY
   },
   {
     quote: "L'Éternel est mon berger: je ne manquerai de rien. Il me fait reposer dans de ruds pâturages, Il me dirige près des eaux paisibles.",
     reference: "Psaumes 23:1-2",
-    theme: "Paix & Providence"
+    theme: "Paix & Providence",
+    defaultBg: PRAYER_BG_VALLEY
   },
   {
     quote: "Au commencement était la Parole, et la Parole était avec Dieu, et la Parole était Dieu. En elle était la vie, et la vie était la lumière des hommes.",
     reference: "Jean 1:1,4",
-    theme: "La Parole Éternelle"
+    theme: "La Parole Éternelle",
+    defaultBg: PRAYER_BG_BIBLE
   },
   {
     quote: "Le sentier des justes est comme la lumière resplendissante, dont l'éclat va croissant jusqu'au milieu du jour.",
     reference: "Proverbes 4:18",
-    theme: "Clarté de l'Âme"
+    theme: "Clarté de l'Âme",
+    defaultBg: PRAYER_BG_SANCTUARY
   },
   {
     quote: "Car là où deux ou trois sont assemblés en mon nom, je suis au milieu d'eux.",
     reference: "Matthieu 18:20",
-    theme: "Présence Divine"
+    theme: "Présence Divine",
+    defaultBg: PRAYER_BG_SANCTUARY
   },
   {
     quote: "L'Éternel est ma lumière et mon salut: De qui aurais-je crainte ? L'Éternel est le soutien de ma vie: De qui aurais-je peur ?",
     reference: "Psaumes 27:1",
-    theme: "Confiance & Courage"
+    theme: "Confiance & Courage",
+    defaultBg: PRAYER_BG_BIBLE
   },
   {
     quote: "Quand je marche dans la vallée de l'ombre de la mort, Je ne crains aucun mal, car tu es avec moi: Ta houlette et ton bâton me rassurent.",
     reference: "Psaumes 23:4",
-    theme: "Consolation Spirituelle"
+    theme: "Consolation Spirituelle",
+    defaultBg: PRAYER_BG_VALLEY
   }
 ];
 
@@ -69,14 +127,23 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   currentStreak = 0,
   readingHistory = [],
   onNavigateToChapter,
-  onPlayAudioCurrentChapter
+  onPlayAudioCurrentChapter,
+  onSelectSanctuaryBg
 }) => {
-  const [currentIdx, setCurrentIdx] = useState<number>(4); // Default to "Verset 5/7" as requested
+  // Démarre sur Psaume 23:4 (index 6) conformément à la maquette
+  const [currentIdx, setCurrentIdx] = useState<number>(6);
   const [direction, setDirection] = useState<number>(0); // -1 for left, 1 for right
   const [showDrawer, setShowDrawer] = useState<boolean>(false);
   const [showNotifPanel, setShowNotifPanel] = useState<boolean>(false);
   const [likedVerses, setLikedVerses] = useState<number[]>([]);
   const [viewMode, setViewMode] = useState<'contemplation' | 'dashboard'>('contemplation');
+  const [selectedAtmosphere, setSelectedAtmosphere] = useState<'auto' | 'sanctuary' | 'valley' | 'coffee_bible'>(() => {
+    try {
+      return (localStorage.getItem('bible_home_atmosphere') as any) || 'auto';
+    } catch (_) {
+      return 'auto';
+    }
+  });
 
   const latestReading = readingHistory && readingHistory.length > 0
     ? [...readingHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
@@ -91,6 +158,31 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   };
 
   const activeVerse = CONTEMPLATIVE_VERSES[currentIdx];
+
+  // Calcul du fond d'écran actif selon l'ambiance choisie
+  const getActiveBackground = (): string => {
+    if (selectedAtmosphere === 'sanctuary') return PRAYER_BG_SANCTUARY;
+    if (selectedAtmosphere === 'valley') return PRAYER_BG_VALLEY;
+    if (selectedAtmosphere === 'coffee_bible') return PRAYER_BG_BIBLE;
+    // Mode Auto : lié au verset affiché
+    return activeVerse.defaultBg || PRAYER_BG_SANCTUARY;
+  };
+
+  const currentBgImage = getActiveBackground();
+
+  const handleSelectAtmosphere = (atmoId: 'auto' | 'sanctuary' | 'valley' | 'coffee_bible') => {
+    setSelectedAtmosphere(atmoId);
+    try {
+      localStorage.setItem('bible_home_atmosphere', atmoId);
+    } catch (_) {}
+
+    // Optionnel : synchronise aussi le fond global de l'app si sélection explicite
+    if (onSelectSanctuaryBg) {
+      if (atmoId === 'sanctuary') onSelectSanctuaryBg(PRAYER_BG_SANCTUARY);
+      else if (atmoId === 'valley') onSelectSanctuaryBg(PRAYER_BG_VALLEY);
+      else if (atmoId === 'coffee_bible') onSelectSanctuaryBg(PRAYER_BG_BIBLE);
+    }
+  };
 
   const handlePrev = () => {
     setDirection(-1);
@@ -118,41 +210,48 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   ];
 
   return (
-    <div className="w-full relative min-h-[640px] bg-[#050403] rounded-3xl border border-[#221e16] overflow-hidden flex flex-col justify-between font-sans shadow-soft select-none text-left">
+    <div className="w-full relative min-h-[660px] bg-[#050403] rounded-[12px] border border-[#D9B26A]/45 hover:border-[#D9B26A]/70 overflow-hidden flex flex-col justify-between font-sans shadow-[0_4px_30px_rgba(0,0,0,0.7),0_0_20px_rgba(217,178,106,0.12)] select-none text-left transition-all duration-300">
       
-      {/* GLOW BACKGROUND EFFECT / SPARKLES AND STARS */}
-      <div className="absolute inset-0 z-0 pointer-events-none opacity-40">
-        {/* Subtle brown gold radial grid glow */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#120f0a] via-[#050403] to-[#120f0a] opacity-80" />
+      {/* PHOTOGRAPHIC HERO & GLOW BACKGROUND EFFECT */}
+      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+        {/* Real spiritual meditation background image with dark vignette overlay */}
+        <motion.img
+          key={currentBgImage}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 0.55 }}
+          transition={{ duration: 0.6 }}
+          src={currentBgImage}
+          alt="Méditation biblique et sérénité spirituelle"
+          referrerPolicy="no-referrer"
+          className="w-full h-full object-cover filter contrast-105 brightness-95 scale-105"
+        />
+        {/* Voile sombre pour un contraste doux et optimal avec le texte doré */}
+        <div className="absolute inset-0 bg-gradient-to-b from-[#050403]/80 via-[#050403]/60 to-[#050403]/90 backdrop-blur-[0.5px]" />
         
         {/* Animated Twinkling Constellation Stars */}
-        <div className="absolute top-[12%] left-[15%] w-1 h-1 bg-[#c9a84c] rounded-full animate-pulse opacity-70" />
-        <div className="absolute top-[28%] left-[78%] w-1.5 h-1.5 bg-[#e8c97a] rounded-full animate-pulse opacity-60 duration-1000" />
+        <div className="absolute top-[12%] left-[15%] w-1 h-1 bg-[#D9B26A] rounded-full animate-pulse opacity-70" />
+        <div className="absolute top-[28%] left-[78%] w-1.5 h-1.5 bg-[#ebd092] rounded-full animate-pulse opacity-60 duration-1000" />
         <div className="absolute top-[45%] left-[25%] w-1 h-1 bg-white rounded-full animate-ping opacity-30 duration-3000" />
-        <div className="absolute top-[65%] left-[10%] w-1.5 h-1.5 bg-[#c9a84c] rounded-full animate-pulse opacity-80 duration-700" />
+        <div className="absolute top-[65%] left-[10%] w-1.5 h-1.5 bg-[#D9B26A] rounded-full animate-pulse opacity-80 duration-700" />
         <div className="absolute top-[75%] left-[85%] w-1 h-1 bg-white rounded-full animate-pulse opacity-50 duration-1500" />
-        <div className="absolute top-[50%] left-[80%] w-1 h-1 bg-[#c9a84c] rounded-full animate-pulse opacity-90 duration-500" />
-        <div className="absolute top-[88%] left-[30%] w-1 h-1 bg-[#c9a84c] rounded-full animate-pulse opacity-40 duration-2000" />
-        <div className="absolute top-[18%] left-[45%] w-1.5 h-1.5 bg-[#e8c97a] rounded-full animate-pulse opacity-70 duration-2000" />
-        <div className="absolute top-[33%] left-[12%] w-1 h-1 bg-[#c9a84c] rounded-full animate-pulse opacity-55 duration-800" />
       </div>
 
       {/* HEADER SECTION */}
-      <header className="relative z-10 w-full px-4 h-14 flex items-center justify-between border-b border-[#2e2a1e]/25 bg-[#050403]/70 backdrop-blur-sm">
+      <header className="relative z-10 w-full px-4 h-14 flex items-center justify-between border-b border-[#D9B26A]/25 bg-[#050403]/75 backdrop-blur-md">
         {/* Menu Hamburger gauche */}
         <button 
           onClick={() => setShowDrawer(true)}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-[#6b6355] hover:text-[#c9a84c] active:bg-[#12100c]/40 transition cursor-pointer"
+          className="w-9 h-9 rounded-[10px] flex items-center justify-center text-[#8c8270] hover:text-[#D9B26A] active:bg-[#0c0a07]/50 transition cursor-pointer"
         >
           <Menu className="w-5 h-5" />
         </button>
 
         {/* Titre centre or élégant */}
         <div className="text-center">
-          <h1 className="font-serif font-black text-xs uppercase tracking-[0.22em] text-[#c9a84c] filter drop-shadow-[0_2px_4px_rgba(201,168,76,0.2)]">
+          <h1 className="font-serif font-black text-xs uppercase tracking-[0.22em] text-[#D9B26A] filter drop-shadow-[0_2px_4px_rgba(217,178,106,0.25)]">
             Bible Profonde
           </h1>
-          <span className="text-[7.5px] font-mono uppercase text-[#6b6355] tracking-widest font-extrabold block">
+          <span className="text-[7.5px] font-mono uppercase text-[#8c8270] tracking-widest font-extrabold block">
             {viewMode === 'contemplation' ? 'Mode Sacré' : 'Tableau de Bord'}
           </span>
         </div>
@@ -160,7 +259,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
         {/* Bouton de bascule de mode de vue à droite */}
         <button 
           onClick={() => setViewMode(prev => prev === 'contemplation' ? 'dashboard' : 'contemplation')}
-          className="px-2.5 py-1 rounded-full border border-[#2e2a1e] hover:border-[#c9a84c]/50 text-[#6b6355] hover:text-[#c9a84c] active:bg-[#12100c]/40 transition cursor-pointer text-[9px] font-mono uppercase tracking-widest"
+          className="px-2.5 py-1 rounded-[12px] border border-[#D9B26A]/35 hover:border-[#D9B26A] text-[#8c8270] hover:text-[#D9B26A] active:bg-[#0c0a07]/50 transition cursor-pointer text-[9px] font-mono uppercase tracking-widest"
           title={viewMode === 'contemplation' ? "Voir Tableau de Bord" : "Voir Mode Contemplatif"}
         >
           {viewMode === 'contemplation' ? 'Tableau' : 'Sacré'}
@@ -168,179 +267,215 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
       </header>
 
       {/* NAVIGATION INDICATOR BAR */}
-      <section className="relative z-10 w-full px-5 py-2.5 flex items-center justify-between border-b border-[#2e2a1e]/15 bg-[#050403]/30">
+      <section className="relative z-10 w-full px-5 py-2.5 flex items-center justify-between border-b border-[#D9B26A]/20 bg-[#050403]/40">
         <button 
           onClick={handlePrev}
-          className="w-8 h-8 rounded-full border border-[#2e2a1e]/50 hover:border-[#c9a84c]/40 flex items-center justify-center text-[#6b6355] hover:text-[#c9a84c] active:scale-95 transition cursor-pointer"
+          className="w-8 h-8 rounded-[10px] border border-[#D9B26A]/30 hover:border-[#D9B26A] flex items-center justify-center text-[#8c8270] hover:text-[#D9B26A] active:scale-95 transition cursor-pointer"
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
 
         {/* Indicateur Verset X/Y */}
-        <div className="flex flex-col items-center">
-          <span className="text-[9px] font-mono font-extrabold text-[#c9a84c] uppercase tracking-widest">
+        <div className="flex flex-col items-center font-serif">
+          <span className="text-[9px] font-serif font-bold text-[#D9B26A] uppercase tracking-widest">
             Verset {currentIdx + 1} / {CONTEMPLATIVE_VERSES.length}
           </span>
-          <span className="text-[7.5px] font-mono text-[#6b6355] uppercase tracking-wide">
+          <span className="text-[7.5px] font-mono text-[#8c8270] uppercase tracking-wide">
             {activeVerse.theme}
           </span>
         </div>
 
         <button 
           onClick={handleNext}
-          className="w-8 h-8 rounded-full border border-[#2e2a1e]/50 hover:border-[#c9a84c]/40 flex items-center justify-center text-[#6b6355] hover:text-[#c9a84c] active:scale-95 transition cursor-pointer"
+          className="w-8 h-8 rounded-[10px] border border-[#D9B26A]/30 hover:border-[#D9B26A] flex items-center justify-center text-[#8c8270] hover:text-[#D9B26A] active:scale-95 transition cursor-pointer"
         >
           <ChevronRight className="w-4 h-4" />
         </button>
       </section>
 
+      {/* SÉLECTEUR D'AMBIANCE VISUELLE DU FOND (ICÔNES VECTORIELLES FINES IOS / MATERIAL) */}
+      <section className="relative z-10 w-full px-3 py-2 flex items-center justify-center gap-1.5 border-b border-[#D9B26A]/15 bg-[#050403]/75 backdrop-blur-md overflow-x-auto no-scrollbar">
+        <span className="text-[8px] font-serif uppercase tracking-widest text-[#8c8270] mr-1 shrink-0">
+          Ambiance :
+        </span>
+        {CONTEMPLATIVE_ATMOSPHERES.map((atmo) => {
+          const IconComponent = atmo.icon;
+          const isSelected = selectedAtmosphere === atmo.id;
+          return (
+            <button
+              key={atmo.id}
+              onClick={() => handleSelectAtmosphere(atmo.id as any)}
+              title={atmo.description}
+              className={`px-2.5 py-1 rounded-[8px] text-[9px] font-serif transition-all shrink-0 cursor-pointer flex items-center gap-1.5 border ${
+                isSelected
+                  ? 'bg-[#D9B26A]/20 text-[#D9B26A] border-[#D9B26A] font-bold shadow-[0_0_10px_rgba(217,178,106,0.22)]'
+                  : 'bg-[#050403]/80 text-[#8c8270] hover:text-[#ebd092] border-[#D9B26A]/20 hover:border-[#D9B26A]/45'
+              }`}
+            >
+              <IconComponent 
+                className={`w-3 h-3 transition-colors ${
+                  isSelected ? 'text-[#D9B26A]' : 'text-[#8c8270]'
+                }`} 
+                strokeWidth={1.75} 
+              />
+              <span className="tracking-wide">{atmo.label}</span>
+            </button>
+          );
+        })}
+      </section>
+
       {/* MAIN VIEW CONTENT */}
       {viewMode === 'contemplation' ? (
-        <main className="relative z-10 flex-1 flex flex-col justify-center items-center px-6 py-8 text-center select-text">
-          <div className="w-full max-w-sm flex flex-col items-center space-y-6">
+        <main className="relative z-10 flex-1 flex flex-col justify-center items-center px-4 sm:px-6 py-6 text-center select-text">
+          <div className="w-full max-w-sm flex flex-col items-center space-y-4">
             
-            {/* Grand guillemet d'or stylisé au-dessus */}
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 0.25 }}
-              transition={{ duration: 0.6 }}
-              className="text-[#c9a84c] font-serif"
-            >
-              <Quote className="w-10 h-10 transform scale-y-[-1] flip-x -rotate-12 select-none" />
-            </motion.div>
+            {/* CARTE CONTEMPLATIVE DU VERSET SACRÉ AVEC COINS ARRONDIS 12PX, BORDURE DORÉE #D9B26A ET FOND SOMBRE PROFOND #050403 */}
+            <div className="w-full bg-[#050403]/90 backdrop-blur-md border border-[#D9B26A]/45 hover:border-[#D9B26A]/75 rounded-[12px] p-5 sm:p-6 shadow-[0_4px_24px_rgba(0,0,0,0.6),0_0_18px_rgba(217,178,106,0.12)] flex flex-col items-center space-y-4 transition-all duration-300">
+              {/* Grand guillemet d'or stylisé au-dessus */}
+              <motion.div 
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 0.35 }}
+                transition={{ duration: 0.6 }}
+                className="text-[#D9B26A] font-serif"
+              >
+                <Quote className="w-8 h-8 transform scale-y-[-1] flip-x -rotate-12 select-none" />
+              </motion.div>
 
-            {/* Verset biblique en police calligraphique style manuscrit élégant */}
-            <div className="min-h-[140px] flex items-center justify-center w-full px-2">
-              <AnimatePresence mode="wait">
-                <motion.p
-                  key={currentIdx}
-                  initial={{ opacity: 0, filter: 'blur(5px)', y: direction * 10 }}
-                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
-                  exit={{ opacity: 0, filter: 'blur(5px)', y: -direction * 10 }}
-                  transition={{ duration: 0.45, ease: "easeInOut" }}
-                  className="font-['Alex_Brush'] text-[25px] sm:text-[27px] leading-[1.4] text-[#f4efe2] italic select-text filter drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
-                  style={{ textShadow: '0 2px 10px rgba(0,0,0,0.5)' }}
-                >
-                  « {activeVerse.quote} »
-                </motion.p>
-              </AnimatePresence>
+              {/* Verset biblique en typographie calligraphique & serif élégante */}
+              <div className="min-h-[120px] flex items-center justify-center w-full px-1">
+                <AnimatePresence mode="wait">
+                  <motion.p
+                    key={currentIdx}
+                    initial={{ opacity: 0, filter: 'blur(5px)', y: direction * 10 }}
+                    animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                    exit={{ opacity: 0, filter: 'blur(5px)', y: -direction * 10 }}
+                    transition={{ duration: 0.45, ease: "easeInOut" }}
+                    className="font-['Alex_Brush'] text-[24px] sm:text-[26px] leading-[1.38] text-[#f4efe2] italic select-text filter drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]"
+                    style={{ textShadow: '0 2px 10px rgba(0,0,0,0.5)' }}
+                  >
+                    « {activeVerse.quote} »
+                  </motion.p>
+                </AnimatePresence>
+              </div>
+
+              {/* Grand guillemet d'or stylisé en dessous */}
+              <motion.div 
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 0.35 }}
+                transition={{ duration: 0.6 }}
+                className="text-[#D9B26A] font-serif select-none"
+              >
+                <Quote className="w-8 h-8 rotate-12" />
+              </motion.div>
+
+              {/* Référence biblique or, typographie serif élégante */}
+              <div className="pt-1 text-center select-none w-full">
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={currentIdx}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ duration: 0.3 }}
+                    className="space-y-3"
+                  >
+                    <p className="font-serif font-black text-[11px] uppercase tracking-[0.24em] text-[#D9B26A]">
+                      {activeVerse.reference}
+                    </p>
+                    <div className="flex justify-center items-center gap-3 pt-1">
+                      <button 
+                        onClick={() => toggleLike(currentIdx)}
+                        className={`w-8 h-8 rounded-[10px] flex items-center justify-center transition cursor-pointer border ${
+                          likedVerses.includes(currentIdx)
+                            ? 'bg-[#D9B26A]/20 border-[#D9B26A] text-[#D9B26A]'
+                            : 'border-[#D9B26A]/35 text-[#8c8270] hover:text-[#e8e0d0] hover:border-[#D9B26A]/70'
+                        }`}
+                      >
+                        <Heart className={`w-3.5 h-3.5 ${likedVerses.includes(currentIdx) ? 'fill-current' : ''}`} />
+                      </button>
+                      <button 
+                        onClick={() => onNavigateToTab('read')}
+                        className="text-[8px] font-serif tracking-widest uppercase border border-[#D9B26A]/40 text-[#ebd092] hover:text-[#e8e0d0] hover:border-[#D9B26A] px-3.5 py-1 rounded-[12px] transition cursor-pointer"
+                      >
+                        Étudier ce livre
+                      </button>
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
+              </div>
             </div>
 
-            {/* Grand guillemet d'or stylisé en dessous */}
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 0.25 }}
-              transition={{ duration: 0.6 }}
-              className="text-[#c9a84c] font-serif select-none"
-            >
-              <Quote className="w-10 h-10 rotate-12" />
-            </motion.div>
-
-            {/* Référence biblique or, plus petite */}
-            <div className="pt-2 text-center select-none w-full">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={currentIdx}
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.3 }}
-                  className="space-y-3"
-                >
-                  <p className="font-serif font-black text-[11px] uppercase tracking-[0.24em] text-[#c9a84c]">
-                    {activeVerse.reference}
-                  </p>
-                  <div className="flex justify-center items-center gap-3 pt-1">
-                    <button 
-                      onClick={() => toggleLike(currentIdx)}
-                      className={`w-8 h-8 rounded-full flex items-center justify-center transition cursor-pointer border ${
-                        likedVerses.includes(currentIdx)
-                          ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c]'
-                          : 'border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0]'
-                      }`}
-                    >
-                      <Heart className={`w-3.5 h-3.5 ${likedVerses.includes(currentIdx) ? 'fill-current' : ''}`} />
-                    </button>
-                    <button 
-                      onClick={() => onNavigateToTab('read')}
-                      className="text-[8px] font-mono tracking-widest uppercase border border-[#2e2a1e]/60 text-[#6b6355] hover:text-[#e8e0d0] hover:border-[#c9a84c]/30 px-3 py-1 rounded-full transition cursor-pointer"
-                    >
-                      Étudier ce livre
-                    </button>
+            {/* Cartes Reprendre la Lecture & Lecture Audio avec coins 12px, fond #050403 et bordures dorées #D9B26A */}
+            <div className="w-full space-y-2.5">
+              <button
+                onClick={handleResumeReading}
+                className="w-full px-4 py-3 rounded-[12px] bg-[#050403]/90 border border-[#D9B26A]/45 hover:border-[#D9B26A] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.1)] cursor-pointer text-left backdrop-blur-sm"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-[10px] bg-[#D9B26A]/10 border border-[#D9B26A]/35 flex items-center justify-center text-[#D9B26A] group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition duration-300">
+                    <Play className="w-4 h-4 fill-current ml-0.5" />
                   </div>
-                </motion.div>
-              </AnimatePresence>
-
-              {/* Reprendre la Lecture & Lecture Audio Buttons */}
-              <div className="pt-4 w-full space-y-2.5">
-                <button
-                  onClick={handleResumeReading}
-                  className="w-full px-4 py-3 rounded-2xl bg-[#12100c]/90 border border-[#c9a84c]/40 hover:border-[#c9a84c] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-soft cursor-pointer text-left backdrop-blur-sm"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-[#c9a84c]/10 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] group-hover:bg-[#c9a84c] group-hover:text-[#0d0b07] transition duration-300">
-                      <Play className="w-4 h-4 fill-current ml-0.5" />
-                    </div>
-                    <div>
-                      <span className="text-[8px] font-mono uppercase text-[#6b6355] tracking-wider block font-bold">Reprendre la lecture</span>
-                      <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#c9a84c] transition">
-                        {latestReading ? `${latestReading.book_name} ${latestReading.chapter} ${latestReading.last_verse ? `· Verset ${latestReading.last_verse}` : ''}` : 'Ouvrir la Sainte Bible'}
-                      </span>
-                    </div>
+                  <div>
+                    <span className="text-[8px] font-mono uppercase text-[#8c8270] tracking-wider block font-bold">Reprendre la lecture</span>
+                    <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#D9B26A] transition">
+                      {latestReading ? `${latestReading.book_name} ${latestReading.chapter} ${latestReading.last_verse ? `· Verset ${latestReading.last_verse}` : ''}` : 'Ouvrir la Sainte Bible'}
+                    </span>
                   </div>
-                  <span className="text-[9px] font-mono uppercase font-bold text-[#c9a84c] px-2.5 py-1 rounded-lg bg-[#c9a84c]/10 group-hover:bg-[#c9a84c] group-hover:text-[#0d0b07] transition">
-                    Reprendre →
-                  </span>
-                </button>
+                </div>
+                <span className="text-[9px] font-mono uppercase font-bold text-[#D9B26A] px-2.5 py-1 rounded-[8px] bg-[#D9B26A]/10 border border-[#D9B26A]/25 group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition">
+                  Reprendre →
+                </span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onPlayAudioCurrentChapter) {
-                      onPlayAudioCurrentChapter();
-                    }
-                  }}
-                  className="w-full px-4 py-3 rounded-2xl bg-[#c9a84c]/15 border border-[#c9a84c]/60 hover:border-[#c9a84c] hover:bg-[#c9a84c]/25 text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-soft cursor-pointer text-left backdrop-blur-sm"
-                  title="Lancer la lecture audio du chapitre courant sans ouvrir le lecteur manuel"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-[#c9a84c] text-[#0d0b07] flex items-center justify-center font-bold shadow-md group-hover:scale-105 transition">
-                      <Volume2 className="w-4 h-4 fill-current" />
-                    </div>
-                    <div>
-                      <span className="text-[8px] font-mono uppercase text-[#c9a84c] tracking-wider block font-bold">Écoute Vocale Directe</span>
-                      <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#c9a84c] transition">
-                        Lecture Audio
-                      </span>
-                    </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onPlayAudioCurrentChapter) {
+                    onPlayAudioCurrentChapter();
+                  }
+                }}
+                className="w-full px-4 py-3 rounded-[12px] bg-[#050403]/90 border border-[#D9B26A]/55 hover:border-[#D9B26A] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_15px_rgba(217,178,106,0.14)] cursor-pointer text-left backdrop-blur-sm"
+                title="Lancer la lecture audio du chapitre courant sans ouvrir le lecteur manuel"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-[10px] bg-[#D9B26A] text-[#050403] flex items-center justify-center font-bold shadow-md group-hover:scale-105 transition">
+                    <Volume2 className="w-4 h-4 fill-current" />
                   </div>
-                  <span className="text-[9px] font-mono uppercase font-bold text-[#0d0b07] px-2.5 py-1 rounded-lg bg-[#c9a84c] group-hover:bg-[#e8c97a] transition shadow-sm">
-                    Écouter ▶
-                  </span>
-                </button>
-              </div>
+                  <div>
+                    <span className="text-[8px] font-mono uppercase text-[#D9B26A] tracking-wider block font-bold">Écoute Vocale Directe</span>
+                    <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#D9B26A] transition">
+                      Lecture Audio
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[9px] font-mono uppercase font-bold text-[#050403] px-2.5 py-1 rounded-[8px] bg-[#D9B26A] group-hover:bg-[#ebd092] transition shadow-sm">
+                  Écouter ▶
+                </span>
+              </button>
             </div>
 
           </div>
         </main>
       ) : (
         /* SECONDARY RETRO/BRONZE GRID DASHBOARD (PRESERVING FUNCTIONAL OUTCOMES) */
-        <main className="relative z-10 flex-1 p-5 md:p-6 space-y-5 md:space-y-6 overflow-y-auto no-scrollbar animate-fade-slide-up">
-          <div className="bg-[#12100c]/90 border border-[#c9a84c]/15 p-5 md:p-6 rounded-xl flex flex-col space-y-2.5">
-            <span className="text-[8px] font-mono tracking-[0.15em] text-[#6b6355] uppercase font-bold">Verset en lumière</span>
-            <p className="font-serif italic text-xs leading-relaxed text-[#c9a84c]">
+        <main className="relative z-10 flex-1 p-5 md:p-6 space-y-4 md:space-y-5 overflow-y-auto no-scrollbar animate-fade-slide-up">
+          {/* Card Verset en lumière avec coins 12px, fond #050403 et fine bordure dorée */}
+          <div className="bg-[#050403]/90 border border-[#D9B26A]/50 hover:border-[#D9B26A] p-5 md:p-6 rounded-[12px] shadow-[0_4px_16px_rgba(0,0,0,0.6),0_0_15px_rgba(217,178,106,0.12)] flex flex-col space-y-2.5 backdrop-blur-sm transition-all duration-300">
+            <span className="text-[8px] font-mono tracking-[0.15em] text-[#D9B26A]/80 uppercase font-bold">Verset en lumière</span>
+            <p className="font-serif italic text-xs leading-relaxed text-[#D9B26A]">
               « {activeVerse.quote} »
             </p>
-            <span className="font-mono text-[8px] text-[#6b6355] tracking-widest uppercase font-black">{activeVerse.reference}</span>
+            <span className="font-serif text-[9px] text-[#8c8270] tracking-widest uppercase font-bold">{activeVerse.reference}</span>
           </div>
 
+          {/* Cartes d'action rapide avec coins 12px, fond #050403 et fines bordures dorées */}
           <div className="grid grid-cols-3 gap-2.5">
             <button
               onClick={() => onNavigateToTab('read')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              className="bg-[#050403]/90 hover:bg-[#0c0a07] border border-[#D9B26A]/40 hover:border-[#D9B26A] rounded-[12px] p-3 flex flex-col justify-between items-start text-left h-[80px] shadow-[0_2px_8px_rgba(0,0,0,0.5),0_0_10px_rgba(217,178,106,0.08)] transition cursor-pointer backdrop-blur-sm"
             >
-              <BookOpen className="w-4 h-4 text-[#c9a84c]" />
-              <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Lecture</span>
+              <BookOpen className="w-4 h-4 text-[#D9B26A]" />
+              <span className="text-[9px] font-serif uppercase tracking-wider text-[#ebd092]">Lecture</span>
             </button>
             <button
               type="button"
@@ -349,42 +484,42 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   onPlayAudioCurrentChapter();
                 }
               }}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#c9a84c]/40 hover:border-[#c9a84c] rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              className="bg-[#050403]/90 hover:bg-[#0c0a07] border border-[#D9B26A]/60 hover:border-[#D9B26A] rounded-[12px] p-3 flex flex-col justify-between items-start text-left h-[80px] shadow-[0_2px_8px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.14)] transition cursor-pointer backdrop-blur-sm"
               title="Lecture Audio Directe"
             >
-              <Volume2 className="w-4 h-4 text-[#c9a84c]" />
-              <span className="text-[9px] font-mono uppercase tracking-wider text-[#c9a84c]">Audio ▶</span>
+              <Volume2 className="w-4 h-4 text-[#D9B26A]" />
+              <span className="text-[9px] font-serif uppercase tracking-wider text-[#D9B26A] font-bold">Audio ▶</span>
             </button>
             <button
               onClick={() => onNavigateToTab('assistant')}
-              className="bg-[#12100c] hover:bg-[#15130f] border border-[#2e2a1e]/80 hover:border-[#c9a84c]/30 rounded-xl p-3 flex flex-col justify-between items-start text-left h-[80px] transition cursor-pointer"
+              className="bg-[#050403]/90 hover:bg-[#0c0a07] border border-[#D9B26A]/40 hover:border-[#D9B26A] rounded-[12px] p-3 flex flex-col justify-between items-start text-left h-[80px] shadow-[0_2px_8px_rgba(0,0,0,0.5),0_0_10px_rgba(217,178,106,0.08)] transition cursor-pointer backdrop-blur-sm"
             >
-              <HelpCircle className="w-4 h-4 text-[#c9a84c]" />
-              <span className="text-[9px] font-mono uppercase tracking-wider text-[#6b6355]">Assistant</span>
+              <HelpCircle className="w-4 h-4 text-[#D9B26A]" />
+              <span className="text-[9px] font-serif uppercase tracking-wider text-[#ebd092]">Assistant</span>
             </button>
           </div>
 
-          {/* STREAK */}
-          <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-xl p-4 sm:p-5 flex items-center justify-between">
+          {/* STREAK - CARTE FIDÉLITÉ AVEC COINS 12PX ET BORDURE DORÉE */}
+          <div className="bg-[#050403]/90 border border-[#D9B26A]/45 hover:border-[#D9B26A] rounded-[12px] p-4 sm:p-5 flex items-center justify-between shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.1)] backdrop-blur-sm transition-all duration-300">
             <div>
-              <span className="text-[8px] font-mono text-[#6b6355] uppercase tracking-wider">Fidélité spirituelle</span>
+              <span className="text-[8px] font-mono text-[#8c8270] uppercase tracking-wider">Fidélité spirituelle</span>
               <span className="text-xs font-serif font-black text-[#e8e0d0] block">
                 Série de {currentStreak} {currentStreak > 1 ? 'jours' : 'jour'}
               </span>
             </div>
-            <div className="text-[10px] font-mono font-bold text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 px-2.5 py-1 rounded-md flex items-center gap-1.5">
-              <Flame className={`w-3.5 h-3.5 ${currentStreak > 0 ? 'text-[#c9a84c] animate-pulse' : 'text-[#6b6355]'}`} fill={currentStreak > 0 ? '#c9a84c' : 'none'} />
+            <div className="text-[10px] font-mono font-bold text-[#D9B26A] bg-[#D9B26A]/10 border border-[#D9B26A]/30 px-2.5 py-1 rounded-[8px] flex items-center gap-1.5">
+              <Flame className={`w-3.5 h-3.5 ${currentStreak > 0 ? 'text-[#D9B26A] animate-pulse' : 'text-[#8c8270]'}`} fill={currentStreak > 0 ? '#D9B26A' : 'none'} />
               <span>{currentStreak}</span>
             </div>
           </div>
 
-          {/* OBJECTIF LECTURE */}
-          <div className="bg-[#12100c]/80 border border-[#2e2a1e]/80 rounded-xl p-4 sm:p-5 flex items-center justify-between">
+          {/* OBJECTIF LECTURE - CARTE OBJECTIF AVEC COINS 12PX ET BORDURE DORÉE */}
+          <div className="bg-[#050403]/90 border border-[#D9B26A]/45 hover:border-[#D9B26A] rounded-[12px] p-4 sm:p-5 flex items-center justify-between shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.1)] backdrop-blur-sm transition-all duration-300">
             <div>
-              <span className="text-[8px] font-mono text-[#6b6355] uppercase tracking-wider">Objectif quotidien</span>
+              <span className="text-[8px] font-mono text-[#8c8270] uppercase tracking-wider">Objectif quotidien</span>
               <span className="text-xs font-serif font-black text-[#e8e0d0] block">Complété à {goalPercent}%</span>
             </div>
-            <div className="text-[10px] font-mono font-bold text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 px-2.5 py-1 rounded-md">
+            <div className="text-[10px] font-mono font-bold text-[#D9B26A] bg-[#D9B26A]/10 border border-[#D9B26A]/30 px-2.5 py-1 rounded-[8px]">
               {goalPercent}%
             </div>
           </div>
@@ -410,18 +545,18 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', damping: 20, stiffness: 150 }}
-              className="absolute top-0 bottom-0 left-0 w-[240px] bg-[#0d0b07] border-r border-[#2e2a1e] p-5 flex flex-col justify-between"
+              className="absolute top-0 bottom-0 left-0 w-[240px] bg-[#050403] border-r border-[#D9B26A]/30 p-5 flex flex-col justify-between shadow-[4px_0_24px_rgba(0,0,0,0.8)]"
             >
               <div className="space-y-6">
                 {/* Drawer header */}
-                <div className="flex items-center justify-between border-b border-[#2e2a1e]/50 pb-3">
+                <div className="flex items-center justify-between border-b border-[#D9B26A]/20 pb-3">
                   <div className="flex flex-col">
-                    <span className="font-serif font-black text-[11px] text-[#c9a84c] uppercase tracking-widest">Bible Profonde</span>
-                    <span className="text-[8px] font-mono text-[#6b6355] uppercase font-bold tracking-wider">Menu Sacré</span>
+                    <span className="font-serif font-black text-[11px] text-[#D9B26A] uppercase tracking-widest">Bible Profonde</span>
+                    <span className="text-[8px] font-mono text-[#8c8270] uppercase font-bold tracking-wider">Menu Sacré</span>
                   </div>
                   <button 
                     onClick={() => setShowDrawer(false)}
-                    className="p-1 rounded-full text-[#6b6355] hover:text-[#e8e0d0]"
+                    className="p-1 rounded-[8px] text-[#8c8270] hover:text-[#e8e0d0]"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -431,57 +566,57 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                 <div className="space-y-1 font-serif text-[12px]">
                   <button 
                     onClick={() => { onNavigateToTab('home'); setViewMode('contemplation'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <Home className="w-4 h-4 text-[#c9a84c]" />
+                    <Home className="w-4 h-4 text-[#D9B26A]" />
                     <span>Mode Comtemplatif</span>
                   </button>
                   <button 
                     onClick={() => { onNavigateToTab('read'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#807664] hover:text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <BookOpen className="w-4 h-4 text-[#807664]" />
+                    <BookOpen className="w-4 h-4 text-[#8c8270]" />
                     <span>Texte Sacré (Louis Segond)</span>
                   </button>
                   <button 
                     onClick={() => { onNavigateToTab('notes'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#807664] hover:text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <FolderClosed className="w-4 h-4 text-[#807664]" />
+                    <FolderClosed className="w-4 h-4 text-[#8c8270]" />
                     <span>Journal d'Harmonie ({notesCount})</span>
                   </button>
                   <button 
                     onClick={() => { onNavigateToTab('challenges'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#807664] hover:text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <Sparkles className="w-4 h-4 text-[#807664]" />
+                    <Sparkles className="w-4 h-4 text-[#8c8270]" />
                     <span>Programmes de Lecture</span>
                   </button>
                   <button 
                     onClick={() => { onNavigateToTab('assistant'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#807664] hover:text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <HelpCircle className="w-4 h-4 text-[#807664]" />
+                    <HelpCircle className="w-4 h-4 text-[#8c8270]" />
                     <span>Assistant Spirituel (Conseil)</span>
                   </button>
                   <button 
                     onClick={() => { onNavigateToTab('memorize'); setShowDrawer(false); }}
-                    className="w-full text-left p-2.5 rounded-lg text-[#807664] hover:text-[#e8e0d0] hover:bg-[#12100c] flex items-center gap-2.5 transition"
+                    className="w-full text-left p-2.5 rounded-[10px] text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#0c0a07] flex items-center gap-2.5 transition"
                   >
-                    <Quote className="w-4 h-4 text-[#807664]" />
+                    <Quote className="w-4 h-4 text-[#8c8270]" />
                     <span>Exercices de Récitation</span>
                   </button>
                 </div>
               </div>
 
               {/* Settings Action Button */}
-              <div className="pt-4 border-t border-[#2e2a1e]/40">
+              <div className="pt-4 border-t border-[#D9B26A]/20">
                 <button
                   onClick={() => {
                     setShowDrawer(false);
                     if (onOpenSettings) onOpenSettings();
                   }}
-                  className="w-full py-2 bg-[#12100c] border border-[#2e2a1e] text-[10px] font-mono uppercase tracking-widest text-[#6b6355] hover:text-[#c9a84c] rounded-lg transition"
+                  className="w-full py-2 bg-[#050403] border border-[#D9B26A]/35 text-[10px] font-mono uppercase tracking-widest text-[#8c8270] hover:text-[#D9B26A] rounded-[12px] transition"
                 >
                   <Settings className="w-3.5 h-3.5 inline mr-1.5 align-text-bottom" />
                   Paramètres
@@ -509,16 +644,16 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="relative bg-[#0d0b07] border-t border-[#c9a84c]/20 rounded-t-2xl p-5 space-y-4 max-h-[80%] overflow-y-auto no-scrollbar"
+              className="relative bg-[#050403] border-t border-[#D9B26A]/30 rounded-t-[12px] p-5 space-y-4 max-h-[80%] overflow-y-auto no-scrollbar shadow-[0_-4px_25px_rgba(217,178,106,0.12)]"
             >
-              <div className="flex items-center justify-between border-b border-[#2e2a1e] pb-2.5">
+              <div className="flex items-center justify-between border-b border-[#D9B26A]/20 pb-2.5">
                 <div className="flex items-center gap-1.5">
-                  <Bell className="w-4.5 h-4.5 text-[#c9a84c] animate-bounce" />
-                  <span className="font-serif font-black text-xs text-[#c9a84c] uppercase tracking-wider">Messages de Grâce</span>
+                  <Bell className="w-4.5 h-4.5 text-[#D9B26A] animate-bounce" />
+                  <span className="font-serif font-black text-xs text-[#D9B26A] uppercase tracking-wider">Messages de Grâce</span>
                 </div>
                 <button 
                   onClick={() => setShowNotifPanel(false)}
-                  className="w-6 h-6 rounded-full bg-[#12100c] flex items-center justify-center text-[#6b6355] hover:text-[#e8e0d0]"
+                  className="w-6 h-6 rounded-[8px] bg-[#050403] border border-[#D9B26A]/25 flex items-center justify-center text-[#8c8270] hover:text-[#D9B26A]"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -529,20 +664,20 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                 {NOTIFICATIONS_LIST.map(item => (
                   <div 
                     key={item.id} 
-                    className="p-3 bg-[#12100c] border border-[#2e2a1e]/60 rounded-xl space-y-1"
+                    className="p-3 bg-[#050403]/95 border border-[#D9B26A]/40 hover:border-[#D9B26A]/75 rounded-[12px] space-y-1 shadow-[0_2px_8px_rgba(0,0,0,0.5),0_0_8px_rgba(217,178,106,0.08)] transition-all"
                   >
                     <div className="flex justify-between items-center">
                       <h4 className="font-serif font-extrabold text-[11px] text-[#e8e0d0]">{item.title}</h4>
-                      <span className="text-[8px] font-mono text-[#6b6355]">{item.time}</span>
+                      <span className="text-[8px] font-mono text-[#D9B26A]/70">{item.time}</span>
                     </div>
-                    <p className="text-[10px] text-[#6b6355] leading-relaxed">{item.text}</p>
+                    <p className="text-[10px] text-[#8c8270] leading-relaxed">{item.text}</p>
                   </div>
                 ))}
               </div>
 
               <button 
                 onClick={() => setShowNotifPanel(false)}
-                className="w-full py-2 bg-[#c9a84c]/10 text-xs font-mono uppercase text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl hover:bg-[#c9a84c]/20"
+                className="w-full py-2 bg-[#D9B26A]/15 text-xs font-serif uppercase tracking-wider text-[#D9B26A] border border-[#D9B26A]/35 rounded-[12px] hover:bg-[#D9B26A]/25 transition"
               >
                 Fermer le sanctuaire
               </button>

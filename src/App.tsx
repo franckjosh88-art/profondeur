@@ -16,7 +16,7 @@ import {
 } from './data/bibleData';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -60,6 +60,33 @@ const LOWER_FEMALE_NAMES = [
   'zira', 'google français', 'harmonie', 'samantha', 'siri', 'vca', 'vcc', 'vce', 'vcf', 'vcg'
 ];
 
+// Images d'ambiance spirituelle (Portrait sombre & chaleureux, lueur dorée)
+export const SANCTUARY_BG_PRESETS = [
+  {
+    id: 'sanctuary',
+    name: 'Sanctuaire & Bokeh',
+    label: 'Neutre',
+    icon: Leaf,
+    url: '/src/assets/images/prayer_bg_sanctuary_1790148027998.jpg'
+  },
+  {
+    id: 'valley',
+    name: 'Psaume 23 Vallée',
+    label: 'Psaume 23',
+    icon: Mountain,
+    url: '/src/assets/images/prayer_bg_valley_1790148041309.jpg'
+  },
+  {
+    id: 'bible',
+    name: 'Bible & Boiserie',
+    label: 'Méditation',
+    icon: Flame,
+    url: '/src/assets/images/prayer_bg_bible_1790148055006.jpg'
+  }
+];
+
+const PRAYER_IN_LIGHT_BG = SANCTUARY_BG_PRESETS[0].url;
+
 export default function App() {
   // Authentication states
   const [user, setUser] = useState<User | null>(null);
@@ -71,6 +98,21 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isGoogleSigningIn, setIsGoogleSigningIn] = useState<boolean>(false);
+
+  // Arrière-plan dynamique immersif
+  const [sanctuaryBgImage, setSanctuaryBgImage] = useState<string>(() => {
+    try {
+      return localStorage.getItem('bible_sanctuary_bg') || PRAYER_IN_LIGHT_BG;
+    } catch (_) {
+      return PRAYER_IN_LIGHT_BG;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bible_sanctuary_bg', sanctuaryBgImage);
+    } catch (_) {}
+  }, [sanctuaryBgImage]);
 
   // User Settings 
   const [textSize, setTextSize] = useState<number>(18);
@@ -2313,7 +2355,12 @@ export default function App() {
   // Auth Loading state splash screen
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#050403] flex flex-col items-center justify-center p-6 text-center select-none text-[#e8e0d0]">
+      <div 
+        className="min-h-screen prayer-bg-cover flex flex-col items-center justify-center p-6 text-center select-none text-[#e8e0d0]"
+        style={{
+          backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.72) 0%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`
+        }}
+      >
         <div className="w-8 h-8 rounded-full border-b border-r border-[#c9a84c] animate-spin mb-4"></div>
         <p className="text-xs text-[#6b6355] tracking-widest font-mono uppercase">Vérification de l'alliance...</p>
       </div>
@@ -2323,7 +2370,12 @@ export default function App() {
   // Non-authenticated luxury portal screen
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#050403] flex items-center justify-center p-4">
+      <div 
+        className="min-h-screen prayer-bg-cover flex items-center justify-center p-4 relative"
+        style={{
+          backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.68) 0%, rgba(5, 4, 3, 0.85) 100%), url('${sanctuaryBgImage}')`
+        }}
+      >
         <div className="w-full max-w-md bg-[#12100c] border border-[#2e2a1e] p-8 rounded-[2rem] shadow-gold-glow relative overflow-hidden text-center">
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
           <div className="absolute -bottom-10 -left-10 w-36 h-36 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
@@ -2471,7 +2523,12 @@ export default function App() {
 
   // Main Authenticated Layout
   return (
-    <div className={`min-h-screen bg-luxury-bg-deep text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c]`}>
+    <div 
+      className={`min-h-screen prayer-bg-cover text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c] relative overflow-x-hidden`}
+      style={{
+        backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.65) 0%, rgba(5, 4, 3, 0.78) 45%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`
+      }}
+    >
       
       {/* Veille spirituelle overlays (Sunset eye protection + physical screen dimmer) */}
       {isVigilActive && (
@@ -2617,6 +2674,36 @@ export default function App() {
                         }`}
                       />
                     </button>
+                  </div>
+
+                  {/* Arrière-plan spirituel immersif */}
+                  <div className="pt-2 border-t border-[#2e2a1e]/45 space-y-1.5">
+                    <span className="text-[9px] font-mono text-[#D9B26A] uppercase font-bold tracking-wider block">
+                      Arrière-Plan du Sanctuaire
+                    </span>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {SANCTUARY_BG_PRESETS.map((preset) => {
+                        const IconComp = preset.icon;
+                        const isSelected = sanctuaryBgImage === preset.url;
+                        return (
+                          <button
+                            key={preset.id}
+                            onClick={() => setSanctuaryBgImage(preset.url)}
+                            className={`p-1.5 rounded-[8px] text-[8.5px] font-serif border flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                              isSelected
+                                ? 'bg-[#D9B26A]/20 border-[#D9B26A] text-[#D9B26A] font-bold shadow-[0_0_8px_rgba(217,178,106,0.15)]'
+                                : 'border-[#2e2a1e] text-[#8c8270] hover:text-[#ebd092] hover:border-[#D9B26A]/40'
+                            }`}
+                          >
+                            <IconComp 
+                              className={`w-3 h-3 ${isSelected ? 'text-[#D9B26A]' : 'text-[#8c8270]'}`} 
+                              strokeWidth={1.75} 
+                            />
+                            <span className="truncate">{preset.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -2969,6 +3056,45 @@ export default function App() {
                       Vider 🗑️
                     </button>
                   </div>
+
+                  {/* Mode Zen Toggle in Settings */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <div className="flex flex-col">
+                      <span className="text-[#c9a84c] font-bold uppercase tracking-wider flex items-center gap-1">
+                        <EyeOff className="w-3 h-3 text-[#c9a84c]" />
+                        Mode Zen (Lecture Immersive)
+                      </span>
+                      <span className="text-[8px] text-[#6b6355]">Masque la barre de navigation et la TopBar</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsZenMode(prev => !prev)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        isZenMode ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border-[#2e2a1e]'
+                      }`}
+                      title="Bascule le Mode Zen pour masquer la barre de navigation et la TopBar"
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-[#050403] shadow ring-0 transition duration-200 ease-in-out ${
+                          isZenMode ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Arrière-plan Sanctuaire Spirituel */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <div className="flex flex-col">
+                      <span className="text-[#c9a84c] font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Sparkles className="w-3 h-3 text-[#c9a84c]" />
+                        Fond Spirituel : Prière & Lumière
+                      </span>
+                      <span className="text-[8px] text-[#6b6355]">Image haute opacité avec voile sombre</span>
+                    </div>
+                    <span className="text-[8px] font-mono uppercase px-2 py-0.5 rounded bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/30 font-bold">
+                      Actif ✨
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3130,6 +3256,8 @@ export default function App() {
                 readingHistory={readingHistory}
                 onNavigateToChapter={handleNavigateChallengeToReader}
                 onPlayAudioCurrentChapter={() => speakVerse(0)}
+                onSelectSanctuaryBg={(bgUrl) => setSanctuaryBgImage(bgUrl)}
+                currentSanctuaryBg={sanctuaryBgImage}
               />
             </motion.div>
           )}

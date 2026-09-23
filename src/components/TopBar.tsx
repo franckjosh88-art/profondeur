@@ -39,7 +39,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* OUTLINED STUDY BUTTON */}
         <button
           onClick={onStudyPress}
-          className="h-8 px-3.5 bg-transparent hover:bg-luxury-button-bg text-luxury-gold font-serif text-[11px] font-extrabold tracking-widest uppercase border border-luxury-gold hover:border-luxury-gold-light rounded-md transition shadow-gold-glow flex items-center justify-center cursor-pointer"
+          className="h-8 px-3.5 bg-transparent hover:bg-luxury-button-bg text-luxury-gold font-serif text-[11px] font-extrabold tracking-widest uppercase border border-luxury-gold hover:border-luxury-gold-light rounded-[12px] transition shadow-gold-glow flex items-center justify-center cursor-pointer"
         >
           ÉTUDIER
         </button>
