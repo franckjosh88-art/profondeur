@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2, Image, Bookmark } from 'lucide-react';
+import { Copy, Sparkles, Heart, Star, Check, FileText, Share2, ArrowRightLeft, Mic, Square, Play, Pause, Trash2, Image, Bookmark, GitFork, BookOpen, RotateCw, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Verse, EmotionAnalysisResult } from '../types/bible';
+import { Verse, EmotionAnalysisResult, SimilarVerse, SimilarVersesResponse, BookmarkFolder } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
 import { getEmotionMeta, renderEmotionIcon } from '../utils/emotionHelpers';
 
@@ -21,10 +21,15 @@ interface VerseItemProps {
   noteAudio?: string;
   emotionAnalysis?: EmotionAnalysisResult;
   onSaveNote: (verse: Verse, noteText: string, audioBase64?: string, emotionAnalysis?: EmotionAnalysisResult) => void;
+  onNavigateToVerse?: (bookId: number, chapterNum: number, verseNum: number) => void;
+  isVerseFavorite?: (bookId: number, chapter: number, verse: number) => boolean;
   isCurrentSpoken?: boolean;
   isLastReadTarget?: boolean;
   isLastRead?: boolean;
   index?: number;
+  bookmarkFolders?: BookmarkFolder[];
+  favoriteFolderId?: string;
+  onAssignFavoriteFolder?: (verse: Verse, folderId?: string, folderName?: string) => void;
 }
 
 export const VerseItem: React.FC<VerseItemProps> = React.memo(({
@@ -43,10 +48,15 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
   noteAudio,
   emotionAnalysis,
   onSaveNote,
+  onNavigateToVerse,
+  isVerseFavorite,
   isCurrentSpoken = false,
   isLastReadTarget = false,
   isLastRead = false,
-  index = 0
+  index = 0,
+  bookmarkFolders,
+  favoriteFolderId,
+  onAssignFavoriteFolder
 }) => {
   const [copied, setCopied] = useState(false);
   const [copiedShareText, setCopiedShareText] = useState(false);
@@ -110,6 +120,190 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
       setEmotionError(err.message || "Impossible de réaliser l'analyse pour le moment.");
     } finally {
       setIsAnalyzingEmotion(false);
+    }
+  };
+
+  // "Méditer en profondeur" - Versets similaires States & Cache
+  const [similarVerses, setSimilarVerses] = useState<SimilarVerse[] | null>(() => {
+    try {
+      const cached = localStorage.getItem(`bible_similar_v1_${verse.book_id}_${verse.chapter}_${verse.verse}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return null;
+  });
+  const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+  const [similarError, setSimilarError] = useState<string | null>(null);
+  const [isSimilarExpanded, setIsSimilarExpanded] = useState(false);
+  const [addedNoteVerseIndex, setAddedNoteVerseIndex] = useState<number | null>(null);
+  const [localSimilarFavs, setLocalSimilarFavs] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    // When verse changes, load from cache if available
+    try {
+      const cached = localStorage.getItem(`bible_similar_v1_${verse.book_id}_${verse.chapter}_${verse.verse}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setSimilarVerses(parsed);
+          setSimilarError(null);
+          return;
+        }
+      }
+    } catch (e) {}
+    setSimilarVerses(null);
+    setSimilarError(null);
+    setIsSimilarExpanded(false);
+  }, [verse.book_id, verse.chapter, verse.verse]);
+
+  const handleFetchSimilarVerses = async (forceRefresh: boolean = false) => {
+    setIsSimilarExpanded(true);
+    setSimilarError(null);
+
+    const cacheKey = `bible_similar_v1_${verse.book_id}_${verse.chapter}_${verse.verse}`;
+
+    // If already in state and not forcing refresh, nothing to fetch
+    if (!forceRefresh && similarVerses && similarVerses.length > 0) {
+      return;
+    }
+
+    // Check localStorage if not forcing refresh
+    if (!forceRefresh) {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setSimilarVerses(parsed);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
+    setIsLoadingSimilar(true);
+
+    try {
+      const response = await fetch('/api/gemini/similar-verses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          verseText: verse.text,
+          reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
+          bookName: verse.book_name,
+          bookId: verse.book_id,
+          chapter: verse.chapter,
+          verse: verse.verse
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || "Impossible de récupérer les versets similaires.");
+      }
+
+      const data: SimilarVersesResponse = await response.json();
+      const results = data.versets_similaires || [];
+
+      if (results.length === 0) {
+        throw new Error("Aucun verset similaire n'a pu être validé pour ce passage.");
+      }
+
+      setSimilarVerses(results);
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(results));
+      } catch (e) {}
+    } catch (err: any) {
+      console.error("Erreur similar-verses:", err);
+      setSimilarError(err.message || "Une erreur réseau ou d'IA est survenue. Veuillez réessayer.");
+    } finally {
+      setIsLoadingSimilar(false);
+    }
+  };
+
+  const handleAddSimilarToNote = (sv: SimilarVerse, sIndex: number) => {
+    const formattedQuote = `\n\n📌 ${sv.reference} :\n« ${sv.text} »\n(${sv.type_lien} — ${sv.explication})`;
+    setLocalNote(prev => (prev ? prev.trim() + formattedQuote : formattedQuote.trim()));
+    setAddedNoteVerseIndex(sIndex);
+    setTimeout(() => {
+      setAddedNoteVerseIndex(null);
+    }, 2200);
+  };
+
+  const isSimilarVerseFav = (sv: SimilarVerse) => {
+    const key = `${sv.book_id}_${sv.chapter}_${sv.verse}`;
+    if (localSimilarFavs[key] !== undefined) {
+      return localSimilarFavs[key];
+    }
+    if (isVerseFavorite) {
+      return isVerseFavorite(sv.book_id, sv.chapter, sv.verse);
+    }
+    return false;
+  };
+
+  const handleToggleSimilarFav = (sv: SimilarVerse) => {
+    const vObj: Verse = {
+      book_id: sv.book_id,
+      book_name: sv.book_name,
+      chapter: sv.chapter,
+      verse: sv.verse,
+      text: sv.text
+    };
+    onToggleFavorite(vObj);
+    const key = `${sv.book_id}_${sv.chapter}_${sv.verse}`;
+    setLocalSimilarFavs(prev => ({
+      ...prev,
+      [key]: !isSimilarVerseFav(sv)
+    }));
+  };
+
+  const handleOpenSimilarVerse = (sv: SimilarVerse) => {
+    if (onNavigateToVerse) {
+      onNavigateToVerse(sv.book_id, sv.chapter, sv.verse);
+    }
+  };
+
+  const getLinkTypeBadge = (type: string) => {
+    switch (type) {
+      case 'Parallèle':
+        return {
+          bg: 'bg-blue-500/15',
+          text: 'text-blue-300',
+          border: 'border-blue-500/30',
+          label: 'Parallèle'
+        };
+      case 'Accomplissement':
+        return {
+          bg: 'bg-[#c9a84c]/20',
+          text: 'text-[#c9a84c]',
+          border: 'border-[#c9a84c]/40',
+          label: 'Accomplissement'
+        };
+      case 'Éclairage':
+        return {
+          bg: 'bg-amber-500/15',
+          text: 'text-amber-300',
+          border: 'border-amber-500/30',
+          label: 'Éclairage'
+        };
+      case 'Contraste':
+        return {
+          bg: 'bg-purple-500/15',
+          text: 'text-purple-300',
+          border: 'border-purple-500/30',
+          label: 'Contraste'
+        };
+      default:
+        return {
+          bg: 'bg-emerald-500/15',
+          text: 'text-emerald-300',
+          border: 'border-emerald-500/30',
+          label: type || 'Illustration'
+        };
     }
   };
 
@@ -422,6 +616,9 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
   return (
     <motion.div 
       id={`verse-${verse.book_id}-${verse.chapter}-${verse.verse}`}
+      data-book-id={verse.book_id}
+      data-book-name={verse.book_name}
+      data-chapter={verse.chapter}
       data-verse-num={verse.verse}
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -454,7 +651,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         <div className="mb-2 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#c9a84c] text-[#0d0b07] font-mono text-[9px] font-extrabold uppercase tracking-wider w-fit shadow-md animate-fade-in">
           <Bookmark className="w-3 h-3 fill-current" />
           <Sparkles className="w-3 h-3 fill-current" />
-          <span>Dernière position de lecture · Verset {verse.verse}</span>
+          <span>Dernière position de lecture · {verse.book_name} {verse.chapter}:{verse.verse}</span>
         </div>
       )}
 
@@ -579,28 +776,53 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
           )}
         </div>
 
-        {/* Quick bookmark/favorite immediate action button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleFavorite(verse);
-          }}
-          className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all duration-200 cursor-pointer self-start select-none ${
-            isFavorite 
-              ? 'bg-[#c9a84c]/15 text-[#c9a84c] border-[#c9a84c]/50 shadow-[0_0_12px_rgba(201,168,76,0.25)] opacity-100 font-bold' 
-              : 'bg-[#16130e] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e] hover:border-[#c9a84c]/40 opacity-80 group-hover:opacity-100 focus:opacity-100'
-          }`}
-          title={isFavorite ? "Retirer des favoris (Sauvegardé localement & dans Firestore)" : "Ajouter aux favoris (Sauvegarder localement & dans Firestore)"}
-        >
-          <Heart 
-            className={`w-3.5 h-3.5 transition-transform duration-200 ${
-              isFavorite ? 'scale-110 fill-[#c9a84c] text-[#c9a84c]' : 'group-hover:scale-105'
-            }`} 
-          />
-          <span className="text-[10px] font-mono tracking-wider uppercase">
-            Favori
-          </span>
-        </button>
+        {/* Quick bookmark/favorite immediate action button with optional folder categorization */}
+        <div className="flex flex-wrap items-center gap-1.5 self-start">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite(verse);
+            }}
+            className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all duration-200 cursor-pointer select-none ${
+              isFavorite 
+                ? 'bg-[#c9a84c]/15 text-[#c9a84c] border-[#c9a84c]/50 shadow-[0_0_12px_rgba(201,168,76,0.25)] opacity-100 font-bold' 
+                : 'bg-[#16130e] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e] hover:border-[#c9a84c]/40 opacity-80 group-hover:opacity-100 focus:opacity-100'
+            }`}
+            title={isFavorite ? "Retirer des favoris" : "Ajouter aux favoris"}
+          >
+            <Heart 
+              className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                isFavorite ? 'scale-110 fill-[#c9a84c] text-[#c9a84c]' : 'group-hover:scale-105'
+              }`} 
+            />
+            <span className="text-[10px] font-mono tracking-wider uppercase">
+              Favori
+            </span>
+          </button>
+
+          {/* If the verse is marked as favorite, allow organizing into a thematic folder directly */}
+          {isFavorite && bookmarkFolders && bookmarkFolders.length > 0 && onAssignFavoriteFolder && (
+            <div className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()}>
+              <select
+                value={favoriteFolderId || ''}
+                onChange={(e) => {
+                  const newFId = e.target.value || undefined;
+                  const fObj = newFId ? bookmarkFolders.find(f => f.id === newFId) : undefined;
+                  onAssignFavoriteFolder(verse, newFId, fObj?.name);
+                }}
+                className="bg-[#16130e] border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-[9.5px] font-mono rounded-lg px-2 py-1 outline-none cursor-pointer max-w-[125px] truncate transition"
+                title="Classer ce verset dans un dossier thématique"
+              >
+                <option value="">📁 Dossier...</option>
+                {bookmarkFolders.map(f => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
 
         {/* Quick copy-to-clipboard option directly in the interface */}
         <button
@@ -660,6 +882,172 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
               placeholder="Rédigez vos notes, prières ou réflexions d'étude sur ce verset..."
               className="w-full h-16 bg-[#16130e] border border-[#2e2a1e] rounded-lg p-2 text-xs text-[#e8e0d0] placeholder-[#6b6355] focus:outline-none focus:border-[#c9a84c] resize-none font-sans"
             />
+
+            {/* SECTION : Méditer en profondeur / Versets similaires */}
+            <div className="pt-2 border-t border-[#2e2a1e]/30 space-y-2 select-none">
+              <div className="flex justify-between items-center">
+                <span className="text-[9px] font-mono tracking-wider text-[#c9a84c] uppercase font-bold flex items-center gap-1.5">
+                  <GitFork className="w-3.5 h-3.5 text-[#c9a84c]" /> Versets similaires & Méditation
+                </span>
+                {similarVerses && similarVerses.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFetchSimilarVerses(true);
+                    }}
+                    disabled={isLoadingSimilar}
+                    className="text-[8.5px] font-mono text-[#c9a84c] hover:text-[#e8e0d0] transition uppercase cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                    title="Obtenir d'autres suggestions de versets pour ce passage"
+                  >
+                    <RotateCw className={`w-2.5 h-2.5 ${isLoadingSimilar ? 'animate-spin' : ''}`} />
+                    <span>Régénérer</span>
+                  </button>
+                )}
+              </div>
+
+              {!isSimilarExpanded && !similarVerses ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleFetchSimilarVerses(false);
+                  }}
+                  className="w-full py-2.5 bg-[#17140f] hover:bg-[#201b13] border border-[#c9a84c]/30 hover:border-[#c9a84c] text-[#c9a84c] hover:text-[#e8e0d0] rounded-lg text-[10px] font-mono uppercase font-black tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+                  title="Méditer en profondeur : obtenir automatiquement 4 à 6 versets bibliques complémentaires ou parallèles"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[#c9a84c]" />
+                  <span>Versets similaires</span>
+                </button>
+              ) : isLoadingSimilar ? (
+                <div className="bg-[#17140f] border border-[#2e2a1e]/60 rounded-lg p-3 flex flex-col items-center justify-center space-y-2 py-4 animate-pulse">
+                  <div className="w-5 h-5 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
+                  <span className="text-[10px] font-mono text-[#c9a84c] uppercase tracking-wider">
+                    Exploration des versets parallèles & éclairages...
+                  </span>
+                </div>
+              ) : similarError ? (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-lg space-y-2">
+                  <div className="flex items-center gap-2 text-rose-400 text-xs">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <p>{similarError}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFetchSimilarVerses(true);
+                    }}
+                    className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 rounded text-[9.5px] font-mono uppercase tracking-wider transition cursor-pointer"
+                  >
+                    Réessayer
+                  </button>
+                </div>
+              ) : similarVerses && similarVerses.length > 0 ? (
+                <div className="space-y-2.5 animate-fade-in text-left">
+                  {similarVerses.map((sv, sIdx) => {
+                    const badge = getLinkTypeBadge(sv.type_lien);
+                    const isFav = isSimilarVerseFav(sv);
+                    const isJustAdded = addedNoteVerseIndex === sIdx;
+
+                    return (
+                      <div
+                        key={`${sv.book_id}_${sv.chapter}_${sv.verse}_${sIdx}`}
+                        className="bg-[#12100c] border border-[#2e2a1e]/70 hover:border-[#c9a84c]/40 rounded-xl p-3 space-y-2 transition-all duration-200 shadow-sm"
+                      >
+                        {/* Header: Référence & Badge du type de lien */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-serif font-bold text-[#c9a84c] tracking-wide">
+                            {sv.reference}
+                          </span>
+                          <span
+                            className={`text-[8.5px] font-mono font-bold px-2 py-0.5 rounded-full border ${badge.bg} ${badge.text} ${badge.border} uppercase tracking-wider select-none`}
+                          >
+                            {badge.label}
+                          </span>
+                        </div>
+
+                        {/* Texte du verset issu de la Bible authentique de l'application */}
+                        <p className="font-serif italic text-xs text-[#e8e0d0] leading-relaxed bg-[#0a0907] p-2.5 rounded-lg border border-[#2e2a1e]/40">
+                          « {sv.text} »
+                        </p>
+
+                        {/* Explication théologique courte du lien */}
+                        <p className="text-[10px] text-[#b8af9e] font-sans leading-normal border-l-2 border-[#c9a84c]/40 pl-2">
+                          {sv.explication}
+                        </p>
+
+                        {/* Actions : Favori, Ajouter à ma note, Ouvrir */}
+                        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-[#2e2a1e]/40">
+                          {/* ⭐ Favori */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSimilarFav(sv);
+                            }}
+                            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[9px] font-mono uppercase tracking-wider border transition cursor-pointer select-none ${
+                              isFav
+                                ? 'bg-[#c9a84c]/15 text-[#c9a84c] border-[#c9a84c]/40 font-bold shadow-sm'
+                                : 'bg-[#17140f] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e]'
+                            }`}
+                            title={isFav ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                          >
+                            <Star className={`w-3 h-3 ${isFav ? 'fill-[#c9a84c] text-[#c9a84c]' : ''}`} />
+                            <span>{isFav ? 'Favori ★' : 'Favori'}</span>
+                          </button>
+
+                          <div className="flex items-center gap-1.5">
+                            {/* 📝 Ajouter à ma note */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAddSimilarToNote(sv, sIdx);
+                              }}
+                              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[9px] font-mono uppercase tracking-wider border transition cursor-pointer select-none ${
+                                isJustAdded
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                                  : 'bg-[#17140f] hover:bg-[#c9a84c]/15 text-[#c9a84c] hover:text-[#f3e7c4] border-[#c9a84c]/30'
+                              }`}
+                              title="Insérer la référence et le texte dans la note personnelle"
+                            >
+                              {isJustAdded ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <span>Ajouté ✓</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-3 h-3" />
+                                  <span>Ajouter à ma note</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* 📖 Ouvrir dans son chapitre */}
+                            {onNavigateToVerse && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenSimilarVerse(sv);
+                                }}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-[#17140f] hover:bg-[#201b13] border border-[#2e2a1e] hover:border-[#c9a84c]/50 text-[#8e8574] hover:text-[#c9a84c] rounded-md text-[9px] font-mono uppercase tracking-wider transition cursor-pointer select-none"
+                                title="Ouvrir ce verset dans son chapitre"
+                              >
+                                <BookOpen className="w-3 h-3" />
+                                <span>Ouvrir</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
 
             {/* Visual audio voice memo block */}
             <div className="pt-2 border-t border-[#2e2a1e]/30 space-y-2 select-none">
@@ -905,6 +1293,24 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
             >
               <Heart className="w-3.5 h-3.5" fill={isFavorite ? '#c9a84c' : 'none'} />
               <span>Favori</span>
+            </button>
+
+            {/* Divider */}
+            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
+
+            {/* Similaires (Méditer en profondeur) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isSimilarExpanded) {
+                  handleFetchSimilarVerses(false);
+                }
+              }}
+              className="flex-1 py-1 px-1.5 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1 text-xs font-bold transition duration-150 cursor-pointer text-center text-[#c9a84c]"
+              title="Méditer en profondeur : versets similaires et complémentaires"
+            >
+              <GitFork className="w-3.5 h-3.5 text-[#c9a84c]" />
+              <span>Similaires</span>
             </button>
 
             {/* Divider */}

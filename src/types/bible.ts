@@ -38,6 +38,16 @@ export interface DailyVerse {
   explanation: string;
 }
 
+export interface BookmarkFolder {
+  id: string;
+  name: string;
+  color?: string; // 'gold' | 'emerald' | 'indigo' | 'amber' | 'rose' | 'cyan' | 'purple'
+  icon?: string; // 'sparkles' | 'shield' | 'heart' | 'star' | 'book' | 'flame' | 'feather' | 'cross'
+  description?: string;
+  created_at: string;
+  updated_at?: string;
+}
+
 export interface FavoriteVerse {
   book_id: number;
   book_name: string;
@@ -45,6 +55,9 @@ export interface FavoriteVerse {
   verse: number;
   text: string;
   added_at: string;
+  folder_id?: string | null;
+  folder_name?: string | null;
+  tags?: string[];
 }
 
 export interface ReadingHistory {
@@ -56,6 +69,14 @@ export interface ReadingHistory {
   total_verses?: number;
   time_spent_seconds?: number;
   status?: 'non_commence' | 'en_cours' | 'complete';
+}
+
+export interface ReadingPosition {
+  book_id: number;
+  book_name: string;
+  chapter: number;
+  verse: number;
+  timestamp: string;
 }
 
 export interface EmotionAnalysisResult {
@@ -79,3 +100,23 @@ export interface VerseNote {
   updated_at: string;
   emotion_analysis?: EmotionAnalysisResult;
 }
+
+export type LinkType = 'Parallèle' | 'Accomplissement' | 'Éclairage' | 'Contraste' | 'Illustration';
+
+export interface SimilarVerse {
+  reference: string;
+  book_id: number;
+  book_name: string;
+  chapter: number;
+  verse: number;
+  verse_end?: number;
+  type_lien: LinkType;
+  explication: string;
+  text: string;
+}
+
+export interface SimilarVersesResponse {
+  verset_source: string;
+  versets_similaires: SimilarVerse[];
+}
+

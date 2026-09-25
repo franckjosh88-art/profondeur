@@ -6,17 +6,19 @@ import {
   onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, signInWithPopup, User 
 } from 'firebase/auth';
 import { 
-  auth, db, googleProvider, handleFirestoreError, OperationType 
+  auth, db, googleProvider, handleFirestoreError, OperationType, cleanFirestoreData 
 } from './lib/firebase';
 import { 
-  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult 
+  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder 
 } from './types/bible';
 import { 
   BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter 
 } from './data/bibleData';
+import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
+import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -35,6 +37,7 @@ import { VerseQuote } from './components/VerseQuote';
 import { RevelationBadge } from './components/RevelationBadge';
 import { cleanBibleMarkdown } from './lib/bibleFormatter';
 import { SpiritualNotesManager } from './components/SpiritualNotesManager';
+import { BookmarkFoldersManager } from './components/BookmarkFoldersManager';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
@@ -53,7 +56,9 @@ import {
   getSortedFrenchVoices, 
   resolveStrictFrenchVoice, 
   classifyFrenchVoiceGender,
-  waitForSpeechVoices 
+  waitForSpeechVoices,
+  cleanBiblicalTextForSpeech,
+  isHighQualityVoice
 } from './utils/frenchTts';
 
 // Images d'ambiance spirituelle (Assets statiques bundlés & compatibles prod/preview)
@@ -82,6 +87,77 @@ export const SANCTUARY_BG_PRESETS = [
 ];
 
 const PRAYER_IN_LIGHT_BG = PRAYER_BG_SANCTUARY;
+
+// Migration & Validation des historiques et positions de lecture
+export function sanitizeReadingHistory(rawList: any[]): ReadingHistory[] {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .filter(item => item && typeof item.book_id === 'number' && typeof item.chapter === 'number')
+    .map(item => {
+      const maxV = getChapterMaxVerses(item.book_id, item.chapter);
+      const book = BOOKS.find(b => b.id === item.book_id);
+      const bookName = item.book_name || book?.name || `Livre ${item.book_id}`;
+      const rawVerse = typeof item.last_verse === 'number' ? item.last_verse : 1;
+      const validVerse = Math.min(Math.max(1, rawVerse), maxV);
+      const isComplete = item.status === 'complete' || validVerse >= maxV;
+
+      return {
+        book_id: item.book_id,
+        book_name: bookName,
+        chapter: item.chapter,
+        timestamp: item.timestamp || new Date().toISOString(),
+        last_verse: validVerse,
+        total_verses: maxV,
+        time_spent_seconds: typeof item.time_spent_seconds === 'number' ? item.time_spent_seconds : 0,
+        status: isComplete ? 'complete' : (item.status === 'non_commence' ? 'non_commence' : 'en_cours')
+      };
+    });
+}
+
+export function loadMigratedLastReadingPosition(): ReadingPosition | null {
+  try {
+    const rawPos = localStorage.getItem('bible_last_reading_position');
+    if (rawPos) {
+      const parsed = JSON.parse(rawPos);
+      if (parsed) {
+        // Résolution du livre via son id ou son nom ({ livre, chapitre, verset })
+        let resolvedBook: Book | undefined;
+        if (typeof parsed.book_id === 'number') {
+          resolvedBook = BOOKS.find(b => b.id === parsed.book_id);
+        } else if (typeof parsed.livre === 'number') {
+          resolvedBook = BOOKS.find(b => b.id === parsed.livre);
+        } else if (typeof parsed.livre === 'string') {
+          resolvedBook = BOOKS.find(b => b.name.toLowerCase() === parsed.livre.toLowerCase() || b.slug.toLowerCase() === parsed.livre.toLowerCase());
+        } else if (typeof parsed.book_name === 'string') {
+          resolvedBook = BOOKS.find(b => b.name.toLowerCase() === parsed.book_name.toLowerCase());
+        }
+
+        const bId = resolvedBook ? resolvedBook.id : (typeof parsed.book_id === 'number' ? parsed.book_id : 1);
+        const bName = resolvedBook ? resolvedBook.name : (parsed.book_name || parsed.livre || 'Livre Saint');
+        const ch = typeof parsed.chapitre === 'number' ? parsed.chapitre : (typeof parsed.chapter === 'number' ? parsed.chapter : 1);
+        const rawV = typeof parsed.verset === 'number' ? parsed.verset : (typeof parsed.verse === 'number' ? parsed.verse : 1);
+
+        // Validation stricte du verset par rapport au nombre maximal de versets du chapitre
+        const maxV = getChapterMaxVerses(bId, ch);
+        const validV = Math.min(Math.max(1, rawV), maxV);
+
+        return {
+          book_id: bId,
+          book_name: bName,
+          chapter: ch,
+          verse: validV,
+          timestamp: parsed.timestamp || new Date().toISOString()
+        };
+      }
+    }
+    // Nettoyage éventuel d'anciennes clés incomplètes ou corrompues
+    const legacyVerse = localStorage.getItem('last_reading_verse');
+    if (legacyVerse) {
+      localStorage.removeItem('last_reading_verse');
+    }
+  } catch (_) {}
+  return null;
+}
 
 export default function App() {
   // Authentication states
@@ -158,6 +234,8 @@ export default function App() {
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null); // formatted as "bookId_chapter_verse"
   const [targetResumeVerseNum, setTargetResumeVerseNum] = useState<number | null>(null);
+  const [targetResumePosition, setTargetResumePosition] = useState<ReadingPosition | { book_id: number; chapter: number; verse: number } | null>(null);
+  const [lastReadingPosition, setLastReadingPosition] = useState<ReadingPosition | null>(() => loadMigratedLastReadingPosition());
   const [searchKeyword, setSearchKeyword] = useState<string>('');
   
   // Continuous scroll states
@@ -195,6 +273,17 @@ export default function App() {
       return [];
     }
   });
+  const [bookmarkFolders, setBookmarkFolders] = useState<BookmarkFolder[]>(() => {
+    try {
+      const offlineFolders = localStorage.getItem('offline_bookmark_folders');
+      if (offlineFolders) {
+        const parsed = JSON.parse(offlineFolders);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (_) {}
+    return DEFAULT_BOOKMARK_FOLDERS;
+  });
+  const [librarySubTab, setLibrarySubTab] = useState<'folders' | 'notes'>('folders');
   const [notes, setNotes] = useState<VerseNote[]>([]);
   const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
 
@@ -230,6 +319,51 @@ export default function App() {
       setCachedChaptersCount(stats.count);
     } catch (e) {
       console.error("Error refreshing cache stats:", e);
+    }
+  };
+
+  const [isDownloadingFullBible, setIsDownloadingFullBible] = useState(false);
+  const [fullBibleProgress, setFullBibleProgress] = useState<{ status: string; percent: number; current: number; total: number } | null>(null);
+
+  const handleDownloadCompleteBibleLSG = async () => {
+    if (isDownloadingFullBible) return;
+    setIsDownloadingFullBible(true);
+    setFullBibleProgress({ status: 'Téléchargement du corpus Louis Segond 1910...', percent: 10, current: 0, total: 1189 });
+
+    try {
+      const res = await fetch('/api/bible/full-lsg1910');
+      if (!res.ok) {
+        throw new Error("Impossible de télécharger la Bible complète depuis le serveur.");
+      }
+
+      setFullBibleProgress({ status: 'Décompression des 66 livres bibliques...', percent: 40, current: 0, total: 1189 });
+      const data = await res.json();
+      const versesMap = data.verses || {};
+      const totalChapters = Object.keys(versesMap).length || 1189;
+
+      setFullBibleProgress({ status: 'Écriture dans IndexedDB local...', percent: 55, current: 0, total: totalChapters });
+
+      await explainCache.bulkStoreFullBible(versesMap, 'LSG 1910', (stored, total) => {
+        const pct = 55 + Math.round((stored / total) * 45);
+        setFullBibleProgress({
+          status: `Sauvegarde locale : ${stored} / ${total} chapitres...`,
+          percent: pct,
+          current: stored,
+          total: total
+        });
+      });
+
+      setFullBibleProgress({ status: 'Bible complète disponible à 100% hors-ligne !', percent: 100, current: totalChapters, total: totalChapters });
+      await refreshCacheStats();
+      setTimeout(() => {
+        setFullBibleProgress(null);
+      }, 4000);
+    } catch (err: any) {
+      console.error("Erreur téléchargement Bible complète:", err);
+      alert(err.message || "Erreur lors du téléchargement de la Bible.");
+      setFullBibleProgress(null);
+    } finally {
+      setIsDownloadingFullBible(false);
     }
   };
 
@@ -422,9 +556,19 @@ export default function App() {
     return readingHistory.find(h => h.book_id === selectedBook.id && h.chapter === selectedChapter);
   }, [readingHistory, selectedBook, selectedChapter]);
 
-  const lastReadVerseId = latestHistoryRecord && latestHistoryRecord.last_verse
-    ? `${latestHistoryRecord.book_id}_${latestHistoryRecord.chapter}_${latestHistoryRecord.last_verse}`
-    : null;
+  const lastReadVerseId = useMemo(() => {
+    if (lastReadingPosition) {
+      const maxV = getChapterMaxVerses(lastReadingPosition.book_id, lastReadingPosition.chapter);
+      const v = Math.min(Math.max(1, lastReadingPosition.verse), maxV);
+      return `${lastReadingPosition.book_id}_${lastReadingPosition.chapter}_${v}`;
+    }
+    if (latestHistoryRecord && latestHistoryRecord.last_verse) {
+      const maxV = getChapterMaxVerses(latestHistoryRecord.book_id, latestHistoryRecord.chapter);
+      const v = Math.min(Math.max(1, latestHistoryRecord.last_verse), maxV);
+      return `${latestHistoryRecord.book_id}_${latestHistoryRecord.chapter}_${v}`;
+    }
+    return null;
+  }, [lastReadingPosition, latestHistoryRecord]);
 
   // Computed streak for ContemplativeHome and others
   const currentStreak = useMemo(() => {
@@ -512,7 +656,11 @@ export default function App() {
         try {
           const offlineHistory = localStorage.getItem('offline_reading_history');
           if (offlineHistory) {
-            setReadingHistory(JSON.parse(offlineHistory));
+            const sanitized = sanitizeReadingHistory(JSON.parse(offlineHistory));
+            setReadingHistory(sanitized);
+            try {
+              localStorage.setItem('offline_reading_history', JSON.stringify(sanitized));
+            } catch (_) {}
           } else {
             setReadingHistory([]);
           }
@@ -577,7 +725,11 @@ export default function App() {
       try {
         setLoadingError(null);
         // --- CHECK INDEXEDDB OFFLINE VERSES CACHE FIRST ---
-        const dbCached = await explainCache.getVerses(cacheKey);
+        let dbCached = await explainCache.getVerses(cacheKey);
+        if (!dbCached || !Array.isArray(dbCached) || dbCached.length === 0) {
+          dbCached = await explainCache.getVerses(`local_${selectedBook.id}_${chapterNum}`) || 
+                     await explainCache.getVerses(`${selectedBook.id}_${chapterNum}`);
+        }
         if (dbCached && Array.isArray(dbCached) && dbCached.length > 0) {
           return dbCached;
         }
@@ -817,15 +969,36 @@ export default function App() {
       snapshot.forEach((docSnap) => {
         historyList.push(docSnap.data() as ReadingHistory);
       });
-      setReadingHistory(historyList);
+      const sanitized = sanitizeReadingHistory(historyList);
+      setReadingHistory(sanitized);
     }, (error) => {
       console.error("Reading history sync:", error);
+    });
+
+    // 4. Thematic Bookmark Folders
+    const foldersRef = collection(db, 'users', uid, 'bookmark_folders');
+    const unsubscribeFolders = onSnapshot(foldersRef, (snapshot) => {
+      if (!snapshot.empty) {
+        const folderList: BookmarkFolder[] = [];
+        snapshot.forEach((docSnap) => {
+          folderList.push(docSnap.data() as BookmarkFolder);
+        });
+        setBookmarkFolders(folderList);
+        try {
+          localStorage.setItem('offline_bookmark_folders', JSON.stringify(folderList));
+        } catch (e) {
+          console.error("Error backing up folders to localStorage:", e);
+        }
+      }
+    }, (error) => {
+      console.error("Bookmark folders sync error:", error);
     });
 
     return () => {
       unsubscribeBookmarks();
       unsubscribeNotes();
       unsubscribeHistory();
+      unsubscribeFolders();
     };
   };
 
@@ -911,30 +1084,174 @@ export default function App() {
     }
   };
 
-  // Navigating chapter index helpers
+  // Helper to update progress per chapter in history state using validated { livre, chapitre, verset }
+  const updateChapterProgress = (
+    bookId: number,
+    bookName: string,
+    chapterNum: number,
+    verseNum: number,
+    _deprecatedTotalVerses?: number,
+    forceStatus?: 'en_cours' | 'complete'
+  ) => {
+    // 1. Validation systématique du nombre maximal de versets du chapitre
+    const totalVersesNum = getChapterMaxVerses(bookId, chapterNum);
+    const validVerseNum = Math.min(Math.max(1, verseNum), totalVersesNum);
+
+    // 2. Enregistrement systématique avec la structure { livre, chapitre, verset }
+    const newPosition: ReadingPosition = {
+      book_id: bookId,
+      book_name: bookName,
+      chapter: chapterNum,
+      verse: validVerseNum,
+      timestamp: new Date().toISOString()
+    };
+    setLastReadingPosition(newPosition);
+    try {
+      localStorage.setItem('bible_last_reading_position', JSON.stringify({
+        livre: bookName,
+        book_id: bookId,
+        book_name: bookName,
+        chapitre: chapterNum,
+        chapter: chapterNum,
+        verset: validVerseNum,
+        verse: validVerseNum,
+        timestamp: newPosition.timestamp
+      }));
+    } catch (_) {}
+
+    setReadingHistory((prev) => {
+      const existingIndex = prev.findIndex(h => h.book_id === bookId && h.chapter === chapterNum);
+      const existing = existingIndex !== -1 ? prev[existingIndex] : null;
+
+      const currentLastVerse = Math.min(Math.max(existing?.last_verse || 1, validVerseNum), totalVersesNum);
+      
+      let computedStatus: 'non_commence' | 'en_cours' | 'complete';
+      if (forceStatus) {
+        computedStatus = forceStatus;
+      } else if (existing?.status === 'complete' || currentLastVerse >= totalVersesNum) {
+        computedStatus = 'complete';
+      } else {
+        computedStatus = 'en_cours';
+      }
+
+      const timeSpent = existing?.time_spent_seconds || 0;
+
+      const updatedItem: ReadingHistory = {
+        book_id: bookId,
+        book_name: bookName,
+        chapter: chapterNum,
+        timestamp: new Date().toISOString(),
+        last_verse: currentLastVerse,
+        total_verses: totalVersesNum,
+        time_spent_seconds: timeSpent,
+        status: computedStatus
+      };
+
+      let nextHistory: ReadingHistory[];
+      if (existingIndex !== -1) {
+        nextHistory = [...prev];
+        nextHistory[existingIndex] = updatedItem;
+      } else {
+        nextHistory = [updatedItem, ...prev];
+      }
+
+      try {
+        localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
+      } catch (_) {}
+
+      if (user) {
+        const docId = `history_${bookId}_${chapterNum}`;
+        setDoc(doc(db, 'users', user.uid, 'history', docId), cleanFirestoreData(updatedItem)).catch(() => {});
+      }
+
+      return nextHistory;
+    });
+  };
+
+  // Logique unifiée et sécurisée de navigation biblique avec la structure { livre, chapitre, verset }
+  // Valide systématiquement l'existence du verset dans le chapitre avant toute mise à jour d'état
+  const navigateToScripture = (target: { livre: string | number; chapitre: number; verset?: number }) => {
+    // 1. Résolution du livre via son id ou son nom
+    let targetBook: Book | undefined;
+    if (typeof target.livre === 'number') {
+      targetBook = BOOKS.find(b => b.id === target.livre);
+    } else if (typeof target.livre === 'string') {
+      const cleanLivre = target.livre.trim().toLowerCase();
+      targetBook = BOOKS.find(b => 
+        b.name.toLowerCase() === cleanLivre || 
+        b.slug.toLowerCase() === cleanLivre ||
+        b.id.toString() === cleanLivre
+      );
+    }
+    if (!targetBook) {
+      targetBook = selectedBook || BOOKS[0];
+    }
+
+    // 2. Validation systématique du chapitre
+    const validChapter = Math.min(Math.max(1, Number(target.chapitre) || 1), targetBook.chapters_count);
+
+    // 3. Validation systématique de l'existence du verset dans ce chapitre précis
+    const maxVerses = getChapterMaxVerses(targetBook.id, validChapter);
+    const rawVerse = typeof target.verset === 'number' && !isNaN(target.verset) ? target.verset : 1;
+    const validVerse = Math.min(Math.max(1, rawVerse), maxVerses);
+
+    // 4. Structure de position complète { livre, chapitre, verset }
+    const validatedPosition: ReadingPosition = {
+      book_id: targetBook.id,
+      book_name: targetBook.name,
+      chapter: validChapter,
+      verse: validVerse,
+      timestamp: new Date().toISOString()
+    };
+
+    // 5. Mise à jour de l'état
+    setSelectedBook(targetBook);
+    setSelectedChapter(validChapter);
+    setSelectedVerseId(`${targetBook.id}_${validChapter}_${validVerse}`);
+    setTargetResumePosition(validatedPosition);
+    setTargetResumeVerseNum(validVerse);
+    setLastReadingPosition(validatedPosition);
+    setActiveTab('read');
+
+    // 6. Sauvegarde systématique de la position validée { livre, chapitre, verset }
+    try {
+      localStorage.setItem('bible_last_reading_position', JSON.stringify({
+        livre: targetBook.name,
+        book_id: targetBook.id,
+        book_name: targetBook.name,
+        chapitre: validChapter,
+        chapter: validChapter,
+        verset: validVerse,
+        verse: validVerse,
+        timestamp: validatedPosition.timestamp
+      }));
+    } catch (_) {}
+
+    updateChapterProgress(targetBook.id, targetBook.name, validChapter, validVerse);
+  };
+
+  // Navigating chapter index helpers avec validation { livre, chapitre, verset }
   const handleNextChapter = () => {
     if (selectedChapter < selectedBook.chapters_count) {
-      setSelectedChapter(selectedChapter + 1);
+      navigateToScripture({ livre: selectedBook.id, chapitre: selectedChapter + 1, verset: 1 });
     } else {
       // Go to next book
       const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
       if (currentIdx < BOOKS.length - 1) {
-        setSelectedBook(BOOKS[currentIdx + 1]);
-        setSelectedChapter(1);
+        navigateToScripture({ livre: BOOKS[currentIdx + 1].id, chapitre: 1, verset: 1 });
       }
     }
   };
 
   const handlePreviousChapter = () => {
     if (selectedChapter > 1) {
-      setSelectedChapter(selectedChapter - 1);
+      navigateToScripture({ livre: selectedBook.id, chapitre: selectedChapter - 1, verset: 1 });
     } else {
       // Go to prev book
       const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
       if (currentIdx > 0) {
         const prevBook = BOOKS[currentIdx - 1];
-        setSelectedBook(prevBook);
-        setSelectedChapter(prevBook.chapters_count);
+        navigateToScripture({ livre: prevBook.id, chapitre: prevBook.chapters_count, verset: 1 });
       }
     }
   };
@@ -962,10 +1279,11 @@ export default function App() {
   };
 
   // Bookmark toggling helper
-  const handleToggleFavorite = async (verse: Verse) => {
-    const favorited = favorites.some(
+  const handleToggleFavorite = async (verse: { book_id: number; book_name: string; chapter: number; verse: number; text: string }, folderId?: string, folderName?: string) => {
+    const existing = favorites.find(
       f => f.book_id === verse.book_id && f.chapter === verse.chapter && f.verse === verse.verse
     );
+    const favorited = !!existing;
 
     // Compute and persist to local state/storage first for blazing-fast and reliable offline performance
     let nextFavs: FavoriteVerse[];
@@ -980,7 +1298,9 @@ export default function App() {
         chapter: verse.chapter,
         verse: verse.verse,
         text: verse.text,
-        added_at: new Date().toISOString()
+        added_at: new Date().toISOString(),
+        folder_id: folderId || undefined,
+        folder_name: folderName || undefined
       };
       nextFavs = [...favorites, favoriteItem];
     }
@@ -1000,19 +1320,155 @@ export default function App() {
         if (favorited) {
           await deleteDoc(docRef);
         } else {
-          const favoriteItem: FavoriteVerse = {
+          const favoritePayload: Record<string, any> = {
             book_id: verse.book_id,
             book_name: verse.book_name,
             chapter: verse.chapter,
             verse: verse.verse,
             text: verse.text,
-            added_at: new Date().toISOString()
+            added_at: new Date().toISOString(),
           };
-          await setDoc(docRef, favoriteItem);
+          if (folderId) {
+            favoritePayload.folder_id = folderId;
+          }
+          if (folderName) {
+            favoritePayload.folder_name = folderName;
+          }
+          await setDoc(docRef, cleanFirestoreData(favoritePayload));
         }
       } catch (error) {
         console.error("Could not sync favorite status to Cloud Firestore:", error);
         handleFirestoreError(error, favorited ? OperationType.DELETE : OperationType.WRITE, `users/${user.uid}/bookmarks/${docId}`);
+      }
+    }
+  };
+
+  // Assign a favorite verse to a thematic folder
+  const handleAssignVerseToFolder = async (
+    verse: { book_id: number; chapter: number; verse: number },
+    folderId?: string,
+    folderName?: string
+  ) => {
+    let updatedFav: FavoriteVerse | undefined;
+    const nextFavs = favorites.map(fav => {
+      if (fav.book_id === verse.book_id && fav.chapter === verse.chapter && fav.verse === verse.verse) {
+        updatedFav = {
+          ...fav,
+          folder_id: folderId || undefined,
+          folder_name: folderName || undefined
+        };
+        return updatedFav;
+      }
+      return fav;
+    });
+
+    setFavorites(nextFavs);
+    try {
+      localStorage.setItem('offline_bookmarks', JSON.stringify(nextFavs));
+    } catch (e) {
+      console.error("Could not write offline bookmarks:", e);
+    }
+
+    if (user && updatedFav) {
+      const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+      try {
+        const docRef = doc(db, 'users', user.uid, 'bookmarks', docId);
+        const firestorePayload = cleanFirestoreData({
+          ...updatedFav,
+          folder_id: folderId ? folderId : null,
+          folder_name: folderName ? folderName : null,
+        });
+        await setDoc(docRef, firestorePayload, { merge: true });
+      } catch (error) {
+        console.error("Could not sync folder assignment to Firestore:", error);
+      }
+    }
+  };
+
+  // Folder CRUD handlers
+  const handleCreateBookmarkFolder = async (folderData: Omit<BookmarkFolder, 'id' | 'created_at'>) => {
+    const newId = `folder_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newFolder: BookmarkFolder = {
+      ...folderData,
+      id: newId,
+      created_at: new Date().toISOString()
+    };
+    const nextFolders = [...bookmarkFolders, newFolder];
+    setBookmarkFolders(nextFolders);
+    try {
+      localStorage.setItem('offline_bookmark_folders', JSON.stringify(nextFolders));
+    } catch (e) {
+      console.error("Could not write offline folders:", e);
+    }
+
+    if (user) {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'bookmark_folders', newId);
+        await setDoc(docRef, cleanFirestoreData(newFolder));
+      } catch (error) {
+        console.error("Could not sync created folder to Firestore:", error);
+      }
+    }
+    return newId;
+  };
+
+  const handleUpdateBookmarkFolder = async (folderId: string, updates: Partial<BookmarkFolder>) => {
+    const nextFolders = bookmarkFolders.map(f => f.id === folderId ? { ...f, ...updates, updated_at: new Date().toISOString() } : f);
+    setBookmarkFolders(nextFolders);
+    try {
+      localStorage.setItem('offline_bookmark_folders', JSON.stringify(nextFolders));
+    } catch (e) {
+      console.error("Could not write offline folders:", e);
+    }
+
+    // If folder name changed, update favorites that have this folder
+    if (updates.name) {
+      const updatedFavs = favorites.map(fav => fav.folder_id === folderId ? { ...fav, folder_name: updates.name } : fav);
+      setFavorites(updatedFavs);
+      try {
+        localStorage.setItem('offline_bookmarks', JSON.stringify(updatedFavs));
+      } catch (_) {}
+    }
+
+    if (user) {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'bookmark_folders', folderId);
+        await updateDoc(docRef, cleanFirestoreData({ ...updates, updated_at: new Date().toISOString() }));
+      } catch (error) {
+        console.error("Could not sync updated folder to Firestore:", error);
+      }
+    }
+  };
+
+  const handleDeleteBookmarkFolder = async (folderId: string) => {
+    const nextFolders = bookmarkFolders.filter(f => f.id !== folderId);
+    setBookmarkFolders(nextFolders);
+    try {
+      localStorage.setItem('offline_bookmark_folders', JSON.stringify(nextFolders));
+    } catch (e) {
+      console.error("Could not write offline folders:", e);
+    }
+
+    // Verses remain in favorites, just set folder_id and folder_name to undefined (unclassified)
+    const updatedFavs = favorites.map(fav => fav.folder_id === folderId ? { ...fav, folder_id: undefined, folder_name: undefined } : fav);
+    setFavorites(updatedFavs);
+    try {
+      localStorage.setItem('offline_bookmarks', JSON.stringify(updatedFavs));
+    } catch (_) {}
+
+    if (user) {
+      try {
+        const docRef = doc(db, 'users', user.uid, 'bookmark_folders', folderId);
+        await deleteDoc(docRef);
+
+        // Update unassigned favorites in Firestore
+        for (const fav of favorites.filter(f => f.folder_id === folderId)) {
+          const bDocId = `${fav.book_id}_${fav.chapter}_${fav.verse}`;
+          const bDocRef = doc(db, 'users', user.uid, 'bookmarks', bDocId);
+          await setDoc(bDocRef, cleanFirestoreData({ ...fav, folder_id: null, folder_name: null }), { merge: true });
+        }
+      } catch (error) {
+        console.error("Could not delete folder from Firestore:", error);
       }
     }
   };
@@ -1054,7 +1510,7 @@ export default function App() {
           } else if (existingNote?.emotion_analysis) {
             noteItem.emotion_analysis = existingNote.emotion_analysis;
           }
-          await setDoc(docRef, noteItem);
+          await setDoc(docRef, cleanFirestoreData(noteItem));
         }
       } catch (error) {
         console.error("Could not save note:", error);
@@ -1295,6 +1751,14 @@ export default function App() {
   const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [ttsLogs, setTtsLogs] = useState<string[]>([]);
+  const [audioBookmarkToast, setAudioBookmarkToast] = useState<{ message: string; favorited: boolean } | null>(null);
+
+  useEffect(() => {
+    if (audioBookmarkToast) {
+      const timer = setTimeout(() => setAudioBookmarkToast(null), 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [audioBookmarkToast]);
 
   const logTts = (msg: string, type: 'log' | 'warn' | 'error' = 'log') => {
     const timestamp = new Date().toLocaleTimeString();
@@ -1381,6 +1845,21 @@ export default function App() {
       return true;
     }
   });
+  const [announceVerseNumbers, setAnnounceVerseNumbers] = useState<boolean>(() => {
+    try {
+      // Default to false for a smooth, fluid, audiobook-style spiritual reading
+      return localStorage.getItem('bible_announce_verse_numbers') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('bible_announce_verse_numbers', String(announceVerseNumbers));
+    } catch (_) {}
+  }, [announceVerseNumbers]);
+
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>(() => {
     try {
@@ -1443,8 +1922,9 @@ export default function App() {
 
   const currentVerseToSpeakRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
-  const speechPauseResumeIntervalRef = useRef<any>(null);
+  const nextVerseTimeoutRef = useRef<any>(null);
   const wakeLockRef = useRef<any>(null);
+  const speechPauseResumeIntervalRef = useRef<any>(null);
 
   // Auto-scrolling state variables
   const [isAutoScrollWithSpeech, setIsAutoScrollWithSpeech] = useState<boolean>(true);
@@ -1929,6 +2409,22 @@ export default function App() {
     }
   };
 
+  // Toggle favorite bookmark directly from audio player controls for the spoken verse
+  const handleToggleAudioVerseBookmark = (targetVerse?: Verse) => {
+    const verseToBookmark = targetVerse || (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length 
+      ? chapterVerses[currentSpeakingVerseIndex] 
+      : chapterVerses[0]);
+    if (!verseToBookmark) return;
+    const isFav = getVerseHasBookmark(verseToBookmark);
+    handleToggleFavorite(verseToBookmark);
+    setAudioBookmarkToast({
+      message: isFav
+        ? `Verset ${verseToBookmark.verse} retiré des favoris`
+        : `Verset ${verseToBookmark.verse} marqué comme favori ✨`,
+      favorited: !isFav
+    });
+  };
+
   // 1. Follow / scroll-into-view during active TTS audio reading
   useEffect(() => {
     if (!isAutoScrollWithSpeech || currentSpeakingVerseIndex === -1) return;
@@ -1942,75 +2438,20 @@ export default function App() {
 
   // Smooth scroll to target resume verse when loaded
   useEffect(() => {
-    if (targetResumeVerseNum && !loadingVerses && chapterVerses.length > 0) {
+    if ((targetResumePosition || targetResumeVerseNum) && !loadingVerses && chapterVerses.length > 0) {
       const timer = setTimeout(() => {
-        const el = document.getElementById(`verse-${selectedBook.id}-${selectedChapter}-${targetResumeVerseNum}`);
+        const bId = targetResumePosition ? targetResumePosition.book_id : selectedBook.id;
+        const ch = targetResumePosition ? targetResumePosition.chapter : selectedChapter;
+        const v = targetResumePosition ? targetResumePosition.verse : targetResumeVerseNum;
+        
+        const el = document.getElementById(`verse-${bId}-${ch}-${v}`);
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 350);
       return () => clearTimeout(timer);
     }
-  }, [targetResumeVerseNum, loadingVerses, chapterVerses, selectedBook.id, selectedChapter]);
-
-  // Helper to update progress per chapter in history state
-  const updateChapterProgress = (
-    bookId: number,
-    bookName: string,
-    chapterNum: number,
-    verseNum: number,
-    totalVersesNum: number,
-    forceStatus?: 'en_cours' | 'complete'
-  ) => {
-    setReadingHistory((prev) => {
-      const existingIndex = prev.findIndex(h => h.book_id === bookId && h.chapter === chapterNum);
-      const existing = existingIndex !== -1 ? prev[existingIndex] : null;
-
-      const currentLastVerse = Math.max(existing?.last_verse || 1, verseNum);
-      const currentTotalVerses = Math.max(existing?.total_verses || 1, totalVersesNum);
-      
-      let computedStatus: 'non_commence' | 'en_cours' | 'complete';
-      if (forceStatus) {
-        computedStatus = forceStatus;
-      } else if (existing?.status === 'complete' || currentLastVerse >= currentTotalVerses) {
-        computedStatus = 'complete';
-      } else {
-        computedStatus = 'en_cours';
-      }
-
-      const timeSpent = existing?.time_spent_seconds || 0;
-
-      const updatedItem: ReadingHistory = {
-        book_id: bookId,
-        book_name: bookName,
-        chapter: chapterNum,
-        timestamp: new Date().toISOString(),
-        last_verse: currentLastVerse,
-        total_verses: currentTotalVerses,
-        time_spent_seconds: timeSpent,
-        status: computedStatus
-      };
-
-      let nextHistory: ReadingHistory[];
-      if (existingIndex !== -1) {
-        nextHistory = [...prev];
-        nextHistory[existingIndex] = updatedItem;
-      } else {
-        nextHistory = [updatedItem, ...prev];
-      }
-
-      try {
-        localStorage.setItem('offline_reading_history', JSON.stringify(nextHistory));
-      } catch (_) {}
-
-      if (user) {
-        const docId = `history_${bookId}_${chapterNum}`;
-        setDoc(doc(db, 'users', user.uid, 'history', docId), updatedItem).catch(() => {});
-      }
-
-      return nextHistory;
-    });
-  };
+  }, [targetResumePosition, targetResumeVerseNum, loadingVerses, chapterVerses, selectedBook.id, selectedChapter]);
 
   // IntersectionObserver to auto-track active verse progress while scrolling
   useEffect(() => {
@@ -2020,12 +2461,20 @@ export default function App() {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
+            const bIdAttr = entry.target.getAttribute('data-book-id');
+            const bNameAttr = entry.target.getAttribute('data-book-name');
+            const chAttr = entry.target.getAttribute('data-chapter');
             const verseAttr = entry.target.getAttribute('data-verse-num');
-            if (verseAttr) {
-              const vNum = parseInt(verseAttr, 10);
-              if (!isNaN(vNum) && vNum > 0) {
-                updateChapterProgress(selectedBook.id, selectedBook.name, selectedChapter, vNum, chapterVerses.length);
-              }
+
+            const bId = bIdAttr ? parseInt(bIdAttr, 10) : selectedBook.id;
+            const chNum = chAttr ? parseInt(chAttr, 10) : selectedChapter;
+            const bName = bNameAttr || BOOKS.find(b => b.id === bId)?.name || selectedBook.name;
+            const vNum = verseAttr ? parseInt(verseAttr, 10) : 1;
+
+            if (!isNaN(bId) && !isNaN(chNum) && !isNaN(vNum) && vNum > 0) {
+              const maxV = getChapterMaxVerses(bId, chNum);
+              const validatedVerse = Math.min(vNum, maxV);
+              updateChapterProgress(bId, bName, chNum, validatedVerse, maxV);
             }
           }
         });
@@ -2067,7 +2516,7 @@ export default function App() {
 
         if (user) {
           const docId = `history_${selectedBook.id}_${selectedChapter}`;
-          setDoc(doc(db, 'users', user.uid, 'history', docId), updatedItem).catch(() => {});
+          setDoc(doc(db, 'users', user.uid, 'history', docId), cleanFirestoreData(updatedItem)).catch(() => {});
         }
 
         return nextHistory;
@@ -2154,37 +2603,18 @@ export default function App() {
 
   // Reading plans & chapter history navigation helper with exact verse resume
   const handleNavigateChallengeToReader = (bookId: number, chapterNum: number, verseNum?: number) => {
-    const targetBook = BOOKS.find(b => b.id === bookId);
-    if (targetBook) {
-      setSelectedBook(targetBook);
-      setSelectedChapter(chapterNum);
-
-      let verseToJump = verseNum;
-      if (!verseToJump) {
-        const existing = readingHistory.find(h => h.book_id === bookId && h.chapter === chapterNum);
-        if (existing && existing.last_verse) {
-          verseToJump = existing.last_verse;
-        }
+    let verseToJump = verseNum;
+    if (!verseToJump) {
+      const existing = readingHistory.find(h => h.book_id === bookId && h.chapter === chapterNum);
+      if (existing && existing.last_verse) {
+        verseToJump = existing.last_verse;
       }
-
-      if (verseToJump) {
-        setTargetResumeVerseNum(verseToJump);
-        setSelectedVerseId(`${bookId}_${chapterNum}_${verseToJump}`);
-      } else {
-        setTargetResumeVerseNum(null);
-      }
-      setActiveTab('read');
     }
+    navigateToScripture({ livre: bookId, chapitre: chapterNum, verset: verseToJump || 1 });
   };
 
   const handleNavigateVerseToReader = (bookId: number, chapterNum: number, verseNum: number) => {
-    const targetBook = BOOKS.find(b => b.id === bookId);
-    if (targetBook) {
-      setSelectedBook(targetBook);
-      setSelectedChapter(chapterNum);
-      setSelectedVerseId(`${bookId}_${chapterNum}_${verseNum}`);
-      setActiveTab('read');
-    }
+    navigateToScripture({ livre: bookId, chapitre: chapterNum, verset: verseNum });
   };
 
   // Check if a specific verse ID matches notes and bookmarks
@@ -2614,7 +3044,23 @@ export default function App() {
                       </div>
 
                       {/* Download progress UI */}
-                      {preDownloadProgress && preDownloadProgress.active ? (
+                      {fullBibleProgress ? (
+                        <div className="p-2.5 bg-[#c9a84c]/10 border border-[#c9a84c]/40 rounded-lg space-y-1.5 bg-[#14120e] animate-fade-in">
+                          <div className="flex justify-between items-center text-[9px] font-mono text-[#c9a84c] font-bold">
+                            <span className="truncate">{fullBibleProgress.status}</span>
+                            <span className="shrink-0">{fullBibleProgress.percent}%</span>
+                          </div>
+                          <div className="w-full bg-[#1a1712] h-2 rounded-full overflow-hidden border border-[#2e2a1e]">
+                            <div 
+                              className="bg-[#c9a84c] h-full transition-all duration-300"
+                              style={{ width: `${fullBibleProgress.percent}%` }}
+                            />
+                          </div>
+                          <div className="text-[8px] font-mono text-[#8e8574] text-right">
+                            {fullBibleProgress.current} / {fullBibleProgress.total} chapitres
+                          </div>
+                        </div>
+                      ) : preDownloadProgress && preDownloadProgress.active ? (
                         <div className="p-2 bg-[#c9a84c]/5 border border-[#c9a84c]/20 rounded-lg space-y-1 bg-[#14120e]">
                           <div className="flex justify-between text-[8px] font-mono text-[#c9a84c]">
                             <span className="truncate">TÉLÉCHARGEMENT: {preDownloadProgress.bookName} ch {preDownloadProgress.chapter}</span>
@@ -2629,6 +3075,17 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="flex flex-col gap-1.5 pt-1">
+                          {/* Télécharger l'intégralité de la Bible Louis Segond 1910 dans IndexedDB */}
+                          <button
+                            onClick={handleDownloadCompleteBibleLSG}
+                            disabled={isDownloadingFullBible}
+                            className="w-full py-2 px-2.5 text-[9px] font-mono uppercase bg-[#c9a84c]/20 hover:bg-[#c9a84c]/30 disabled:opacity-50 text-[#c9a84c] border border-[#c9a84c]/50 rounded-lg cursor-pointer text-center font-bold tracking-wider transition duration-200 shadow-sm flex items-center justify-center gap-2"
+                            title="Télécharger l'intégralité des 66 livres de la Bible Louis Segond 1910 dans IndexedDB pour une lecture 100% hors-ligne sans connexion"
+                          >
+                            <Download className={`w-3.5 h-3.5 ${isDownloadingFullBible ? 'animate-bounce' : ''}`} />
+                            <span>Télécharger toute la Bible (1189 ch. Hors-ligne)</span>
+                          </button>
+
                           <button
                             onClick={() => handlePreDownloadBooks([43])} // Jean
                             className="w-full py-1.5 text-[8.5px] font-mono uppercase bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/25 rounded hover:bg-[#c9a84c]/25 cursor-pointer text-center font-bold transition duration-200"
@@ -3171,8 +3628,11 @@ export default function App() {
                   <div className="flex justify-center pt-2">
                     <button
                       onClick={() => {
-                        setSelectedBook(BOOKS.find(b => b.id === dailyVerseForCurrentDay.verse.book_id) || BOOKS[0]);
-                        setSelectedChapter(dailyVerseForCurrentDay.verse.chapter);
+                        navigateToScripture({
+                          livre: dailyVerseForCurrentDay.verse.book_id,
+                          chapitre: dailyVerseForCurrentDay.verse.chapter,
+                          verset: dailyVerseForCurrentDay.verse.verse
+                        });
                       }}
                       className="inline-flex items-center gap-1.5 px-4 py-2 bg-luxury-button-bg hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150"
                     >
@@ -3206,9 +3666,8 @@ export default function App() {
                       <select
                         value={selectedBook.id}
                         onChange={(e) => {
-                          const nextBook = BOOKS.find(b => b.id === Number(e.target.value)) || BOOKS[0];
-                          setSelectedBook(nextBook);
-                          setSelectedChapter(1);
+                          const nextBookId = Number(e.target.value);
+                          navigateToScripture({ livre: nextBookId, chapitre: 1, verset: 1 });
                         }}
                         className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-serif font-bold text-[#e8e0d0] rounded-xl px-3.5 py-2 outline-none focus:border-[#c9a84c] select-none text-left"
                       >
@@ -3225,7 +3684,10 @@ export default function App() {
                       <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Chapitre</label>
                       <select
                         value={selectedChapter}
-                        onChange={(e) => setSelectedChapter(Number(e.target.value))}
+                        onChange={(e) => {
+                          const nextChapter = Number(e.target.value);
+                          navigateToScripture({ livre: selectedBook.id, chapitre: nextChapter, verset: 1 });
+                        }}
                         className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-4 py-2 outline-none focus:border-[#c9a84c] select-none"
                       >
                         {Array.from({ length: selectedBook.chapters_count }, (_, index) => index + 1).map((n) => (
@@ -3429,6 +3891,22 @@ export default function App() {
                   {!loadingVerses && chapterVerses.length > 0 && (
                     <div className="bg-[#0b0a08] border border-[#2e2a1e]/40 shadow-xl rounded-3xl p-5 md:p-6 flex flex-col gap-5 select-none transition-all duration-300">
                       
+                      {/* Audio Bookmark Toast Notification */}
+                      {audioBookmarkToast && (
+                        <div className="bg-[#181510] border border-[#c9a84c]/50 text-[#e8e0d0] px-3.5 py-2 rounded-xl flex items-center justify-between gap-2.5 animate-fade-in shadow-gold-glow">
+                          <div className="flex items-center gap-2">
+                            <Bookmark className="w-3.5 h-3.5 fill-[#c9a84c] text-[#c9a84c]" />
+                            <span className="text-xs font-serif font-bold text-[#e8e0d0]">{audioBookmarkToast.message}</span>
+                          </div>
+                          <button 
+                            onClick={() => setAudioBookmarkToast(null)} 
+                            className="text-[#6b6355] hover:text-[#e8e0d0] p-0.5 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
                       {/* Top Header Row of Player (Modern and Simplified) */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -3455,23 +3933,84 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Collapsible toggle button */}
-                        <button
-                          onClick={() => setIsAudioSettingsExpanded(!isAudioSettingsExpanded)}
-                          className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                            isAudioSettingsExpanded 
-                              ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                              : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0]'
-                          }`}
-                        >
-                          <Settings className={`w-3.5 h-3.5 transition-transform duration-300 ${isAudioSettingsExpanded ? 'rotate-45' : ''}`} />
-                          <span>{isAudioSettingsExpanded ? "Masquer" : "Réglages"}</span>
-                          {isAudioSettingsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        </button>
+                        {/* Top Header Actions (Bookmark & Settings) */}
+                        <div className="flex items-center gap-2">
+                          {/* Quick Bookmark Button in Header */}
+                          <button
+                            onClick={() => handleToggleAudioVerseBookmark(chapterVerses[currentSpeakingVerseIndex] || chapterVerses[0])}
+                            disabled={chapterVerses.length === 0}
+                            className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
+                                ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] shadow-[0_0_12px_rgba(201,168,76,0.3)]'
+                                : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0] hover:border-[#c9a84c]/50'
+                            }`}
+                            title={
+                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
+                                ? `Verset ${chapterVerses[currentSpeakingVerseIndex].verse} dans vos favoris (cliquer pour retirer)`
+                                : `Marquer le verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || 1} comme favori`
+                            }
+                          >
+                            <Bookmark className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
+                                ? 'fill-[#c9a84c] scale-110 text-[#c9a84c]'
+                                : ''
+                            }`} />
+                            <span>
+                              {(currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
+                                ? "Favori"
+                                : "Signet"
+                              }
+                            </span>
+                          </button>
+
+                          {/* Collapsible toggle button */}
+                          <button
+                            onClick={() => setIsAudioSettingsExpanded(!isAudioSettingsExpanded)}
+                            className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                              isAudioSettingsExpanded 
+                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
+                                : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0]'
+                            }`}
+                          >
+                            <Settings className={`w-3.5 h-3.5 transition-transform duration-300 ${isAudioSettingsExpanded ? 'rotate-45' : ''}`} />
+                            <span>{isAudioSettingsExpanded ? "Masquer" : "Réglages"}</span>
+                            {isAudioSettingsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
                       </div>
 
+                      {/* Live Spoken Verse Indicator & Bookmark Bar */}
+                      {isSpeaking && currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && (() => {
+                        const spokenVerse = chapterVerses[currentSpeakingVerseIndex];
+                        const isFav = getVerseHasBookmark(spokenVerse);
+                        return (
+                          <div className="bg-[#12100c]/90 border border-[#c9a84c]/25 rounded-2xl p-3 flex items-center justify-between gap-3 text-left animate-fade-in shadow-inner">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="w-6 h-6 rounded-lg bg-[#c9a84c]/15 text-[#c9a84c] font-mono text-[10px] font-bold flex items-center justify-center shrink-0 border border-[#c9a84c]/30">
+                                {spokenVerse.verse}
+                              </span>
+                              <p className="text-xs font-serif italic text-[#e8e0d0]/90 truncate">
+                                « {spokenVerse.text.replace(/\[[HG]\d+\]/g, '').trim()} »
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleToggleAudioVerseBookmark(spokenVerse)}
+                              className={`px-2.5 py-1 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 shrink-0 cursor-pointer ${
+                                isFav
+                                  ? 'bg-[#c9a84c] text-[#0d0b07] border-[#c9a84c] shadow-gold-glow'
+                                  : 'bg-[#181510] border-[#2e2a1e] text-[#c9a84c] hover:border-[#c9a84c]/60'
+                              }`}
+                              title={isFav ? "Retirer des favoris" : "Marquer comme favori"}
+                            >
+                              <Bookmark className={`w-3 h-3 ${isFav ? 'fill-[#0d0b07]' : ''}`} />
+                              <span className="hidden sm:inline">{isFav ? 'Favori ✓' : 'Signet'}</span>
+                            </button>
+                          </div>
+                        );
+                      })()}
+
                       {/* Main Transport Control Row (Hero playback controls) */}
-                      <div className="flex items-center justify-center gap-5 py-2">
+                      <div className="flex items-center justify-center gap-3.5 sm:gap-5 py-2">
                         {/* Skip Back Button */}
                         <button
                           onClick={() => {
@@ -3524,6 +4063,34 @@ export default function App() {
                         >
                           <SkipForward className="w-4 h-4" />
                         </button>
+
+                        {/* Bookmark Icon Button in Transport Controls */}
+                        {(() => {
+                          const activeVerse = (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length)
+                            ? chapterVerses[currentSpeakingVerseIndex]
+                            : chapterVerses[0];
+                          const isFav = activeVerse ? getVerseHasBookmark(activeVerse) : false;
+                          return (
+                            <button
+                              onClick={() => handleToggleAudioVerseBookmark(activeVerse)}
+                              disabled={chapterVerses.length === 0}
+                              className={`w-10 h-10 rounded-full border transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 disabled:pointer-events-none relative group ${
+                                isFav
+                                  ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] shadow-[0_0_14px_rgba(201,168,76,0.35)] ring-1 ring-[#c9a84c]/40'
+                                  : 'bg-[#12100c] hover:bg-[#1a1712]/80 border-[#2e2a1e] text-[#a0947f] hover:text-[#c9a84c] hover:border-[#c9a84c]/50'
+                              }`}
+                              title={
+                                activeVerse
+                                  ? (isFav
+                                      ? `Verset ${activeVerse.verse} dans vos favoris (cliquez pour retirer)`
+                                      : `Marquer le verset ${activeVerse.verse} comme favori`)
+                                  : "Marquer le verset comme favori"
+                              }
+                            >
+                              <Bookmark className={`w-4 h-4 transition-transform duration-200 ${isFav ? 'fill-[#c9a84c] scale-110 text-[#c9a84c]' : ''}`} />
+                            </button>
+                          );
+                        })()}
                       </div>
 
                       {/* Side-by-side Ambient Toggles (Compact switches) */}
@@ -4223,31 +4790,60 @@ export default function App() {
                     {chapterVerses.map((item, idx) => {
                       const noteInfo = getVerseHasNote(item);
                       const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
+                      const isFirstOfNewChapter = idx > 0 && item.chapter !== chapterVerses[idx - 1].chapter;
+
+                      const isThisVerseTarget = targetResumePosition !== null 
+                        ? (targetResumePosition.book_id === item.book_id && targetResumePosition.chapter === item.chapter && targetResumePosition.verse === item.verse)
+                        : (targetResumeVerseNum !== null && targetResumeVerseNum === item.verse && selectedBook.id === item.book_id && selectedChapter === item.chapter);
+
+                      const isThisVerseLastRead = lastReadVerseId === verseUniqueId;
                       
                       return (
-                        <VerseItem 
-                          key={verseUniqueId}
-                          verse={item}
-                          isFavorite={getVerseHasBookmark(item)}
-                          onToggleFavorite={handleToggleFavorite}
-                          onExplain={handleExplainVerse}
-                          onStrongClick={handleStrongSelectionCode}
-                          textSize={textSize}
-                          lineHeight={textSize * 1.62}
-                          isSelected={selectedVerseId === verseUniqueId}
-                          onTap={() => {
-                            setSelectedVerseId(selectedVerseId === verseUniqueId ? null : verseUniqueId);
-                          }}
-                          hasNote={noteInfo.hasNote}
-                          noteText={noteInfo.text}
-                          noteAudio={noteInfo.audio}
-                          emotionAnalysis={noteInfo.emotionAnalysis}
-                          onSaveNote={handleSaveSpiritualNote}
-                          isCurrentSpoken={currentSpeakingVerseIndex === idx}
-                          isLastReadTarget={targetResumeVerseNum === item.verse}
-                          isLastRead={lastReadVerseId === verseUniqueId || (!!currentChapterHistoryRecord?.last_verse && currentChapterHistoryRecord.last_verse === item.verse)}
-                          index={idx}
-                        />
+                        <React.Fragment key={verseUniqueId}>
+                          {isFirstOfNewChapter && (
+                            <div 
+                              id={`chapter-section-${item.book_id}-${item.chapter}`}
+                              className="my-10 pt-8 pb-5 border-t-2 border-[#c9a84c]/20 text-center select-none animate-fade-in"
+                            >
+                              <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#1a1712] border border-[#c9a84c]/40 shadow-lg">
+                                <BookOpen className="w-4 h-4 text-[#c9a84c]" />
+                                <span className="font-serif font-bold text-sm text-[#e8e0d0] tracking-wide">
+                                  {item.book_name} — Chapitre {item.chapter}
+                                </span>
+                              </div>
+                              <p className="text-[9px] font-mono text-[#8e8574] uppercase tracking-widest mt-2">
+                                Nouveau Chapitre · Verset 1 à {getChapterMaxVerses(item.book_id, item.chapter)}
+                              </p>
+                            </div>
+                          )}
+                          <VerseItem 
+                            verse={item}
+                            isFavorite={getVerseHasBookmark(item)}
+                            onToggleFavorite={handleToggleFavorite}
+                            onExplain={handleExplainVerse}
+                            onStrongClick={handleStrongSelectionCode}
+                            textSize={textSize}
+                            lineHeight={textSize * 1.62}
+                            isSelected={selectedVerseId === verseUniqueId}
+                            onTap={() => {
+                              setSelectedVerseId(selectedVerseId === verseUniqueId ? null : verseUniqueId);
+                            }}
+                            hasNote={noteInfo.hasNote}
+                            noteText={noteInfo.text}
+                            noteAudio={noteInfo.audio}
+                            emotionAnalysis={noteInfo.emotionAnalysis}
+                            onSaveNote={handleSaveSpiritualNote}
+                            onNavigateToVerse={handleNavigateVerseToReader}
+                            isVerseFavorite={(b, c, v) => favorites.some(f => f.book_id === b && f.chapter === c && f.verse === v)}
+                            isCurrentSpoken={currentSpeakingVerseIndex === idx}
+                            isLastReadTarget={isThisVerseTarget}
+                            isLastRead={isThisVerseLastRead}
+                            index={idx}
+                            bookmarkFolders={bookmarkFolders}
+                            favoriteFolderId={favorites.find(f => f.book_id === item.book_id && f.chapter === item.chapter && f.verse === item.verse)?.folder_id}
+                            onAssignFavoriteFolder={(v, fId, fName) => handleAssignVerseToFolder(v, fId, fName)}
+                          />
+                        </React.Fragment>
                       );
                     })}
 
@@ -4432,10 +5028,11 @@ export default function App() {
               <StrongLexicon 
                 onNavigateToChapter={handleNavigateChallengeToReader}
                 onExplainVerse={(verse) => {
-                  setSelectedBook(BOOKS.find(b => b.id === verse.book_id) || BOOKS[0]);
-                  setSelectedChapter(verse.chapter);
-                  setActiveTab('read');
-                  setSelectedVerseId(`${verse.book_id}_${verse.chapter}_${verse.verse}`);
+                  navigateToScripture({
+                    livre: verse.book_id,
+                    chapitre: verse.chapter,
+                    verset: verse.verse
+                  });
                 }}
                 highlightedCode={targetedStrongCode}
                 onClearHighlight={() => setTargetedStrongCode(null)}
@@ -4460,28 +5057,13 @@ export default function App() {
                     
                     const subParts = lastPart.split(':');
                     const chapterNum = parseInt(subParts[0], 10) || 1;
-                    const verseNum = subParts[1] ? parseInt(subParts[1], 10) : null;
+                    const verseNum = subParts[1] ? parseInt(subParts[1], 10) : 1;
 
-                    const foundBook = BOOKS.find(b => b.name.toLowerCase() === bookName.toLowerCase() || b.slug.toLowerCase() === bookName.toLowerCase());
-                    if (foundBook) {
-                      setSelectedBook(foundBook);
-                      setSelectedChapter(chapterNum);
-                      setActiveTab('read');
-                      if (verseNum) {
-                        setSelectedVerseId(`${foundBook.id}_${chapterNum}_${verseNum}`);
-                      }
-                    } else {
-                      // Fallback try simple matching
-                      const partialBook = BOOKS.find(b => b.name.toLowerCase().includes(bookName.toLowerCase()));
-                      if (partialBook) {
-                        setSelectedBook(partialBook);
-                        setSelectedChapter(chapterNum);
-                        setActiveTab('read');
-                        if (verseNum) {
-                          setSelectedVerseId(`${partialBook.id}_${chapterNum}_${verseNum}`);
-                        }
-                      }
-                    }
+                    navigateToScripture({
+                      livre: bookName,
+                      chapitre: chapterNum,
+                      verset: verseNum
+                    });
                   }
                 }}
               />
@@ -4620,6 +5202,8 @@ export default function App() {
                 setDailyTimeGoal={setDailyTimeGoal}
                 goalType={goalType}
                 setGoalType={setGoalType}
+                currentStreak={currentStreak}
+                onNavigateToReader={() => setActiveTab('read')}
               />
 
               {/* Recently Read Chapters chronological history list */}
@@ -4638,6 +5222,15 @@ export default function App() {
               <ReadingChallenges 
                 readingHistory={readingHistory} 
                 onNavigateToChapter={handleNavigateChallengeToReader}
+                dailyGoalPercent={goalPercent}
+                dailyGoalType={goalType}
+                todayReadingsCount={todayReadingsCount}
+                dailyGoalTarget={localDailyGoal}
+                readingTimeToday={readingTimeToday}
+                setReadingTimeToday={setReadingTimeToday}
+                dailyTimeGoal={dailyTimeGoal}
+                setDailyTimeGoal={setDailyTimeGoal}
+                onNavigateToReader={() => setActiveTab('read')}
               />
             </motion.div>
           )}
@@ -4656,18 +5249,58 @@ export default function App() {
             </motion.div>
           )}
 
-          {/* F. SPIRITUAL NOTES JOURNAL & MANAGEMENT TAB */}
+          {/* F. BIBLIOTHÈQUE : FAVORIS PAR THÈMES & JOURNAL DE NOTES */}
           {activeTab === 'notes' && (
             <motion.div
               initial={{ opacity: 0, y: 5 }} 
               animate={{ opacity: 1, y: 0 }}
-              className="space-y-4"
+              className="space-y-5"
             >
-              <SpiritualNotesManager 
-                notes={notes}
-                onNavigateToVerse={handleNavigateVerseToReader}
-                onSaveNote={handleSaveSpiritualNote}
-              />
+              {/* Dual Sub-Tabs Selector */}
+              <div className="flex bg-[#12100c] border border-[#2e2a1e] p-1.5 rounded-2xl max-w-lg mx-auto shadow-inner">
+                <button
+                  onClick={() => setLibrarySubTab('folders')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer ${
+                    librarySubTab === 'folders'
+                      ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
+                  }`}
+                >
+                  <Folder className="w-3.5 h-3.5" />
+                  <span>Favoris par Thèmes ({favorites.length})</span>
+                </button>
+
+                <button
+                  onClick={() => setLibrarySubTab('notes')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer ${
+                    librarySubTab === 'notes'
+                      ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
+                  }`}
+                >
+                  <Bookmark className="w-3.5 h-3.5" />
+                  <span>Journal de Notes ({notes.length})</span>
+                </button>
+              </div>
+
+              {librarySubTab === 'folders' ? (
+                <BookmarkFoldersManager 
+                  favorites={favorites}
+                  folders={bookmarkFolders}
+                  onNavigateToVerse={handleNavigateVerseToReader}
+                  onToggleFavorite={handleToggleFavorite}
+                  onAssignVerseToFolder={handleAssignVerseToFolder}
+                  onCreateFolder={handleCreateBookmarkFolder}
+                  onUpdateFolder={handleUpdateBookmarkFolder}
+                  onDeleteFolder={handleDeleteBookmarkFolder}
+                />
+              ) : (
+                <SpiritualNotesManager 
+                  notes={notes}
+                  onNavigateToVerse={handleNavigateVerseToReader}
+                  onSaveNote={handleSaveSpiritualNote}
+                />
+              )}
             </motion.div>
           )}
 

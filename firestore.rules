@@ -24,6 +24,11 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
+      // Bookmark folders subcollection
+      match /bookmark_folders/{folderId} {
+        allow read, write: if isOwner(userId);
+      }
+
       // Notes subcollection
       match /notes/{noteId} {
         allow read, write: if isOwner(userId);

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { History, Play, Bookmark, Calendar, Clock, CheckCircle2, BookOpen, Layers } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
+import { getChapterMaxVerses } from '../data/bibleChapterVerseCounts';
 
 interface RecentlyReadChaptersProps {
   readingHistory: ReadingHistory[];
@@ -129,8 +130,8 @@ export const RecentlyReadChapters: React.FC<RecentlyReadChaptersProps> = ({
       ) : (
         <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1 scroller-thin">
           {filteredHistory.map((item, index) => {
-            const lastVerse = item.last_verse || 1;
-            const totalVerses = item.total_verses || 1;
+            const totalVerses = getChapterMaxVerses(item.book_id, item.chapter);
+            const lastVerse = Math.min(item.last_verse || 1, totalVerses);
             const isCompleted = item.status === 'complete' || lastVerse >= totalVerses;
             const progressPercent = isCompleted ? 100 : Math.min(100, Math.round((lastVerse / totalVerses) * 100));
             const durationStr = formatTimeSpent(item.time_spent_seconds);

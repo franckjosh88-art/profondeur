@@ -6,6 +6,7 @@ import {
   Sun, Leaf, Mountain
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
+import { getChapterMaxVerses } from '../data/bibleChapterVerseCounts';
 import prayerBgSanctuary from '../assets/images/prayer_bg_sanctuary_1790148027998.jpg';
 import prayerBgValley from '../assets/images/prayer_bg_valley_1790148041309.jpg';
 import prayerBgBible from '../assets/images/prayer_bg_bible_1790148055006.jpg';
@@ -152,9 +153,13 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
     ? [...readingHistory].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
     : null;
 
+  const validLatestVerse = latestReading
+    ? Math.min(Math.max(1, latestReading.last_verse || 1), getChapterMaxVerses(latestReading.book_id, latestReading.chapter))
+    : 1;
+
   const handleResumeReading = () => {
     if (latestReading && onNavigateToChapter) {
-      onNavigateToChapter(latestReading.book_id, latestReading.chapter, latestReading.last_verse || 1);
+      onNavigateToChapter(latestReading.book_id, latestReading.chapter, validLatestVerse);
     } else {
       onNavigateToTab('read');
     }
@@ -421,7 +426,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   <div>
                     <span className="text-[8px] font-mono uppercase text-[#8c8270] tracking-wider block font-bold">Reprendre la lecture</span>
                     <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#D9B26A] transition">
-                      {latestReading ? `${latestReading.book_name} ${latestReading.chapter} ${latestReading.last_verse ? `· Verset ${latestReading.last_verse}` : ''}` : 'Ouvrir la Sainte Bible'}
+                      {latestReading ? `${latestReading.book_name} ${latestReading.chapter} · Verset ${validLatestVerse}` : 'Ouvrir la Sainte Bible'}
                     </span>
                   </div>
                 </div>

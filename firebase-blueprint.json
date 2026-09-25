@@ -15,7 +15,7 @@
     },
     "FavoriteVerse": {
       "title": "FavoriteVerse",
-      "description": "Bookmarked verses of the user",
+      "description": "Bookmarked verses of the user with optional folder categorization",
       "type": "object",
       "properties": {
         "book_id": { "type": "integer" },
@@ -23,9 +23,26 @@
         "chapter": { "type": "integer" },
         "verse": { "type": "integer" },
         "text": { "type": "string" },
-        "added_at": { "type": "string" }
+        "added_at": { "type": "string" },
+        "folder_id": { "type": "string" },
+        "folder_name": { "type": "string" }
       },
       "required": ["book_id", "book_name", "chapter", "verse", "text", "added_at"]
+    },
+    "BookmarkFolder": {
+      "title": "BookmarkFolder",
+      "description": "Thematic folder created by user to organize favorite verses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "color": { "type": "string" },
+        "icon": { "type": "string" },
+        "description": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "name", "created_at"]
     },
     "VerseNote": {
       "title": "VerseNote",
@@ -62,6 +79,10 @@
     "users/{userId}/bookmarks/{bookmarkId}": {
       "schema": "FavoriteVerse",
       "description": "User bookmarked verses"
+    },
+    "users/{userId}/bookmark_folders/{folderId}": {
+      "schema": "BookmarkFolder",
+      "description": "User thematic folders for categorizing favorite verses"
     },
     "users/{userId}/notes/{noteId}": {
       "schema": "VerseNote",

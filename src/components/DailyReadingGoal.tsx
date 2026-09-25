@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Crown, BookOpen, Award, Sparkles, Plus, Minus, Trophy, 
-  CheckCircle2, Flame, Calendar, RefreshCw, Timer, Clock
+  CheckCircle2, Flame, Calendar, RefreshCw, Timer, Clock, ArrowRight,
+  ChevronRight, Compass
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
 
@@ -14,6 +15,8 @@ interface DailyReadingGoalProps {
   setDailyTimeGoal: (goal: number) => void;
   goalType: 'chapters' | 'time';
   setGoalType: (type: 'chapters' | 'time') => void;
+  currentStreak?: number;
+  onNavigateToReader?: () => void;
 }
 
 export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({ 
@@ -23,7 +26,9 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
   dailyTimeGoal,
   setDailyTimeGoal,
   goalType,
-  setGoalType
+  setGoalType,
+  currentStreak = 0,
+  onNavigateToReader
 }) => {
   const [dailyGoal, setDailyGoal] = useState<number>(3);
   const [showCelebration, setShowCelebration] = useState<boolean>(false);
@@ -52,13 +57,16 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
   const secondsLeft = readingTimeToday % 60;
 
   const progressRatio = goalType === 'chapters' 
-    ? countToday / dailyGoal 
-    : (readingTimeToday / 60) / dailyTimeGoal;
+    ? (dailyGoal > 0 ? countToday / dailyGoal : 0)
+    : (dailyTimeGoal > 0 ? (readingTimeToday / 60) / dailyTimeGoal : 0);
 
   const percent = Math.min(100, Math.round(progressRatio * 100));
-  const isGoalReached = goalType === 'chapters' 
-    ? countToday >= dailyGoal 
-    : (readingTimeToday / 60) >= dailyTimeGoal;
+  const isGoalReached = percent >= 100;
+
+  // Circular gauge calculations (SVG radius = 48, circumference = 2 * PI * 48 ≈ 301.59)
+  const RADIUS = 48;
+  const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+  const strokeDashoffset = CIRCUMFERENCE - (percent / 100) * CIRCUMFERENCE;
 
   // Trigger celebration on reaching goal for the first time in session
   useEffect(() => {
@@ -67,7 +75,6 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
       if (!triggeredToday) {
         setShowCelebration(true);
         localStorage.setItem(`goal_celebration_${todayStr}`, 'true');
-        // Auto dismiss after nice animation
         const timer = setTimeout(() => setShowCelebration(false), 6000);
         return () => clearTimeout(timer);
       }
@@ -80,7 +87,6 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
       setDailyGoal(nextGoal);
       localStorage.setItem('bible_daily_goal', String(nextGoal));
     } else {
-      // Adjust minutes goal (5-120 min, by steps of 5)
       const nextGoal = Math.max(5, Math.min(120, dailyTimeGoal + (amount * 5)));
       setDailyTimeGoal(nextGoal);
       localStorage.setItem('bible_daily_goal_time', String(nextGoal));
@@ -90,8 +96,6 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
   const handleAddManualTime = (minutes: number) => {
     setReadingTimeToday(prev => {
       const nextTime = prev + (minutes * 60);
-      
-      // Save directly to localStorage
       let durations: Record<string, number> = {};
       const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
       if (savedDurations) {
@@ -101,21 +105,15 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
       }
       durations[todayStr] = nextTime;
       localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
-
       return nextTime;
     });
   };
 
-  const handleResetCelebration = () => {
-    localStorage.removeItem(`goal_celebration_${todayStr}`);
-    setShowCelebration(false);
-  };
-
   return (
-    <div className="bg-[#12100c] border border-[#2e2a1e] rounded-2xl p-5 md:p-6 space-y-4 select-none relative overflow-hidden text-left shadow-soft">
-      {/* Background ambient gold light effects */}
-      <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
-      <div className="absolute bottom-0 left-0 w-20 h-20 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
+    <div className="bg-[#12100c] border border-[#2e2a1e] rounded-[2rem] p-5 sm:p-6 space-y-5 select-none relative overflow-hidden text-left shadow-soft">
+      {/* Ambient background glows */}
+      <div className="absolute top-0 right-0 w-64 h-64 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-0 left-0 w-40 h-40 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
 
       {/* Goal Celebration Overlay Banner */}
       <AnimatePresence>
@@ -124,191 +122,355 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
             initial={{ opacity: 0, scale: 0.95, y: -10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: -10 }}
-            className="absolute inset-0 bg-[#0d0b07]/95 border border-[#c9a84c]/20 rounded-2xl p-4 flex flex-col items-center justify-center text-center z-10"
+            className="absolute inset-0 bg-[#0d0b07]/95 border border-[#c9a84c]/30 rounded-[2rem] p-6 flex flex-col items-center justify-center text-center z-30 shadow-gold-glow"
           >
-            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#c9a84c]/10 via-transparent to-transparent opacity-60"></div>
-            <div className="relative z-20 space-y-2">
-              <div className="w-10 h-10 rounded-full bg-[#c9a84c]/20 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] mx-auto animate-bounce">
-                <Crown className="w-5 h-5" />
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#c9a84c]/15 via-transparent to-transparent opacity-80"></div>
+            <div className="relative z-20 space-y-2.5 max-w-md mx-auto">
+              <div className="w-12 h-12 rounded-2xl bg-[#c9a84c]/20 border border-[#c9a84c]/40 flex items-center justify-center text-[#c9a84c] mx-auto animate-bounce shadow-gold-glow">
+                <Crown className="w-6 h-6" />
               </div>
-              <h4 className="font-serif font-extrabold text-[#c9a84c] text-sm uppercase tracking-wider">Objectif Sacré Accomplis !</h4>
-              <p className="text-[10px] text-[#e8e0d0] max-w-xs font-serif italic mx-auto">
-                « Celui qui persévère dans la vérité verra sa foi couronnée de lumière. »
+              <h4 className="font-serif font-extrabold text-[#c9a84c] text-base sm:text-lg uppercase tracking-wider">
+                Objectif Quotidien Accompli !
+              </h4>
+              <p className="text-xs text-[#e8e0d0] font-serif italic leading-relaxed">
+                « Celui qui persévère dans la vérité verra sa foi couronnée de lumière et de discernement. »
               </p>
-              <p className="text-[9px] text-[#6b6355] font-mono uppercase tracking-widest pt-1">
-                {goalType === 'chapters' 
-                  ? `${countToday} / ${dailyGoal} chapitres lus aujourd'hui`
-                  : `${minutesToday} min de méditation accomplies aujourd'hui`
-                }
-              </p>
-              <button 
-                onClick={() => setShowCelebration(false)}
-                className="mt-3 px-3 py-1 bg-[#1a1712] border border-[#2e2a1e] text-[#c9a84c] rounded-lg text-[8.5px] font-mono tracking-widest uppercase hover:text-[#e8e0d0] hover:border-[#c9a84c]/30 transition"
-              >
-                Continuer la lecture
-              </button>
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#1a1712] border border-[#c9a84c]/40 rounded-full text-[10px] font-mono text-[#c9a84c] font-bold uppercase tracking-wider mt-1">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>
+                  {goalType === 'chapters' 
+                    ? `${countToday} / ${dailyGoal} chapitres lus aujourd'hui (100%)`
+                    : `${minutesToday} min de méditation accomplies (100%)`
+                  }
+                </span>
+              </div>
+              <div>
+                <button 
+                  onClick={() => setShowCelebration(false)}
+                  className="mt-3 px-4 py-1.5 bg-[#c9a84c] hover:bg-[#dfba5a] text-[#0d0b07] rounded-xl text-xs font-serif font-bold tracking-wider uppercase transition cursor-pointer shadow-md"
+                >
+                  Continuer la lecture
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Header and Title Section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-2.5">
-          <div className={`w-9 h-9 rounded-xl border flex items-center justify-center transition-all ${
-            isGoalReached 
-              ? 'bg-[#c9a84c]/10 border-[#c9a84c] text-[#c9a84c]' 
-              : 'bg-[#1a1712] border-[#2e2a1e] text-[#6b6355]'
-          }`}>
-            {isGoalReached ? (
-              <Trophy className="w-4.5 h-4.5 text-[#c9a84c] animate-pulse" />
-            ) : goalType === 'chapters' ? (
-              <BookOpen className="w-4.5 h-4.5 text-[#a0947f]" />
-            ) : (
-              <Timer className="w-4.5 h-4.5 text-[#a0947f]" />
-            )}
-          </div>
-          <div>
-            <h4 className="font-serif font-extrabold text-[13px] text-[#e8e0d0] tracking-tight">Objectif Quotidien</h4>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[8.5px] font-mono text-[#6b6355] uppercase flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-[#c9a84c]" />
-                Fidélité & Temps de lecture
+      {/* TOP SECTION: CIRCULAR RADIAL GAUGE + HERO PROGRESS METRICS */}
+      <div className="flex flex-col md:flex-row items-center justify-between gap-6 pb-2">
+        {/* 1. CIRCULAR RADIAL GAUGE */}
+        <div className="flex items-center gap-5 shrink-0">
+          <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center">
+            {/* Background circular glow */}
+            <div 
+              className={`absolute inset-2 rounded-full transition-all duration-700 pointer-events-none ${
+                isGoalReached 
+                  ? 'bg-emerald-500/15 blur-xl' 
+                  : percent > 0 
+                    ? 'bg-[#c9a84c]/15 blur-lg' 
+                    : 'bg-transparent'
+              }`}
+            />
+
+            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 120 120">
+              <defs>
+                <linearGradient id="dailyGaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#dfba5a" />
+                  <stop offset="60%" stopColor="#c9a84c" />
+                  <stop offset="100%" stopColor={isGoalReached ? '#10b981' : '#f59e0b'} />
+                </linearGradient>
+                <filter id="gaugeShadow" x="-20%" y="-20%" width="140%" height="140%">
+                  <feDropShadow dx="0" dy="0" stdDeviation="3" floodColor="#c9a84c" floodOpacity="0.4"/>
+                </filter>
+              </defs>
+
+              {/* Background track circle */}
+              <circle
+                cx="60"
+                cy="60"
+                r={RADIUS}
+                fill="transparent"
+                stroke="#1b1711"
+                strokeWidth="10"
+                className="transition-all"
+              />
+
+              {/* Tick marks around track */}
+              <circle
+                cx="60"
+                cy="60"
+                r={RADIUS}
+                fill="transparent"
+                stroke="#2a2419"
+                strokeWidth="10"
+                strokeDasharray="2 12"
+                className="opacity-40"
+              />
+
+              {/* Animated Progress Arc */}
+              <motion.circle
+                cx="60"
+                cy="60"
+                r={RADIUS}
+                fill="transparent"
+                stroke="url(#dailyGaugeGrad)"
+                strokeWidth="10"
+                strokeLinecap="round"
+                strokeDasharray={CIRCUMFERENCE}
+                initial={{ strokeDashoffset: CIRCUMFERENCE }}
+                animate={{ strokeDashoffset }}
+                transition={{ duration: 0.9, ease: "easeOut" }}
+                filter={percent > 0 ? "url(#gaugeShadow)" : undefined}
+              />
+            </svg>
+
+            {/* Inner Gauge Center Details */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+              {isGoalReached ? (
+                <Crown className="w-4 h-4 text-emerald-400 mb-0.5 animate-bounce" />
+              ) : percent > 0 ? (
+                <Flame className="w-4 h-4 text-[#c9a84c] mb-0.5 animate-pulse" />
+              ) : (
+                <BookOpen className="w-4 h-4 text-[#6b6355] mb-0.5" />
+              )}
+
+              <span className="font-mono font-black text-2xl sm:text-3xl text-[#e8e0d0] leading-none tracking-tight">
+                {percent}%
+              </span>
+
+              <span className={`text-[8.5px] font-mono font-bold uppercase tracking-wider mt-1 px-1.5 py-0.5 rounded ${
+                isGoalReached 
+                  ? 'text-emerald-300 bg-emerald-500/20' 
+                  : percent > 0 
+                    ? 'text-[#c9a84c] bg-[#c9a84c]/10' 
+                    : 'text-[#6b6355]'
+              }`}>
+                {isGoalReached 
+                  ? 'Accompli' 
+                  : (goalType === 'chapters' ? `${countToday}/${dailyGoal} ch.` : `${minutesToday}/${dailyTimeGoal} min`)
+                }
               </span>
             </div>
           </div>
+
+          {/* Side title & quick summary for mobile / compact */}
+          <div className="space-y-1 block md:hidden">
+            <div className="flex items-center gap-1.5 text-[9px] font-mono text-[#c9a84c] uppercase font-bold tracking-wider">
+              <Sparkles className="w-3 h-3" />
+              <span>Progression Quotidienne</span>
+            </div>
+            <h3 className="font-serif font-extrabold text-base text-[#e8e0d0]">
+              {goalType === 'chapters' ? `${countToday} / ${dailyGoal} chapitres` : `${minutesToday} / ${dailyTimeGoal} min`}
+            </h3>
+            <p className="text-[10px] text-[#8e8574]">
+              {isGoalReached 
+                ? 'Objectif du jour complété !' 
+                : goalType === 'chapters' 
+                  ? `Plus que ${Math.max(0, dailyGoal - countToday)} ch. à lire` 
+                  : `Plus que ${Math.max(0, dailyTimeGoal - minutesToday)} min restantes`
+              }
+            </p>
+          </div>
         </div>
 
-        {/* Dynamic Goal Setter dial based on selected goal type */}
-        <div className="bg-[#1a1712] border border-[#2e2a1e] rounded-xl px-2.5 py-1 flex items-center gap-2 self-start sm:self-auto">
-          <button 
-            onClick={() => handleUpdateGoal(-1)}
-            disabled={goalType === 'chapters' ? dailyGoal <= 1 : dailyTimeGoal <= 5}
-            className="p-1 text-[#6b6355] hover:text-[#c9a84c] disabled:opacity-30 disabled:hover:text-[#6b6355] transition text-xs shrink-0 cursor-pointer"
-            title="Diminuer l'objectif"
-          >
-            <Minus className="w-3 h-3" />
-          </button>
-          
-          <div className="text-center min-w-[50px]">
-            <p className="text-[11px] font-mono font-bold text-[#c9a84c] leading-none">
-              {goalType === 'chapters' ? dailyGoal : dailyTimeGoal}
-            </p>
-            <span className="text-[6.5px] font-mono text-[#6b6355] uppercase tracking-wider block mt-0.5">
-              {goalType === 'chapters' ? 'ch. / jour' : 'min. / jour'}
+        {/* 2. CONTROLS, TARGET CHANGER & STREAK BADGE */}
+        <div className="flex-1 w-full space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="hidden md:block">
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="w-2 h-2 rounded-full bg-[#c9a84c] animate-pulse"></span>
+                <span className="text-[9.5px] font-mono uppercase tracking-widest text-[#c9a84c] font-bold">
+                  Indicateur de Progression Quotidienne
+                </span>
+              </div>
+              <h3 className="text-lg font-serif font-extrabold text-[#e8e0d0] tracking-tight">
+                {goalType === 'chapters' ? (
+                  <>Lecture du jour : <span className="text-[#c9a84c]">{countToday}</span> / {dailyGoal} chapitres</>
+                ) : (
+                  <>Temps du jour : <span className="text-[#c9a84c]">{minutesToday} min {secondsLeft}s</span> / {dailyTimeGoal} min</>
+                )}
+              </h3>
+            </div>
+
+            {/* Streak Counter Chip */}
+            {currentStreak > 0 && (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#c9a84c]/10 border border-[#c9a84c]/30 text-[#c9a84c] text-xs font-mono font-bold">
+                <Flame className="w-3.5 h-3.5 fill-[#c9a84c]" />
+                <span>{currentStreak} JOUR{currentStreak > 1 ? 'S' : ''} DE SÉRIE</span>
+              </div>
+            )}
+          </div>
+
+          {/* MODE SELECTOR (CHAPITRES / TEMPS) & TARGET DIAL */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            {/* Goal Type Switcher */}
+            <div className="flex bg-[#181510] border border-[#2e2a1e] rounded-xl p-1 gap-1 flex-1">
+              <button
+                onClick={() => {
+                  setGoalType('chapters');
+                  localStorage.setItem('bible_daily_goal_type', 'chapters');
+                }}
+                className={`flex-1 py-2 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  goalType === 'chapters'
+                    ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                    : 'text-[#8e8574] hover:text-[#e8e0d0] hover:bg-[#201b13]'
+                }`}
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Chapitres</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setGoalType('time');
+                  localStorage.setItem('bible_daily_goal_type', 'time');
+                }}
+                className={`flex-1 py-2 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  goalType === 'time'
+                    ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                    : 'text-[#8e8574] hover:text-[#e8e0d0] hover:bg-[#201b13]'
+                }`}
+              >
+                <Timer className="w-3.5 h-3.5" />
+                <span>Temps de lecture</span>
+              </button>
+            </div>
+
+            {/* Target Dial (- / +) */}
+            <div className="flex items-center gap-2 bg-[#181510] border border-[#2e2a1e] rounded-xl px-3 py-1.5 justify-between sm:justify-start">
+              <span className="text-[9px] font-mono text-[#6b6355] uppercase font-bold sm:hidden">
+                Objectif visé :
+              </span>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => handleUpdateGoal(-1)}
+                  disabled={goalType === 'chapters' ? dailyGoal <= 1 : dailyTimeGoal <= 5}
+                  className="p-1 rounded-lg text-[#8e8574] hover:text-[#c9a84c] hover:bg-[#201b13] disabled:opacity-30 disabled:hover:text-[#8e8574] transition cursor-pointer"
+                  title="Diminuer l'objectif"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                
+                <div className="text-center min-w-[55px]">
+                  <p className="text-xs font-mono font-bold text-[#c9a84c] leading-none">
+                    {goalType === 'chapters' ? `${dailyGoal} ch.` : `${dailyTimeGoal} min`}
+                  </p>
+                  <span className="text-[7px] font-mono text-[#6b6355] uppercase tracking-wider block mt-0.5">
+                    / jour
+                  </span>
+                </div>
+
+                <button 
+                  onClick={() => handleUpdateGoal(1)}
+                  disabled={goalType === 'chapters' ? dailyGoal >= 20 : dailyTimeGoal >= 120}
+                  className="p-1 rounded-lg text-[#8e8574] hover:text-[#c9a84c] hover:bg-[#201b13] disabled:opacity-30 disabled:hover:text-[#8e8574] transition cursor-pointer"
+                  title="Augmenter l'objectif"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Navigate Button to Reader if provided */}
+            {onNavigateToReader && (
+              <button
+                onClick={onNavigateToReader}
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-2 bg-[#c9a84c]/15 hover:bg-[#c9a84c]/25 border border-[#c9a84c]/40 text-[#c9a84c] rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition cursor-pointer shrink-0"
+              >
+                <span>Lire</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* HORIZONTAL ILLUMINATED PROGRESS TRACK WITH MILESTONES */}
+      <div className="space-y-2 pt-2 border-t border-[#2e2a1e]/60">
+        <div className="flex items-center justify-between text-[11px] font-mono">
+          <div className="flex items-center gap-2">
+            <span className="text-[#8e8574] text-[10px] uppercase tracking-wider">État :</span>
+            {isGoalReached ? (
+              <span className="text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1 py-0.5 px-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20 text-[9px]">
+                <CheckCircle2 className="w-3 h-3" /> Objectif Sacré Complété (100%)
+              </span>
+            ) : percent > 0 ? (
+              <span className="text-[#c9a84c] font-bold uppercase tracking-wider flex items-center gap-1 py-0.5 px-2 bg-[#c9a84c]/10 rounded-lg border border-[#c9a84c]/20 text-[9px]">
+                <Flame className="w-3 h-3 animate-pulse" /> En bonne voie ({percent}%)
+              </span>
+            ) : (
+              <span className="text-[#6b6355] uppercase tracking-wider text-[9px] py-0.5 px-2 bg-[#181510] rounded-lg border border-[#2e2a1e]">
+                En attente de méditation (0%)
+              </span>
+            )}
+          </div>
+
+          <div className="text-right">
+            <span className="text-[#e8e0d0] font-bold text-xs font-mono">
+              {percent}%
+            </span>
+            <span className="text-[10px] text-[#6b6355] ml-1">
+              ({goalType === 'chapters' ? `${countToday}/${dailyGoal} ch.` : `${minutesToday}/${dailyTimeGoal} min`})
             </span>
           </div>
-
-          <button 
-            onClick={() => handleUpdateGoal(1)}
-            disabled={goalType === 'chapters' ? dailyGoal >= 20 : dailyTimeGoal >= 120}
-            className="p-1 text-[#6b6355] hover:text-[#c9a84c] disabled:opacity-30 disabled:hover:text-[#6b6355] transition text-xs shrink-0 cursor-pointer"
-            title="Augmenter l'objectif"
-          >
-            <Plus className="w-3 h-3" />
-          </button>
         </div>
-      </div>
 
-      {/* Goal Type Tabs Switcher */}
-      <div className="flex bg-[#1a1712] border border-[#2e2a1e] rounded-xl p-0.5 gap-1 select-none">
-        <button
-          onClick={() => {
-            setGoalType('chapters');
-            localStorage.setItem('bible_daily_goal_type', 'chapters');
-          }}
-          className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-            goalType === 'chapters'
-              ? 'bg-[#c9a84c] text-black shadow-md'
-              : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <BookOpen className="w-3.5 h-3.5" />
-          <span>📚 Chapitres</span>
-        </button>
-        <button
-          onClick={() => {
-            setGoalType('time');
-            localStorage.setItem('bible_daily_goal_type', 'time');
-          }}
-          className={`flex-1 py-1.5 px-3 rounded-lg text-[10px] font-mono font-bold tracking-wider uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-            goalType === 'time'
-              ? 'bg-[#c9a84c] text-black shadow-md'
-              : 'text-[#6b6355] hover:text-[#e8e0d0]'
-          }`}
-        >
-          <Timer className="w-3.5 h-3.5" />
-          <span>⏱️ Temps de lecture</span>
-        </button>
-      </div>
-
-      {/* Main Global Progress Bar with Gold Glow and Shine Effect */}
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between text-[11px] font-mono">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[#a0947f]">Statut :</span>
-            {isGoalReached ? (
-              <span className="text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1 py-0.5 px-1.5 bg-emerald-500/10 rounded-md border border-emerald-500/15 text-[8.5px]">
-                <CheckCircle2 className="w-3 h-3" /> Complété
-              </span>
-            ) : (countTypeProgress() > 0) ? (
-              <span className="text-[#c9a84c] uppercase tracking-wider flex items-center gap-1 text-[8.5px]">
-                <Flame className="w-3 h-3 animate-pulse" /> En chemin
-              </span>
-            ) : (
-              <span className="text-[#6b6355] uppercase tracking-wider text-[8.5px]">En attente</span>
-            )}
+        {/* The Track with Milestones Markers */}
+        <div className="relative pt-1 pb-4">
+          <div className="w-full h-3.5 bg-[#0d0b07] border border-[#2e2a1e] rounded-full overflow-hidden p-[2px] relative shadow-inner">
+            <motion.div 
+              className={`h-full rounded-full relative overflow-hidden transition-all ${
+                isGoalReached 
+                  ? 'bg-gradient-to-r from-[#c9a84c] via-emerald-400 to-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.3)]' 
+                  : 'bg-gold-gradient shadow-[0_0_12px_rgba(201,168,76,0.3)]'
+              }`}
+              initial={{ width: 0 }}
+              animate={{ width: `${percent}%` }}
+              transition={{ duration: 0.8, ease: "easeOut" }}
+            >
+              {/* Animated Light Sweep / Shimmer */}
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"></div>
+            </motion.div>
           </div>
-          <span className="text-[#e8e0d0] font-bold">
-            {goalType === 'chapters' ? (
-              <>
-                {countToday} / {dailyGoal} <span className="text-[10px] text-[#6b6355] font-light font-sans">ch. ({percent}%)</span>
-              </>
-            ) : (
-              <>
-                {minutesToday} min {secondsLeft}s / {dailyTimeGoal} min <span className="text-[10px] text-[#6b6355] font-light font-sans">({percent}%)</span>
-              </>
-            )}
-          </span>
-        </div>
 
-        {/* Global Progress Track */}
-        <div className="w-full h-3 bg-[#0d0b07] border border-[#2e2a1e] rounded-full overflow-hidden p-[2px] relative">
-          <motion.div 
-            className="h-full rounded-full bg-gold-gradient relative overflow-hidden"
-            initial={{ width: 0 }}
-            animate={{ width: `${percent}%` }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-          >
-            {/* Elegant light sweep overlay effect for completed ratio */}
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer"></div>
-          </motion.div>
+          {/* 4 Milestones Markers: 25%, 50%, 75%, 100% */}
+          <div className="relative w-full flex justify-between px-1 mt-1 text-[8.5px] font-mono text-[#6b6355]">
+            <span className={`transition-colors ${percent >= 25 ? 'text-[#c9a84c] font-bold' : ''}`}>25%</span>
+            <span className={`transition-colors ${percent >= 50 ? 'text-[#c9a84c] font-bold' : ''}`}>50%</span>
+            <span className={`transition-colors ${percent >= 75 ? 'text-[#c9a84c] font-bold' : ''}`}>75%</span>
+            <span className={`transition-colors flex items-center gap-0.5 ${percent >= 100 ? 'text-emerald-400 font-bold' : ''}`}>
+              100% {percent >= 100 && '👑'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Manual Time Logging Panel for offline reading or audio */}
+      {/* MANUAL TIME LOGGING PANEL (IF TIME GOAL ACTIVE) */}
       {goalType === 'time' && (
-        <div className="bg-[#1a1712]/60 border border-[#2e2a1e]/50 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fade-in">
+        <div className="bg-[#181510] border border-[#2e2a1e] rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fade-in">
           <div className="flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-[#c9a84c]" />
-            <span className="text-[10px] font-mono text-[#a0947f] uppercase tracking-wide">Ajouter du temps (Lecture hors-ligne)</span>
+            <span className="text-[10px] font-mono text-[#a0947f] uppercase tracking-wide">
+              Ajouter du temps (Lecture Bible papier ou audio)
+            </span>
           </div>
           <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end">
             <button
               onClick={() => handleAddManualTime(1)}
-              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+              className="px-2.5 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
             >
               +1 min
             </button>
             <button
               onClick={() => handleAddManualTime(5)}
-              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+              className="px-2.5 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
             >
               +5 min
             </button>
             <button
               onClick={() => handleAddManualTime(15)}
-              className="px-2 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
+              className="px-2.5 py-1 bg-[#12100c] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#2e2a1e] hover:border-[#c9a84c]/30 rounded-lg text-[9px] font-mono font-bold tracking-wider transition cursor-pointer"
             >
               +15 min
             </button>
@@ -324,7 +486,7 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
                 localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
               }}
               title="Réinitialiser le chrono d'aujourd'hui"
-              className="p-1 text-[#6b6355] hover:text-red-400 transition cursor-pointer"
+              className="p-1.5 text-[#6b6355] hover:text-rose-400 border border-transparent hover:border-rose-500/20 rounded-lg transition cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -332,43 +494,44 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
         </div>
       )}
 
-      {/* Dynamic Spiritual Motivation Text */}
-      <div className="pt-2 border-t border-[#2e2a1e]/40 flex items-center justify-between text-[10px]">
+      {/* DYNAMIC SPIRITUAL MOTIVATION TEXT */}
+      <div className="pt-2 border-t border-[#2e2a1e]/40 flex items-center justify-between text-[10.5px]">
         <p className="text-[#a0947f] italic font-serif leading-relaxed pr-2">
           {isGoalReached 
-            ? "« Votre esprit est nourri aujourd'hui. Poursuivez cette fidélité sacré ! »" 
+            ? "« Votre esprit est nourri de la Parole aujourd'hui. Poursuivez cette admirable fidélité ! »" 
             : goalType === 'chapters' 
               ? (countToday > 0 
-                ? `Il vous reste ${dailyGoal - countToday} chapitre${dailyGoal - countToday > 1 ? 's' : ''} à lire pour accomplir votre objectif de sagesse.` 
-                : "« Un chapitre par jour sanctifie un esprit. Prenez un instant spirituel. »")
+                ? `Il vous reste ${dailyGoal - countToday} chapitre${dailyGoal - countToday > 1 ? 's' : ''} à lire pour accomplir votre engagement spirituel.` 
+                : "« Un chapitre par jour sanctifie un esprit. Prenez un instant spirituel dans la Parole. »")
               : (readingTimeToday > 0
-                ? `Il vous reste environ ${Math.max(1, dailyTimeGoal - minutesToday)} minute${(dailyTimeGoal - minutesToday) > 1 ? 's' : ''} de lecture pour atteindre votre objectif.`
-                : "« Prenez quelques minutes de recueillement et de lecture pour élever votre âme. »")
+                ? `Il vous reste environ ${Math.max(1, dailyTimeGoal - minutesToday)} minute${(dailyTimeGoal - minutesToday) > 1 ? 's' : ''} de lecture pour parachever votre objectif.`
+                : "« Prenez quelques minutes de recueillement et de lecture pour élever et apaiser votre âme. »")
           }
         </p>
 
         {isGoalReached && (
-          <div className="flex items-center gap-0.5 py-0.5 px-2 rounded-full bg-[#c9a84c]/10 border border-[#c9a84c]/20 text-[#c9a84c] shrink-0 text-[8.5px] font-mono font-bold">
+          <div className="flex items-center gap-1 py-0.5 px-2.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 shrink-0 text-[9px] font-mono font-bold">
             <Crown className="w-3 h-3" />
-            <span>+1 STREAK</span>
+            <span>STREAK SAUVEGARDÉ</span>
           </div>
         )}
       </div>
 
-      {/* Accordion view list of Chapters completed today (Only visible under chapters tab or if we have readings done) */}
+      {/* ACCORDION VIEW OF CHAPTERS READ TODAY */}
       {countToday > 0 && (
-        <div className="bg-[#0c0a07] border border-[#2e2a1e]/50 rounded-xl p-3.5 mt-3.5 text-[10px] space-y-1.5">
-          <div className="text-[8px] font-mono text-[#6b6355] uppercase tracking-widest font-black">
-            Chapitres accomplis aujourd'hui :
+        <div className="bg-[#0d0b07] border border-[#2e2a1e]/60 rounded-2xl p-3.5 text-[10px] space-y-2">
+          <div className="flex items-center justify-between text-[8.5px] font-mono text-[#6b6355] uppercase tracking-widest font-bold">
+            <span>Chapitres validés aujourd'hui ({countToday}) :</span>
+            <span className="text-[#c9a84c]">{todayStr}</span>
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {todayReadings.slice().reverse().map((h, index) => (
               <div 
                 key={`${h.book_id}_${h.chapter}_${index}`}
-                className="flex items-center gap-1.5 py-1 px-2 rounded-lg bg-[#14120e] border border-[#2e2a1e]/35 text-[#e8e0d0] font-serif"
+                className="flex items-center gap-2 py-1.5 px-2.5 rounded-xl bg-[#14120e] border border-[#2e2a1e]/50 text-[#e8e0d0] font-serif"
               >
-                <div className="w-1.5 h-1.5 rounded-full bg-[#c9a84c]" />
-                <span className="truncate">{h.book_name} {h.chapter}</span>
+                <div className="w-2 h-2 rounded-full bg-[#c9a84c] shrink-0" />
+                <span className="truncate text-xs font-bold">{h.book_name} {h.chapter}</span>
               </div>
             ))}
           </div>
@@ -376,8 +539,4 @@ export const DailyReadingGoal: React.FC<DailyReadingGoalProps> = ({
       )}
     </div>
   );
-
-  function countTypeProgress() {
-    return goalType === 'chapters' ? countToday : readingTimeToday;
-  }
 };

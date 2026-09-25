@@ -519,6 +519,244 @@ DIRECTIVES THÉOLOGIQUES ET SPIRITUELLES :
   }
 });
 
+// Download the full Louis Segond 1910 Bible corpus in one request for offline IndexedDB storage
+app.get("/api/bible/full-lsg1910", (req: Request, res: Response) => {
+  try {
+    const completePath = path.join(process.cwd(), "bible-lsg1910-complete.json");
+    if (fs.existsSync(completePath)) {
+      res.setHeader("Content-Type", "application/json");
+      res.sendFile(completePath);
+      return;
+    }
+    const classicPath = path.join(process.cwd(), "src/data/bible-classic.json");
+    if (fs.existsSync(classicPath)) {
+      res.setHeader("Content-Type", "application/json");
+      res.sendFile(classicPath);
+      return;
+    }
+    res.status(404).json({ error: "Corpus de la Bible introuvable." });
+  } catch (err: any) {
+    console.error("Error serving complete Bible:", err);
+    res.status(500).json({ error: "Erreur serveur lors de la récupération de la Bible complète." });
+  }
+});
+
+// -------------------------------------------------------------
+// Bible Corpus Caching & Verified Verse Resolver
+// -------------------------------------------------------------
+interface BibleBookRecord {
+  id: number;
+  name: string;
+  chapters_count?: number;
+}
+
+let fullBibleVersesCache: Record<string, Array<{ verse: number; text: string }>> | null = null;
+let bibleBooksCache: BibleBookRecord[] = [];
+let bookAliasesMap: Record<string, BibleBookRecord> = {};
+
+function normalizeStr(str: string): string {
+  return str.toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getBibleCorpus() {
+  if (fullBibleVersesCache && bibleBooksCache.length > 0) {
+    return { verses: fullBibleVersesCache, books: bibleBooksCache, aliases: bookAliasesMap };
+  }
+
+  const classicPath = path.join(process.cwd(), "src/data/bible-classic.json");
+  const completePath = path.join(process.cwd(), "bible-lsg1910-complete.json");
+
+  let mergedVerses: Record<string, Array<{ verse: number; text: string }>> = {};
+  let booksList: BibleBookRecord[] = [];
+
+  if (fs.existsSync(classicPath)) {
+    try {
+      const classic = JSON.parse(fs.readFileSync(classicPath, "utf8"));
+      booksList = classic.books || [];
+      if (classic.verses) {
+        mergedVerses = { ...classic.verses };
+      }
+    } catch (e) {
+      console.warn("Could not read bible-classic.json:", e);
+    }
+  }
+
+  if (fs.existsSync(completePath)) {
+    try {
+      const complete = JSON.parse(fs.readFileSync(completePath, "utf8"));
+      if (complete.verses) {
+        mergedVerses = { ...mergedVerses, ...complete.verses };
+      }
+    } catch (e) {
+      console.warn("Could not read bible-lsg1910-complete.json:", e);
+    }
+  }
+
+  fullBibleVersesCache = mergedVerses;
+  bibleBooksCache = booksList;
+
+  // Build comprehensive aliases map for French biblical books
+  bookAliasesMap = {};
+  for (const b of booksList) {
+    const norm = normalizeStr(b.name);
+    bookAliasesMap[norm] = b;
+    if (b.name === "Psaumes") {
+      bookAliasesMap["psaume"] = b;
+      bookAliasesMap["ps"] = b;
+      bookAliasesMap["psa"] = b;
+    } else if (b.name === "Proverbes") {
+      bookAliasesMap["proverbe"] = b;
+      bookAliasesMap["pr"] = b;
+      bookAliasesMap["prov"] = b;
+    } else if (b.name === "Genèse") {
+      bookAliasesMap["genese"] = b;
+      bookAliasesMap["gen"] = b;
+      bookAliasesMap["gn"] = b;
+    } else if (b.name === "Ésaïe") {
+      bookAliasesMap["esaie"] = b;
+      bookAliasesMap["es"] = b;
+      bookAliasesMap["is"] = b;
+    } else if (b.name === "Ézéchiel") {
+      bookAliasesMap["ezechiel"] = b;
+      bookAliasesMap["ez"] = b;
+    } else if (b.name === "Éphésiens") {
+      bookAliasesMap["ephesiens"] = b;
+      bookAliasesMap["ephesien"] = b;
+      bookAliasesMap["eph"] = b;
+    } else if (b.name === "Matthieu") {
+      bookAliasesMap["mt"] = b;
+      bookAliasesMap["matt"] = b;
+    } else if (b.name === "Marc") {
+      bookAliasesMap["mc"] = b;
+      bookAliasesMap["mr"] = b;
+    } else if (b.name === "Luc") {
+      bookAliasesMap["lc"] = b;
+      bookAliasesMap["lk"] = b;
+    } else if (b.name === "Jean") {
+      bookAliasesMap["jn"] = b;
+    } else if (b.name === "Actes") {
+      bookAliasesMap["act"] = b;
+      bookAliasesMap["ac"] = b;
+    } else if (b.name === "Romains") {
+      bookAliasesMap["romain"] = b;
+      bookAliasesMap["rm"] = b;
+      bookAliasesMap["rom"] = b;
+    } else if (b.name === "1 Corinthiens") {
+      bookAliasesMap["1cor"] = b;
+      bookAliasesMap["1co"] = b;
+    } else if (b.name === "2 Corinthiens") {
+      bookAliasesMap["2cor"] = b;
+      bookAliasesMap["2co"] = b;
+    } else if (b.name === "Philippiens") {
+      bookAliasesMap["philippien"] = b;
+      bookAliasesMap["phil"] = b;
+      bookAliasesMap["php"] = b;
+    } else if (b.name === "Colossiens") {
+      bookAliasesMap["colossien"] = b;
+      bookAliasesMap["col"] = b;
+    } else if (b.name === "Hébreux") {
+      bookAliasesMap["hebreux"] = b;
+      bookAliasesMap["heb"] = b;
+    } else if (b.name === "Apocalypse") {
+      bookAliasesMap["apoc"] = b;
+      bookAliasesMap["ap"] = b;
+      bookAliasesMap["rev"] = b;
+    } else if (b.name === "Cantique des Cantiques") {
+      bookAliasesMap["cantique"] = b;
+      bookAliasesMap["cantiquedescantiques"] = b;
+      bookAliasesMap["ct"] = b;
+    }
+  }
+
+  return { verses: fullBibleVersesCache, books: bibleBooksCache, aliases: bookAliasesMap };
+}
+
+function parseAndVerifySimilarVerses(
+  candidates: Array<{ reference: string; type_lien?: string; explication?: string }>,
+  source: { sourceBookId?: number; sourceBookName?: string; sourceChapter?: number; sourceVerse?: number }
+) {
+  const { verses, aliases } = getBibleCorpus();
+  const results: any[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate.reference !== "string") continue;
+    
+    // Match e.g. "Psaume 33:6", "1 Jean 4:8", "Jean 1:1-3", "Éphésiens 2:8-10"
+    const match = candidate.reference.trim().match(/^((?:[1-3]\s+)?[A-Za-zÀ-ÿ\s]+?)\s*(\d+)[\s:\.,]+(\d+)(?:\s*[-–]\s*(\d+))?$/i);
+    if (!match) continue;
+
+    const rawBook = match[1].trim();
+    const chapter = parseInt(match[2], 10);
+    const verseStart = parseInt(match[3], 10);
+    const verseEnd = match[4] ? parseInt(match[4], 10) : verseStart;
+
+    if (isNaN(chapter) || isNaN(verseStart)) continue;
+
+    const normBook = normalizeStr(rawBook);
+    let book = aliases[normBook];
+    if (!book) {
+      for (const [k, b] of Object.entries(aliases)) {
+        if (normBook.startsWith(k) || k.startsWith(normBook)) {
+          book = b;
+          break;
+        }
+      }
+    }
+    if (!book) continue;
+
+    // Filter out duplicate with the source verse
+    if (
+      (source.sourceBookId && book.id === source.sourceBookId && source.sourceChapter === chapter && verseStart <= (source.sourceVerse || -1) && verseEnd >= (source.sourceVerse || -1)) ||
+      (source.sourceBookName && normalizeStr(source.sourceBookName) === normalizeStr(book.name) && source.sourceChapter === chapter && verseStart <= (source.sourceVerse || -1) && verseEnd >= (source.sourceVerse || -1))
+    ) {
+      continue;
+    }
+
+    const uniqueKey = `${book.id}_${chapter}_${verseStart}_${verseEnd}`;
+    if (seenKeys.has(uniqueKey)) continue;
+    seenKeys.add(uniqueKey);
+
+    // Verify presence in the authentic Louis Segond database
+    const chapterKey = `${book.id}_${chapter}`;
+    const chapterVerses = verses[chapterKey];
+    if (!chapterVerses || !Array.isArray(chapterVerses)) continue;
+
+    const matchedVerses = chapterVerses.filter(v => v.verse >= verseStart && v.verse <= verseEnd);
+    if (matchedVerses.length === 0) continue;
+
+    const realText = matchedVerses
+      .map(v => matchedVerses.length > 1 ? `(${v.verse}) ${v.text}` : v.text)
+      .join(" ");
+
+    const canonicalRef = verseStart === verseEnd 
+      ? `${book.name} ${chapter}:${verseStart}` 
+      : `${book.name} ${chapter}:${verseStart}-${verseEnd}`;
+
+    // Normalize type_lien
+    let linkType = candidate.type_lien || "Parallèle";
+    const validTypes = ["Parallèle", "Accomplissement", "Éclairage", "Contraste", "Illustration"];
+    const matchedType = validTypes.find(t => normalizeStr(t) === normalizeStr(linkType));
+    if (matchedType) linkType = matchedType;
+
+    results.push({
+      reference: canonicalRef,
+      book_id: book.id,
+      book_name: book.name,
+      chapter: chapter,
+      verse: verseStart,
+      verse_end: verseEnd,
+      type_lien: linkType,
+      explication: candidate.explication || "Verset apportant un éclairage spirituel profond.",
+      text: realText
+    });
+  }
+
+  return results;
+}
+
 // Dynamic verse fetcher for any of the 66 Books - Strictly from static verified Louis Segond 1910 corpus
 app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -528,36 +766,31 @@ app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promis
       return;
     }
 
-    const biblePath = path.join(process.cwd(), "src/data/bible-classic.json");
-    if (!fs.existsSync(biblePath)) {
-      res.status(503).json({ error: "Le corpus de référence de la Bible Louis Segond 1910 est absent. Veuillez fournir le fichier bible-lsg1910-complete.json." });
-      return;
-    }
-
-    const bibleData = JSON.parse(fs.readFileSync(biblePath, "utf8"));
-    const books = bibleData.books || [];
-    const book = books.find((b: any) => b.name.toLowerCase() === bookName.toLowerCase());
+    const corpus = getBibleCorpus();
+    const cleanReqBook = normalizeStr(String(bookName));
+    const book = corpus.aliases[cleanReqBook] || corpus.books.find(b => normalizeStr(b.name) === cleanReqBook);
+    
     if (!book) {
       res.status(404).json({ error: `Livre "${bookName}" introuvable dans le corpus.` });
       return;
     }
 
     const cacheKey = `${book.id}_${chapterNum}`;
-    const versesList = bibleData.verses?.[cacheKey];
+    const versesList = corpus.verses?.[cacheKey];
 
     if (versesList && Array.isArray(versesList) && versesList.length > 0) {
       res.json({ 
-        bookName,
+        bookName: book.name,
         chapter: Number(chapterNum),
         verses: versesList 
       });
       return;
     }
 
-    // Fallback: If chapter is not present in static local json (books 13-66), generate/retrieve exact Louis Segond 1910 verses via Gemini AI!
+    // Fallback: If chapter is not present in static local json, generate/retrieve exact Louis Segond 1910 verses via Gemini AI!
     if (ai) {
       const response = await generateGeminiContent({
-        contents: `Fournis le texte intégral exact du chapitre ${bookName} ${chapterNum} en français dans la version Louis Segond 1910 (LSG). Tous les versets doivent être inclus avec leur numéro exact et leur texte intégral en français.`,
+        contents: `Fournis le texte intégral exact du chapitre ${book.name} ${chapterNum} en français dans la version Louis Segond 1910 (LSG). Tous les versets doivent être inclus avec leur numéro exact et leur texte intégral en français.`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -583,7 +816,7 @@ app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promis
       const parsed = JSON.parse(response.text);
       if (parsed && Array.isArray(parsed.verses) && parsed.verses.length > 0) {
         res.json({
-          bookName,
+          bookName: book.name,
           chapter: Number(chapterNum),
           verses: parsed.verses
         });
@@ -595,6 +828,95 @@ app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promis
   } catch (error: any) {
     console.error("Error fetching verses from static corpus:", error);
     res.status(500).json({ error: `Impossible de récupérer le chapitre ${req.body.chapterNum} de ${req.body.bookName}: ` + (error.message || "") });
+  }
+});
+
+// "Méditer en profondeur" : Suggérer des versets similaires ou complémentaires via l'IA et la Bible LSG
+app.post("/api/gemini/similar-verses", async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!ai) {
+      res.status(503).json({ error: "L'API Gemini n'est pas configurée. Veuillez vérifier GEMINI_API_KEY dans vos secrets." });
+      return;
+    }
+
+    const { verseText, reference, bookName, chapter, verse, bookId } = req.body;
+    if (!reference && (!bookName || !chapter || !verse)) {
+      res.status(400).json({ error: "Verset source requis (référence et texte)." });
+      return;
+    }
+
+    const sourceRef = reference || `${bookName} ${chapter}:${verse}`;
+
+    // System prompt and instructions strictly as specified by the user
+    const systemInstruction = "Tu es un assistant d'étude biblique. À partir du verset donné, propose 5 versets bibliques réels qui traitent du même thème, le complètent ou l'éclairent. Réponds uniquement en JSON valide selon le format demandé, en français, sans texte supplémentaire. N'invente jamais de référence.";
+
+    const userPrompt = `Voici le verset source :
+Référence : "${sourceRef}"
+Texte : "${verseText || ''}"
+
+Propose 5 versets bibliques réels complémentaires, parallèles, contrastes ou accomplissements.
+Réponds STRICTEMENT sous ce format JSON :
+{
+  "verset_source": "${sourceRef}",
+  "versets_similaires": [
+    {
+      "reference": "Psaume 33:6",
+      "type_lien": "Parallèle",
+      "explication": "Explication courte en une phrase"
+    }
+  ]
+}
+Chaque type_lien doit être l'un de : "Parallèle", "Accomplissement", "Éclairage", "Contraste". N'invente jamais de référence. Ne génère pas le texte du verset, seulement la référence et l'explication.`;
+
+    const response = await generateGeminiContent({
+      contents: userPrompt,
+      model: "gemini-3.8-flash",
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            verset_source: { type: Type.STRING },
+            versets_similaires: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  reference: { type: Type.STRING },
+                  type_lien: { 
+                    type: Type.STRING,
+                    description: "Type de lien : 'Parallèle', 'Accomplissement', 'Éclairage' ou 'Contraste'"
+                  },
+                  explication: { type: Type.STRING, description: "Une phrase courte expliquant le lien avec le verset médité." }
+                },
+                required: ["reference", "type_lien", "explication"]
+              }
+            }
+          },
+          required: ["verset_source", "versets_similaires"]
+        },
+        systemInstruction
+      }
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    const rawCandidates = parsed.versets_similaires || [];
+
+    // Retrieve authentic text from the local Louis Segond 1910 Bible database and verify reference existence
+    const verifiedVerses = parseAndVerifySimilarVerses(rawCandidates, {
+      sourceBookId: Number(bookId),
+      sourceBookName: bookName,
+      sourceChapter: Number(chapter),
+      sourceVerse: Number(verse)
+    });
+
+    res.json({
+      verset_source: sourceRef,
+      versets_similaires: verifiedVerses
+    });
+  } catch (error: any) {
+    console.error("Error in similar-verses endpoint:", error);
+    res.status(500).json({ error: error.message || "Erreur lors de la recherche des versets similaires." });
   }
 });
 

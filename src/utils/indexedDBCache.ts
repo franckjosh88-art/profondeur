@@ -313,6 +313,71 @@ class IndexedExplainCache {
   }
 
   /**
+   * Bulk stores the entire Bible (all 1189 chapters) in IndexedDB in a single performant transaction
+   */
+  public async bulkStoreFullBible(
+    versesMap: Record<string, any[]>,
+    translation: string = 'LSG 1910',
+    onProgress?: (stored: number, total: number) => void
+  ): Promise<number> {
+    const db = await this.init();
+    const entries = Object.entries(versesMap);
+    const total = entries.length;
+
+    return new Promise((resolve, reject) => {
+      try {
+        const transaction = db.transaction(VERSES_STORE_NAME, 'readwrite');
+        const store = transaction.objectStore(VERSES_STORE_NAME);
+        let storedCount = 0;
+
+        for (const [key, verses] of entries) {
+          const [bIdStr, chStr] = key.split('_');
+          const bookId = parseInt(bIdStr, 10);
+          const chapter = parseInt(chStr, 10);
+
+          // Store with standard key e.g. "1_1"
+          store.put({
+            key,
+            bookId,
+            chapter,
+            translation,
+            verses,
+            timestamp: Date.now()
+          });
+
+          // Also store with "local_1_1" key for local reader matching
+          store.put({
+            key: `local_${key}`,
+            bookId,
+            chapter,
+            translation,
+            verses,
+            timestamp: Date.now()
+          });
+
+          storedCount++;
+          if (onProgress && storedCount % 50 === 0) {
+            onProgress(storedCount, total);
+          }
+        }
+
+        transaction.oncomplete = () => {
+          if (onProgress) onProgress(storedCount, total);
+          resolve(storedCount);
+        };
+
+        transaction.onerror = () => {
+          console.error("bulkStoreFullBible transaction error:", transaction.error);
+          reject(transaction.error);
+        };
+      } catch (err) {
+        console.error("bulkStoreFullBible exception:", err);
+        reject(err);
+      }
+    });
+  }
+
+  /**
    * Returns statistics about cached chapters for display in the UI
    */
   public async getVersesCacheStats(): Promise<{ count: number; keys: string[] }> {

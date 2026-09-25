@@ -20,7 +20,13 @@ import {
   Sparkles,
   Flame,
   Layers,
-  Filter
+  Filter,
+  Clock,
+  Timer,
+  Plus,
+  Minus,
+  BookOpen,
+  Crown
 } from 'lucide-react';
 import { Book as BibleBook, ReadingHistory } from '../types/bible';
 import { ReadingPlan, PlanUserProgress, ReadingPlanDay } from '../types/challenges';
@@ -31,6 +37,15 @@ import { AiReadingPlanModal } from './AiReadingPlanModal';
 interface ReadingChallengesProps {
   readingHistory: ReadingHistory[];
   onNavigateToChapter: (bookId: number, chapterNum: number) => void;
+  dailyGoalPercent?: number;
+  dailyGoalType?: 'chapters' | 'time';
+  todayReadingsCount?: number;
+  dailyGoalTarget?: number;
+  readingTimeToday?: number;
+  dailyTimeGoal?: number;
+  setReadingTimeToday?: React.Dispatch<React.SetStateAction<number>>;
+  setDailyTimeGoal?: (goal: number) => void;
+  onNavigateToReader?: () => void;
 }
 
 const DEFAULT_PLANS: ReadingPlan[] = [
@@ -105,9 +120,34 @@ const isDayDone = (prog: PlanUserProgress | undefined, day: ReadingPlanDay): boo
          prog.completedChapters.includes(`${day.bookId}:${day.chapter}`);
 };
 
+// Helper to format reading duration into human readable string
+const formatReadingDuration = (totalSeconds: number): string => {
+  if (totalSeconds <= 0) return '0 min';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes} min ${seconds} s` : `${minutes} min`;
+  }
+  return `${seconds} s`;
+};
+
 export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   readingHistory,
-  onNavigateToChapter
+  onNavigateToChapter,
+  dailyGoalPercent,
+  dailyGoalType = 'chapters',
+  todayReadingsCount = 0,
+  dailyGoalTarget = 3,
+  readingTimeToday = 0,
+  dailyTimeGoal = 15,
+  setReadingTimeToday,
+  setDailyTimeGoal,
+  onNavigateToReader
 }) => {
   // Navigation tabs within Challenges component
   const [activeSegment, setActiveSegment] = useState<'joined' | 'discover'>('joined');
@@ -145,6 +185,46 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
 
   // Computed all plans list
   const ALL_PLANS = [...DEFAULT_PLANS, ...customPlans];
+
+  // Reading Time computations for daily goal tracking
+  const timeGoalMin = dailyTimeGoal || 15;
+  const timeGoalSec = timeGoalMin * 60;
+  const timeProgressRatio = timeGoalSec > 0 ? (readingTimeToday || 0) / timeGoalSec : 0;
+  const timeGoalPercent = Math.min(100, Math.round(timeProgressRatio * 100));
+  const isTimeGoalReached = timeGoalPercent >= 100;
+  const remainingSeconds = Math.max(0, timeGoalSec - (readingTimeToday || 0));
+  const remainingMinutes = Math.ceil(remainingSeconds / 60);
+
+  // Quick manual time addition (+5 min, +15 min)
+  const handleAddQuickTime = (mins: number) => {
+    if (setReadingTimeToday) {
+      setReadingTimeToday(prev => {
+        const next = prev + (mins * 60);
+        const todayStr = new Date().toDateString();
+        let durations: Record<string, number> = {};
+        const savedDurations = localStorage.getItem('bible_reading_durations_by_day');
+        if (savedDurations) {
+          try {
+            durations = JSON.parse(savedDurations);
+          } catch (_) {}
+        }
+        durations[todayStr] = next;
+        localStorage.setItem('bible_reading_durations_by_day', JSON.stringify(durations));
+        return next;
+      });
+      setToastMessage(`⏱️ +${mins} min de lecture ajoutées au cumul journalier !`);
+    }
+  };
+
+  // Quick goal adjustment
+  const handleAdjustGoal = (deltaMins: number) => {
+    if (setDailyTimeGoal) {
+      const next = Math.max(5, Math.min(180, timeGoalMin + deltaMins));
+      setDailyTimeGoal(next);
+      localStorage.setItem('bible_daily_goal_time', String(next));
+      setToastMessage(`🎯 Objectif temporel ajusté à ${next} min par jour.`);
+    }
+  };
 
   // Load from localStorage
   useEffect(() => {
@@ -816,6 +896,212 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
         /* STANDARD SEGMENTED NAVIGATION SCREEN (Mes Défis / Découvrir) */
         <div className="space-y-4">
           
+          {/* Visual Daily Reading Time Indicator at the top of Challenges Section */}
+          <div className="bg-[#12100c] border border-[#2e2a1e] rounded-2xl p-4 sm:p-5 shadow-soft relative overflow-hidden">
+            {/* Ambient background glows */}
+            <div className={`absolute top-0 right-0 w-48 h-48 rounded-full blur-3xl pointer-events-none transition-all duration-700 ${
+              isTimeGoalReached ? 'bg-emerald-500/10' : timeGoalPercent > 0 ? 'bg-[#c9a84c]/10' : 'bg-transparent'
+            }`} />
+
+            {/* Header row: Title, Icon, Status Badge */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-[#221e16]">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 transition-colors ${
+                  isTimeGoalReached 
+                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' 
+                    : timeGoalPercent > 0 
+                      ? 'bg-[#c9a84c]/15 border-[#c9a84c]/30 text-[#dfba5a]' 
+                      : 'bg-[#181510] border-[#2e2a1e] text-[#6b6355]'
+                }`}>
+                  <Timer className={`w-4 h-4 ${timeGoalPercent > 0 && !isTimeGoalReached ? 'animate-pulse' : ''}`} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 text-[9px] font-mono uppercase font-bold tracking-wider text-[#c9a84c]">
+                    <span>Temps de Lecture Quotidien</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-ping" />
+                  </div>
+                  <h4 className="text-xs font-serif font-extrabold text-[#e8e0d0] tracking-tight">
+                    Durée cumulée par rapport à l'objectif temporel
+                  </h4>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div className="flex items-center gap-2">
+                <span className={`text-[9.5px] font-mono font-bold uppercase px-2.5 py-1 rounded-full border transition-all ${
+                  isTimeGoalReached 
+                    ? 'text-emerald-300 bg-emerald-500/15 border-emerald-500/35 shadow-[0_0_12px_rgba(16,185,129,0.25)]' 
+                    : timeGoalPercent > 0
+                      ? 'text-[#dfba5a] bg-[#c9a84c]/15 border-[#c9a84c]/30'
+                      : 'text-[#8c8270] bg-[#181510] border-[#2e2a1e]'
+                }`}>
+                  {isTimeGoalReached 
+                    ? `👑 Objectif Atteint (${timeGoalPercent}%)` 
+                    : timeGoalPercent > 0 
+                      ? `⏱️ En Cours (${timeGoalPercent}%)` 
+                      : '📖 À Débuter (0%)'
+                  }
+                </span>
+              </div>
+            </div>
+
+            {/* Core Metrics: Radial Gauge + Accumulated Duration + Target */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 py-3.5">
+              <div className="flex items-center gap-4">
+                {/* SVG Radial Circular Gauge */}
+                <div className="relative w-16 h-16 sm:w-18 sm:h-18 shrink-0 flex items-center justify-center">
+                  <svg className="w-16 h-16 sm:w-18 sm:h-18 transform -rotate-90" viewBox="0 0 60 60">
+                    <circle cx="30" cy="30" r="24" fill="transparent" stroke="#1f1b14" strokeWidth="5" />
+                    <circle 
+                      cx="30" cy="30" r="24" fill="transparent" 
+                      stroke={isTimeGoalReached ? '#10b981' : '#c9a84c'} 
+                      strokeWidth="5" 
+                      strokeLinecap="round"
+                      strokeDasharray="150.8"
+                      strokeDashoffset={150.8 - (timeGoalPercent / 100) * 150.8}
+                      className="transition-all duration-700 ease-out"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    {isTimeGoalReached ? (
+                      <Crown className="w-3.5 h-3.5 text-emerald-400 mb-0.5 animate-bounce" />
+                    ) : (
+                      <Clock className="w-3.5 h-3.5 text-[#c9a84c] mb-0.5" />
+                    )}
+                    <span className="font-mono font-black text-xs text-[#e8e0d0] leading-none">
+                      {timeGoalPercent}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Duration & Target Readout */}
+                <div>
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-mono font-black text-2xl sm:text-3xl text-[#e8e0d0] tracking-tight">
+                      {formatReadingDuration(readingTimeToday)}
+                    </span>
+                    <span className="text-xs font-mono text-[#8c8270]">
+                      / {timeGoalMin} min définies
+                    </span>
+                  </div>
+
+                  <p className="text-xs font-serif text-[#a0947f] mt-1 leading-snug">
+                    {isTimeGoalReached ? (
+                      <span className="text-emerald-300 font-medium">
+                        ✨ Félicitations ! Votre temps de méditation sacré est accompli pour aujourd'hui.
+                      </span>
+                    ) : readingTimeToday > 0 ? (
+                      <span>
+                        Encore <strong className="text-[#c9a84c] font-mono">{remainingMinutes} min</strong> pour valider votre objectif temporel.
+                      </span>
+                    ) : (
+                      <span>
+                        Aucune durée enregistrée aujourd'hui. Commencez à lire pour lancer le chronomètre.
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Controls: Add time, Adjust goal, Continue Reading */}
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 self-start md:self-center">
+                {/* Manual Time Quick-Add */}
+                {setReadingTimeToday && (
+                  <div className="flex items-center gap-1 bg-[#181510] border border-[#2e2a1e] rounded-xl p-1" title="Ajouter du temps de lecture papier ou audio">
+                    <span className="text-[9px] font-mono text-[#6b6355] px-1">+Temps:</span>
+                    <button
+                      onClick={() => handleAddQuickTime(5)}
+                      className="px-2 py-1 text-[10px] font-mono font-bold text-[#c9a84c] hover:bg-[#c9a84c]/10 rounded-lg transition cursor-pointer active:scale-95"
+                      title="Ajouter 5 minutes"
+                    >
+                      +5m
+                    </button>
+                    <button
+                      onClick={() => handleAddQuickTime(15)}
+                      className="px-2 py-1 text-[10px] font-mono font-bold text-[#c9a84c] hover:bg-[#c9a84c]/10 rounded-lg transition cursor-pointer active:scale-95"
+                      title="Ajouter 15 minutes"
+                    >
+                      +15m
+                    </button>
+                  </div>
+                )}
+
+                {/* Goal Adjuster Controls */}
+                {setDailyTimeGoal && (
+                  <div className="flex items-center gap-1 bg-[#181510] border border-[#2e2a1e] rounded-xl p-1" title="Ajuster l'objectif quotidien">
+                    <button
+                      onClick={() => handleAdjustGoal(-5)}
+                      className="w-6 h-6 flex items-center justify-center text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#252017] rounded-lg transition cursor-pointer active:scale-95"
+                      title="Diminuer l'objectif de 5 min"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="text-[10px] font-mono font-bold text-[#e8e0d0] px-1">
+                      {timeGoalMin}m
+                    </span>
+                    <button
+                      onClick={() => handleAdjustGoal(5)}
+                      className="w-6 h-6 flex items-center justify-center text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#252017] rounded-lg transition cursor-pointer active:scale-95"
+                      title="Augmenter l'objectif de 5 min"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Continue / Start Reading Button */}
+                {onNavigateToReader && (
+                  <button
+                    onClick={onNavigateToReader}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#c9a84c] hover:bg-[#dfba5a] text-[#0d0b07] font-serif font-bold text-xs rounded-xl transition cursor-pointer shadow-soft active:scale-95"
+                    title="Basculer vers la lecture biblique"
+                  >
+                    <Play className="w-3 h-3 fill-[#0d0b07]" />
+                    <span>Lire</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Horizontal Linear Progress Bar with Milestones */}
+            <div className="mt-1 space-y-1.5">
+              <div className="w-full h-2 bg-[#0d0b07] border border-[#2e2a1e] rounded-full overflow-hidden relative">
+                <div 
+                  className={`h-full rounded-full transition-all duration-700 ease-out ${
+                    isTimeGoalReached 
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_12px_rgba(16,185,129,0.5)]' 
+                      : 'bg-gold-gradient shadow-[0_0_10px_rgba(201,168,76,0.3)]'
+                  }`}
+                  style={{ width: `${timeGoalPercent}%` }}
+                />
+              </div>
+
+              {/* Milestones labels */}
+              <div className="flex justify-between items-center text-[9px] font-mono text-[#6b6355]">
+                <span>0 min</span>
+                <span>25% ({Math.round(timeGoalMin * 0.25)}m)</span>
+                <span>50% ({Math.round(timeGoalMin * 0.5)}m)</span>
+                <span>75% ({Math.round(timeGoalMin * 0.75)}m)</span>
+                <span className={`font-bold ${isTimeGoalReached ? 'text-emerald-400' : 'text-[#c9a84c]'}`}>
+                  🎯 {timeGoalMin} min (100%)
+                </span>
+              </div>
+            </div>
+
+            {/* Secondary Footer Info: Chapter reading complement */}
+            {todayReadingsCount !== undefined && dailyGoalTarget !== undefined && (
+              <div className="mt-3 pt-2.5 border-t border-[#1d1912] flex flex-wrap items-center justify-between text-[10px] font-mono text-[#8c8270] gap-2">
+                <span className="flex items-center gap-1.5">
+                  <BookOpen className="w-3 h-3 text-[#c9a84c]" />
+                  <span>Chapitres lus aujourd'hui : <strong className="text-[#e8e0d0]">{todayReadingsCount}</strong> / {dailyGoalTarget}</span>
+                </span>
+                <span className="text-[9px] italic text-[#6b6355]">
+                  {formatReadingDuration(readingTimeToday)} cumulées en lecture aujourd'hui
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* Custom Luxury Tab Headers */}
           <div className="flex border-b border-[#2e2a1e] pb-0.5">
             <button

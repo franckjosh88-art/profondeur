@@ -158,6 +158,20 @@ export function waitForSpeechVoices(timeoutMs: number = 800): Promise<SpeechSynt
 /**
  * Filter and sort available French voices with priority for high-fidelity/natural voices.
  */
+export function isHighQualityVoice(voice: SpeechSynthesisVoice): boolean {
+  if (!voice) return false;
+  const name = voice.name.toLowerCase();
+  return (
+    name.includes('natural') || 
+    name.includes('neural') || 
+    name.includes('online') || 
+    name.includes('premium') || 
+    name.includes('enhanced') || 
+    name.includes('siri') ||
+    name.includes('google')
+  );
+}
+
 export function getSortedFrenchVoices(allVoices?: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
   if (typeof window === 'undefined' || !window.speechSynthesis) return [];
   const list = allVoices || window.speechSynthesis.getVoices() || [];
@@ -168,19 +182,25 @@ export function getSortedFrenchVoices(allVoices?: SpeechSynthesisVoice[]): Speec
     const aName = a.name.toLowerCase();
     const bName = b.name.toLowerCase();
 
-    // Natural / Neural / Premium / High quality voices first
-    const aIsNatural = aName.includes('natural') || aName.includes('neural') || aName.includes('premium') || aName.includes('online');
-    const bIsNatural = bName.includes('natural') || bName.includes('neural') || bName.includes('premium') || bName.includes('online');
+    // 1. Demote robotic legacy eSpeak voices to the very bottom
+    const aIsEspeak = aName.includes('espeak') || aName.includes('mbrola');
+    const bIsEspeak = bName.includes('espeak') || bName.includes('mbrola');
+    if (aIsEspeak && !bIsEspeak) return 1;
+    if (!aIsEspeak && bIsEspeak) return -1;
+
+    // 2. Natural / Neural / Studio / Premium voices first (e.g. Edge Natural, Apple Enhanced)
+    const aIsNatural = aName.includes('natural') || aName.includes('neural') || aName.includes('premium') || aName.includes('enhanced') || aName.includes('online');
+    const bIsNatural = bName.includes('natural') || bName.includes('neural') || bName.includes('premium') || bName.includes('enhanced') || bName.includes('online');
     if (aIsNatural && !bIsNatural) return -1;
     if (!aIsNatural && bIsNatural) return 1;
 
-    // Google / Cloud voices next
-    const aIsGoogle = aName.includes('google');
-    const bIsGoogle = bName.includes('google');
-    if (aIsGoogle && !bIsGoogle) return -1;
-    if (!aIsGoogle && bIsGoogle) return 1;
+    // 3. Google Cloud / Siri voices next
+    const aIsGoogleOrSiri = aName.includes('google') || aName.includes('siri');
+    const bIsGoogleOrSiri = bName.includes('google') || bName.includes('siri');
+    if (aIsGoogleOrSiri && !bIsGoogleOrSiri) return -1;
+    if (!aIsGoogleOrSiri && bIsGoogleOrSiri) return 1;
 
-    // fr-FR preferred over other variants
+    // 4. fr-FR preferred over other variants
     const aIsFrFr = (a.lang || '').toLowerCase().includes('fr-fr');
     const bIsFrFr = (b.lang || '').toLowerCase().includes('fr-fr');
     if (aIsFrFr && !bIsFrFr) return -1;
@@ -188,6 +208,70 @@ export function getSortedFrenchVoices(allVoices?: SpeechSynthesisVoice[]): Speec
 
     return a.name.localeCompare(b.name);
   });
+}
+
+/**
+ * Clean and format biblical scripture for crystal-clear, fluid, melodious French speech.
+ * Eliminates typographical artifacts, Strong codes, ligatures that cause TTS crashes,
+ * and handles natural orator pauses so the reading flows peacefully like a sacred audiobook.
+ */
+export function cleanBiblicalTextForSpeech(
+  rawText: string,
+  options?: {
+    verseNumber?: number;
+    announceVerseNumber?: boolean;
+    isChapterStart?: boolean;
+    chapterNumber?: number;
+  }
+): string {
+  if (!rawText) return '';
+
+  let text = rawText;
+
+  // 1. Remove Strong concordance codes e.g. [H1234], [G5678]
+  text = text.replace(/\[[HG]\d+\]/g, ' ');
+
+  // 2. Remove editorial brackets e.g. [ou ...] or footnotes
+  text = text.replace(/\[.*?\]/g, ' ');
+
+  // 3. Normalize French ligatures that crash or cause phoneme stutter in SpeechSynthesis engines:
+  // œ -> oe (cœur -> coeur, sœur -> soeur, vœu -> voeu, œuvre -> oeuvre)
+  text = text.replace(/œ/g, 'oe').replace(/Œ/g, 'Oe');
+  text = text.replace(/æ/g, 'ae').replace(/Æ/g, 'Ae');
+
+  // 4. Handle musical / liturgical meditation pause "(Sélah)" in Psalms
+  text = text.replace(/\(S[eé]lah\)/gi, ', pause de méditation, ');
+
+  // 5. Replace French quotes « » and English curly quotes with soft pause punctuation
+  text = text.replace(/[«»"“]/g, ' ');
+
+  // 6. Replace long em-dashes and en-dashes with commas for natural orator breathing
+  text = text.replace(/[—–]/g, ', ');
+
+  // 7. Clean up weird punctuation repeats (e.g. "?!", "...", "::")
+  text = text.replace(/\.{2,}/g, '.');
+  text = text.replace(/\?{2,}/g, '?');
+  text = text.replace(/!{2,}/g, '!');
+
+  // 8. Clean up parentheses around cross-references
+  text = text.replace(/\([A-Z][a-z]+ \d+:\d+\)/g, ' ');
+
+  // 9. Replace abbreviations commonly stumbling in French TTS
+  text = text.replace(/\b1er\b/gi, 'premier');
+  text = text.replace(/\b1re\b/gi, 'première');
+  text = text.replace(/\b2e\b/gi, 'deuxième');
+  text = text.replace(/\b3e\b/gi, 'troisième');
+
+  // 10. Normalize whitespace
+  text = text.replace(/\s+/g, ' ').trim();
+
+  // 11. Format with or without verse announcement for fluid sacred listening
+  if (options?.announceVerseNumber && options.verseNumber) {
+    return `Verset ${options.verseNumber}. ${text}`;
+  }
+
+  // Fluid audiobook style: natural flow directly into the scripture text
+  return text;
 }
 
 export interface VoiceResolutionResult {
@@ -203,7 +287,7 @@ export interface VoiceResolutionResult {
 /**
  * Strictly resolves the best French voice based on user configuration.
  * Never returns a non-French voice.
- * Never falls back to English.
+ * Avoids aggressive pitch distortion that causes robotic crackling and clipping.
  */
 export function resolveStrictFrenchVoice(options: {
   gender: 'auto' | 'male' | 'female';
@@ -239,7 +323,7 @@ export function resolveStrictFrenchVoice(options: {
         genderMatched: gender === 'auto' || manualGender === gender,
         fallbackApplied: false,
         warningMessage: null,
-        recommendedPitch: basePitch
+        recommendedPitch: Math.max(0.95, Math.min(1.05, basePitch))
       };
     }
   }
@@ -256,12 +340,13 @@ export function resolveStrictFrenchVoice(options: {
         genderMatched: true,
         fallbackApplied: false,
         warningMessage: null,
-        recommendedPitch: Math.max(basePitch, 1.05) // Ensure clear, pleasant feminine tone
+        // Keep pitch completely natural to preserve acoustic timbre without distortion
+        recommendedPitch: Math.max(0.98, Math.min(1.02, basePitch))
       };
     }
 
     // Fallback: If no explicit female French voice is installed on device
-    // Pick the best available French voice and apply pitch shifting for female tone
+    // Pick the best available French voice and keep pitch gentle (1.02 max, NOT 1.25 which causes crackling)
     const fallbackFrVoice = sortedFr[0];
     const resolvedGender = classifyFrenchVoiceGender(fallbackFrVoice);
 
@@ -271,8 +356,8 @@ export function resolveStrictFrenchVoice(options: {
       genderResolved: resolvedGender,
       genderMatched: false,
       fallbackApplied: true,
-      warningMessage: "Votre appareil ne possède pas de voix féminine française native. La lecture est adaptée avec un timbre féminin ajusté sur la voix française disponible.",
-      recommendedPitch: 1.25 // Slightly elevated pitch creates an authentic female voice timbre
+      warningMessage: "Votre appareil ne possède pas de voix féminine française native. La lecture utilise la meilleure voix française disponible avec une intonation naturelle.",
+      recommendedPitch: 1.02
     };
   }
 
@@ -288,11 +373,11 @@ export function resolveStrictFrenchVoice(options: {
         genderMatched: true,
         fallbackApplied: false,
         warningMessage: null,
-        recommendedPitch: Math.min(basePitch, 0.95) // Deep, solemn masculine tone
+        recommendedPitch: Math.max(0.96, Math.min(1.0, basePitch))
       };
     }
 
-    // Fallback: Pick best available French voice and adjust pitch slightly lower
+    // Fallback: Pick best available French voice with natural pitch (0.98, NOT 0.88 which muffles/distorts)
     const fallbackFrVoice = sortedFr[0];
     const resolvedGender = classifyFrenchVoiceGender(fallbackFrVoice);
 
@@ -302,14 +387,14 @@ export function resolveStrictFrenchVoice(options: {
       genderResolved: resolvedGender,
       genderMatched: false,
       fallbackApplied: true,
-      warningMessage: "Votre appareil ne possède pas de voix masculine française explicite. La lecture est adaptée avec un timbre masculin ajusté.",
-      recommendedPitch: 0.88 // Deep masculine timbre
+      warningMessage: "Votre appareil ne possède pas de voix masculine française explicite. La lecture utilise la voix française disponible avec son timbre naturel.",
+      recommendedPitch: 0.98
     };
   }
 
-  // 4. 'auto' mode: Prioritize high-quality French voice (male/deep preferred for solemn biblical reading)
+  // 4. 'auto' mode: Prioritize high-quality natural/neural French voice
   const solemnMaleVoice = sortedFr.find(v => classifyFrenchVoiceGender(v) === 'male');
-  const chosenVoice = solemnMaleVoice || sortedFr[0];
+  const chosenVoice = sortedFr.find(v => isHighQualityVoice(v)) || solemnMaleVoice || sortedFr[0];
   const chosenGender = classifyFrenchVoiceGender(chosenVoice);
 
   return {
@@ -319,6 +404,6 @@ export function resolveStrictFrenchVoice(options: {
     genderMatched: true,
     fallbackApplied: false,
     warningMessage: null,
-    recommendedPitch: basePitch
+    recommendedPitch: Math.max(0.96, Math.min(1.04, basePitch))
   };
 }

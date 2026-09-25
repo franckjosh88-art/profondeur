@@ -72,3 +72,26 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error Details:', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+/**
+ * Recursively cleans an object or payload before persisting to Cloud Firestore.
+ * Firestore strictly forbids `undefined` field values.
+ * This function recursively strips any keys whose value is `undefined`,
+ * while keeping valid primitives, `null`, arrays, and date objects.
+ */
+export function cleanFirestoreData<T extends Record<string, any>>(obj: T): Record<string, any> {
+  if (!obj || typeof obj !== 'object') return obj;
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      result[key] = cleanFirestoreData(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
