@@ -631,7 +631,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         e.stopPropagation();
         onTap();
       }}
-      className={`verse-container-item group relative py-2 px-3 transition-all duration-200 cursor-pointer select-none border-b border-[#2e2a1e]/10 ${
+      className={`verse-container-item group relative py-2.5 px-3 transition-all duration-200 cursor-pointer select-none border-b border-[#2e2a1e]/15 ${
         (isLastReadTarget || isLastRead)
           ? 'bg-[#c9a84c]/10 border-l-2 border-[#c9a84c] rounded-r-xl shadow-[0_0_15px_rgba(201,168,76,0.15)] ring-1 ring-[#c9a84c]/30 my-1'
           : isSelected 
@@ -641,12 +641,16 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
               : 'border-l-2 border-transparent hover:bg-white/[0.01]'
       }`}
       style={{
+        width: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
         paddingLeft: '12px',
         paddingRight: '12px',
         paddingTop: '8px',
         paddingBottom: '8px',
       }}
     >
+      {/* Golden Banner for Last Read Position */}
       {(isLastReadTarget || isLastRead) && (
         <div className="mb-2 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#c9a84c] text-[#0d0b07] font-mono text-[9px] font-extrabold uppercase tracking-wider w-fit shadow-md animate-fade-in">
           <Bookmark className="w-3 h-3 fill-current" />
@@ -655,204 +659,316 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
         </div>
       )}
 
-      <div className="flex items-start gap-2.5">
-        {/* Verse Number aligned elegant top-left superscript style with optional Note icon & Golden Bookmark */}
-        <div className="flex flex-col items-center gap-1 select-none font-mono text-[11px] font-extrabold text-[#c9a84c] mt-1 pr-0.5 flex-shrink-0">
-          <span>{verse.verse}</span>
-          {(isLastRead || isLastReadTarget) && (
-            <div title="Dernier verset lu" className="p-0.5 rounded-full bg-[#c9a84c]/20 flex items-center justify-center animate-pulse">
-              <Bookmark className="w-3 h-3 text-[#c9a84c] fill-[#c9a84c]" />
-            </div>
-          )}
-          {hasNote && (() => {
-            if (emotionAnalysis?.detectedEmotion) {
-              const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
-              return (
-                <div 
-                  className={`p-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} animate-fade-in`}
-                  title={`Note spirituelle (${emotionAnalysis.detectedEmotion})`}
-                >
-                  {renderEmotionIcon(meta.iconName, "w-3 h-3")}
-                </div>
-              );
-            }
-            return (
-              <FileText className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" title="Ce verset contient une note personnelle" />
-            );
-          })()}
-        </div>
-
-        {/* Verse Content Text (crème color, elegant Lora screen-reading look) */}
-        <div 
-          className="flex-1 text-luxury-text-primary font-reading pr-2" 
+      {/* 100% Full-Width Verse Text Container (mobile-first, single paragraph, inline verse number) */}
+      <div className="w-full min-w-0" style={{ width: '100%', minWidth: 0 }}>
+        <p 
+          className="text-left font-reading text-[#e8e0d0] select-text" 
           style={{ 
-            fontSize: `${textSize}px`, 
-            lineHeight: `${lineHeight}px`,
+            width: '100%',
+            minWidth: 0,
+            fontSize: textSize ? `${textSize}px` : '18px', 
+            lineHeight: lineHeight ? `${lineHeight}px` : '1.7',
+            textAlign: 'left',
+            overflowWrap: 'break-word',
+            wordBreak: 'normal',
           }}
         >
-          <div>
-            {textParts.map((part, index) => {
-              if (part.type === 'strong') {
+          {/* Verse Number inline inside paragraph (small, bold, golden #c9a84c) */}
+          <span 
+            className="verse-num font-mono font-extrabold text-[#c9a84c] select-none text-[11px] mr-1.5 align-baseline inline-flex items-center gap-1"
+            style={{ color: '#c9a84c' }}
+          >
+            <span>{verse.verse}</span>
+            {(isLastRead || isLastReadTarget) && (
+              <Bookmark className="w-2.5 h-2.5 text-[#c9a84c] fill-[#c9a84c] inline-block" />
+            )}
+            {hasNote && (() => {
+              if (emotionAnalysis?.detectedEmotion) {
+                const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
                 return (
-                  <button
-                    key={index}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onStrongClick(part.content);
-                    }}
-                    className="mx-1 px-1.5 py-0.5 bg-[#1a1712] hover:bg-[#c9a84c]/20 text-[#c9a84c] rounded font-mono text-[10px] font-bold align-super border border-[#2e2a1e] transition cursor-pointer"
-                    title="Consulter l'étymologie originale"
+                  <span 
+                    className={`inline-flex items-center justify-center p-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass}`}
+                    title={`Note spirituelle (${emotionAnalysis.detectedEmotion})`}
                   >
-                    {part.content}
-                  </button>
+                    {renderEmotionIcon(meta.iconName, "w-2.5 h-2.5")}
+                  </span>
                 );
               }
               return (
-                <span key={index}>
-                  {highlightText(part.content, highlightKeyword)}
-                </span>
+                <FileText className="w-2.5 h-2.5 text-[#c9a84c] inline-block" title="Ce verset contient une note personnelle" />
               );
-            })}
-          </div>
+            })()}
+          </span>
 
-          {/* Elegant preview of personal note below the text */}
-          {(hasNote || noteAudio) && !isSelected && (
-            <div className="mt-2 flex flex-col gap-1.5 border-l border-[#c9a84c]/40 pl-3">
-              {noteText && (
-                <div className="space-y-1">
-                  <p className="text-[11.5px] text-[#c9a84c]/85 italic">« {noteText} »</p>
-                  {emotionAnalysis?.detectedEmotion && (() => {
-                    const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
-                    return (
-                      <div className={`inline-flex items-center gap-1.5 text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none animate-fade-in`}>
-                        {renderEmotionIcon(meta.iconName, "w-2.5 h-2.5")}
-                        <span>{emotionAnalysis.detectedEmotion}</span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-              {noteAudio && (
-                <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2 mt-0.5 select-none">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isPlaying && audioPlayer) {
-                        audioPlayer.pause();
-                        setIsPlaying(false);
+          {textParts.map((part, index) => {
+            if (part.type === 'strong') {
+              return (
+                <button
+                  key={index}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStrongClick(part.content);
+                  }}
+                  className="mx-1 px-1.5 py-0.5 bg-[#1a1712] hover:bg-[#c9a84c]/20 text-[#c9a84c] rounded font-mono text-[10px] font-bold align-baseline border border-[#2e2a1e] transition cursor-pointer"
+                  title="Consulter l'étymologie originale"
+                >
+                  {part.content}
+                </button>
+              );
+            }
+            return (
+              <span key={index}>
+                {highlightText(part.content, highlightKeyword)}
+              </span>
+            );
+          })}
+        </p>
+
+        {/* Note preview if any and verse is not currently selected */}
+        {(hasNote || noteAudio) && !isSelected && (
+          <div className="mt-2 flex flex-col gap-1.5 border-l border-[#c9a84c]/40 pl-3">
+            {noteText && (
+              <div className="space-y-1">
+                <p className="text-[11.5px] text-[#c9a84c]/85 italic">« {noteText} »</p>
+                {emotionAnalysis?.detectedEmotion && (() => {
+                  const meta = getEmotionMeta(emotionAnalysis.detectedEmotion);
+                  return (
+                    <div className={`inline-flex items-center gap-1.5 text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded-full border ${meta.badgeBg} ${meta.colorClass} ${meta.borderClass} select-none animate-fade-in`}>
+                      {renderEmotionIcon(meta.iconName, "w-2.5 h-2.5")}
+                      <span>{emotionAnalysis.detectedEmotion}</span>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+            {noteAudio && (
+              <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2 mt-0.5 select-none">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isPlaying && audioPlayer) {
+                      audioPlayer.pause();
+                      setIsPlaying(false);
+                    } else {
+                      if (audioPlayer) {
+                        audioPlayer.currentTime = 0;
+                        audioPlayer.play().catch(err => console.error(err));
+                        setIsPlaying(true);
                       } else {
-                        if (audioPlayer) {
-                          audioPlayer.currentTime = 0;
-                          audioPlayer.play().catch(err => console.error(err));
-                          setIsPlaying(true);
-                        } else {
-                          const player = new Audio(noteAudio);
-                          player.onended = () => setIsPlaying(false);
-                          player.play().catch(err => console.error(err));
-                          setAudioPlayer(player);
-                          setIsPlaying(true);
-                        }
+                        const player = new Audio(noteAudio);
+                        player.onended = () => setIsPlaying(false);
+                        player.play().catch(err => console.error(err));
+                        setAudioPlayer(player);
+                        setIsPlaying(true);
                       }
-                    }}
-                    className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1a1712] border border-[#2e2a1e] hover:border-[#c9a84c]/40 rounded-lg text-[9px] font-mono uppercase tracking-wider text-[#c9a84c] cursor-pointer hover:bg-[#201b13] transition"
-                  >
-                    {isPlaying ? (
-                      <>
-                        <Pause className="w-2.5 h-2.5 fill-current" />
-                        <span>Pause</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-2.5 h-2.5 fill-current" />
-                        <span>Écouter Réflexion</span>
-                      </>
-                    )
                     }
-                  </button>
-                  <span className="text-[8px] font-mono text-[#6b6355] uppercase">Vocale personnelle</span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Quick bookmark/favorite immediate action button with optional folder categorization */}
-        <div className="flex flex-wrap items-center gap-1.5 self-start">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleFavorite(verse);
-            }}
-            className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg border transition-all duration-200 cursor-pointer select-none ${
-              isFavorite 
-                ? 'bg-[#c9a84c]/15 text-[#c9a84c] border-[#c9a84c]/50 shadow-[0_0_12px_rgba(201,168,76,0.25)] opacity-100 font-bold' 
-                : 'bg-[#16130e] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e] hover:border-[#c9a84c]/40 opacity-80 group-hover:opacity-100 focus:opacity-100'
-            }`}
-            title={isFavorite ? "Retirer des favoris" : "Ajouter aux favoris"}
-          >
-            <Heart 
-              className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                isFavorite ? 'scale-110 fill-[#c9a84c] text-[#c9a84c]' : 'group-hover:scale-105'
-              }`} 
-            />
-            <span className="text-[10px] font-mono tracking-wider uppercase">
-              Favori
-            </span>
-          </button>
-
-          {/* If the verse is marked as favorite, allow organizing into a thematic folder directly */}
-          {isFavorite && bookmarkFolders && bookmarkFolders.length > 0 && onAssignFavoriteFolder && (
-            <div className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()}>
-              <select
-                value={favoriteFolderId || ''}
-                onChange={(e) => {
-                  const newFId = e.target.value || undefined;
-                  const fObj = newFId ? bookmarkFolders.find(f => f.id === newFId) : undefined;
-                  onAssignFavoriteFolder(verse, newFId, fObj?.name);
-                }}
-                className="bg-[#16130e] border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-[9.5px] font-mono rounded-lg px-2 py-1 outline-none cursor-pointer max-w-[125px] truncate transition"
-                title="Classer ce verset dans un dossier thématique"
-              >
-                <option value="">📁 Dossier...</option>
-                {bookmarkFolders.map(f => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Quick copy-to-clipboard option directly in the interface */}
-        <button
-          onClick={handleCopy}
-          className="flex-shrink-0 p-1.5 rounded bg-white/[0.01] hover:bg-white/[0.08] text-[#6b6355] hover:text-[#c9a84c] transition duration-150 cursor-pointer self-start opacity-0 group-hover:opacity-100 max-md:opacity-30 focus:opacity-100"
-          title="Copier ce verset dans le presse-papiers"
-        >
-          {copied ? (
-            <Check className="w-3.5 h-3.5 text-emerald-400" />
-          ) : (
-            <Copy className="w-3.5 h-3.5" />
-          )}
-        </button>
-
-        {/* Quick aesthetic image generation button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setIsShareOpen(true);
-          }}
-          className="flex-shrink-0 p-1.5 rounded bg-white/[0.01] hover:bg-white/[0.08] text-[#6b6355] hover:text-[#c9a84c] transition duration-150 cursor-pointer self-start opacity-0 group-hover:opacity-100 max-md:opacity-30 focus:opacity-100"
-          title="Créer une image esthétique du verset pour les réseaux sociaux"
-        >
-          <Image className="w-3.5 h-3.5" />
-        </button>
+                  }}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-[#1a1712] border border-[#2e2a1e] hover:border-[#c9a84c]/40 rounded-lg text-[9px] font-mono uppercase tracking-wider text-[#c9a84c] cursor-pointer hover:bg-[#201b13] transition"
+                >
+                  {isPlaying ? (
+                    <>
+                      <Pause className="w-2.5 h-2.5 fill-current" />
+                      <span>Pause</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      <span>Écouter Réflexion</span>
+                    </>
+                  )
+                  }
+                </button>
+                <span className="text-[8px] font-mono text-[#6b6355] uppercase">Vocale personnelle</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Action Bar & Editor (shown right below the verse only on tap/selection) */}
+      {/* Action Buttons under the verse: shown only when tapped / active (isSelected), on a flex-wrap row */}
       {isSelected && (
         <div className="space-y-3">
+          <div 
+            onClick={(e) => e.stopPropagation()} 
+            className="mt-3 pt-2.5 border-t border-[#2e2a1e]/50 flex flex-wrap items-center gap-2 select-none animate-fade-slide-up"
+          >
+            {/* Favori */}
+            <button
+              onClick={handleSave}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-mono tracking-wider transition-all duration-200 cursor-pointer ${
+                isFavorite 
+                  ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.2)] font-bold' 
+                  : 'bg-[#1a1712] hover:bg-[#c9a84c]/10 text-[#8e8574] hover:text-[#c9a84c] border-[#2e2a1e]'
+              }`}
+              title={isFavorite ? "Retirer des favoris" : "Ajouter aux favoris"}
+            >
+              <Heart 
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                  isFavorite ? 'scale-110 fill-[#c9a84c] text-[#c9a84c]' : ''
+                }`} 
+              />
+              <span>Favori</span>
+            </button>
+
+            {/* Favori thematic folder dropdown if favorited */}
+            {isFavorite && bookmarkFolders && bookmarkFolders.length > 0 && onAssignFavoriteFolder && (
+              <div className="relative inline-flex items-center">
+                <select
+                  value={favoriteFolderId || ''}
+                  onChange={(e) => {
+                    const newFId = e.target.value || undefined;
+                    const fObj = newFId ? bookmarkFolders.find(f => f.id === newFId) : undefined;
+                    onAssignFavoriteFolder(verse, newFId, fObj?.name);
+                  }}
+                  className="bg-[#1a1712] border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-[10px] font-mono rounded-lg px-2 py-1.5 outline-none cursor-pointer max-w-[130px] truncate transition"
+                  title="Classer ce verset dans un dossier thématique"
+                >
+                  <option value="">📁 Dossier...</option>
+                  {bookmarkFolders.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Copier */}
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-[#c9a84c]/10 border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+              title="Copier ce verset dans le presse-papiers"
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">Copié ✓</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copier</span>
+                </>
+              )}
+            </button>
+
+            {/* Image */}
+            <button
+              onClick={() => setIsShareOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-[#c9a84c]/10 border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+              title="Créer une image esthétique du verset"
+            >
+              <Image className="w-3.5 h-3.5" />
+              <span>Image</span>
+            </button>
+
+            {/* Partager */}
+            <div className="relative">
+              <button
+                onClick={() => setShowShareMenu(!showShareMenu)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-emerald-500/10 border border-[#2e2a1e] hover:border-emerald-500/40 text-emerald-400 text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+                title="Options de partage"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Partager</span>
+              </button>
+
+              {/* Share dropdown */}
+              {showShareMenu && (
+                <>
+                  <div 
+                    className="fixed inset-0 z-30 cursor-default" 
+                    onClick={() => setShowShareMenu(false)}
+                  />
+                  <div className="absolute top-[110%] left-0 w-52 bg-[#16130e] border border-[#2e2a1e] rounded-xl p-1.5 shadow-2xl z-40 animate-fade-slide-up space-y-1">
+                    <button
+                      onClick={handleNativeShare}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
+                    >
+                      <Share2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                      <div className="leading-tight">
+                        <p className="font-sans font-bold text-[11.5px]">Partage Système</p>
+                        <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">SMS, Réseaux, Mail</p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={handleCopyShareText}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
+                    >
+                      {copiedShareText ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
+                          <div className="leading-tight">
+                            <p className="font-sans font-bold text-[11.5px] text-[#c9a84c]">Copié ✓</p>
+                            <p className="text-[8px] text-[#c9a84c] font-mono uppercase tracking-wider mt-0.5">Vers presse-papier</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
+                          <div className="leading-tight">
+                            <p className="font-sans font-bold text-[11.5px]">Copier le Texte</p>
+                            <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">Citation avec lien</p>
+                          </div>
+                        </>
+                      )}
+                    </button>
+
+                    <div className="h-[1px] bg-[#2e2a1e]/60 my-1"></div>
+
+                    <button
+                      onClick={() => {
+                        setShowShareMenu(false);
+                        setIsShareOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
+                      <div className="leading-tight">
+                        <p className="font-sans font-bold text-[11.5px]">Image d'Art / Carte</p>
+                        <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">Enluminure & Studio IA</p>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Analyser */}
+            <button
+              onClick={handleAnalyze}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-[#c9a84c]/10 border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+              title="Obtenir l'analyse théologique détaillée par IA"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Analyser</span>
+            </button>
+
+            {/* Comparer */}
+            <button
+              onClick={handleCompare}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-[#c9a84c]/10 border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+              title="Comparer côte à côte différentes traductions"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5" />
+              <span>Comparer</span>
+            </button>
+
+            {/* Similaires */}
+            <button
+              onClick={() => {
+                if (!isSimilarExpanded) {
+                  handleFetchSimilarVerses(false);
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1a1712] hover:bg-[#c9a84c]/10 border border-[#2e2a1e] hover:border-[#c9a84c]/40 text-[#c9a84c] text-xs font-mono tracking-wider transition duration-150 cursor-pointer"
+              title="Méditer en profondeur : versets similaires"
+            >
+              <GitFork className="w-3.5 h-3.5" />
+              <span>Similaires</span>
+            </button>
+          </div>
           {/* Note Editor */}
           <div className="mt-3 bg-[#110e0a] border border-[#2e2a1e]/60 rounded-xl p-3 space-y-2.5 animate-fade-slide-up text-left">
             <div className="flex justify-between items-center">
@@ -1259,168 +1375,6 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
               >
                 Enregistrer
               </button>
-            </div>
-          </div>
-
-          <div className="mx-auto max-w-sm bg-[#1a1712] border border-[#2e2a1e] rounded-lg py-2 px-4 flex items-center justify-around gap-1 animate-fade-slide-up shadow-xl z-20">
-            {/* Copier */}
-            <button
-              onClick={handleCopy}
-              className="flex-1 py-1 px-2 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1.5 text-xs font-bold transition duration-150 cursor-pointer text-center"
-              style={{ color: copied ? '#c9a84c' : '#6b6355' }}
-            >
-              {copied ? (
-                <>
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Copié ✓</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copier</span>
-                </>
-              )}
-            </button>
-
-            {/* Divider */}
-            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
-
-            {/* Sauver */}
-            <button
-              onClick={handleSave}
-              className="flex-1 py-1 px-2 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1.5 text-xs font-bold transition duration-150 cursor-pointer text-center"
-              style={{ color: isFavorite ? '#c9a84c' : '#6b6355' }}
-            >
-              <Heart className="w-3.5 h-3.5" fill={isFavorite ? '#c9a84c' : 'none'} />
-              <span>Favori</span>
-            </button>
-
-            {/* Divider */}
-            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
-
-            {/* Similaires (Méditer en profondeur) */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!isSimilarExpanded) {
-                  handleFetchSimilarVerses(false);
-                }
-              }}
-              className="flex-1 py-1 px-1.5 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1 text-xs font-bold transition duration-150 cursor-pointer text-center text-[#c9a84c]"
-              title="Méditer en profondeur : versets similaires et complémentaires"
-            >
-              <GitFork className="w-3.5 h-3.5 text-[#c9a84c]" />
-              <span>Similaires</span>
-            </button>
-
-            {/* Divider */}
-            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
-
-            {/* Analyser */}
-            <button
-              onClick={handleAnalyze}
-              className="flex-1 py-1 px-1.5 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1 text-xs font-bold transition duration-150 cursor-pointer text-center text-[#c9a84c]"
-              title="Obtenir l'analyse théologique détaillée par IA"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[#c9a84c]" />
-              <span>Analyser</span>
-            </button>
-
-            {/* Divider */}
-            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
-
-            {/* Comparer */}
-            <button
-              onClick={handleCompare}
-              className="flex-1 py-1 px-1.5 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1 text-xs font-bold transition duration-150 cursor-pointer text-center text-[#c9a84c]"
-              title="Comparer côte à côte différentes traductions"
-            >
-              <ArrowRightLeft className="w-3.5 h-3.5 text-[#c9a84c]" />
-              <span>Comparer</span>
-            </button>
-
-            {/* Divider */}
-            <div className="w-[1px] h-4 bg-[#2e2a1e]"></div>
-
-            {/* Partager */}
-            <div className="relative flex-1 flex justify-center">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowShareMenu(!showShareMenu);
-                }}
-                className="w-full py-1 px-2 rounded hover:bg-white/[0.04] flex items-center justify-center gap-1.5 text-xs font-bold transition duration-150 cursor-pointer text-center text-emerald-400"
-                title="Options de partage"
-              >
-                <Share2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Partager</span>
-              </button>
-
-              {/* Share Menu Dropdown */}
-              {showShareMenu && (
-                <>
-                  <div 
-                    className="fixed inset-0 z-30 cursor-default" 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowShareMenu(false);
-                    }}
-                  />
-                  
-                  <div className="absolute bottom-[130%] right-0 w-52 bg-[#16130e] border border-[#2e2a1e] rounded-xl p-1.5 shadow-2xl z-40 animate-fade-slide-up space-y-1">
-                    <button
-                      onClick={handleNativeShare}
-                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
-                    >
-                      <Share2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                      <div className="leading-tight">
-                        <p className="font-sans font-bold text-[11.5px]">Partage Système</p>
-                        <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">SMS, Réseaux, Mail</p>
-                      </div>
-                    </button>
-
-                    <button
-                      onClick={handleCopyShareText}
-                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
-                    >
-                      {copiedShareText ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
-                          <div className="leading-tight">
-                            <p className="font-sans font-bold text-[11.5px] text-[#c9a84c]">Copié ✓</p>
-                            <p className="text-[8px] text-[#c9a84c] font-mono uppercase tracking-wider mt-0.5">Vers presse-papier</p>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
-                          <div className="leading-tight">
-                            <p className="font-sans font-bold text-[11.5px]">Copier le Texte</p>
-                            <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">Citation avec lien</p>
-                          </div>
-                        </>
-                      )}
-                    </button>
-
-                    <div className="h-[1px] bg-[#2e2a1e]/60 my-1"></div>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowShareMenu(false);
-                        setIsShareOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-xs font-medium text-[#e4dfd5] hover:bg-[#c9a84c]/10 hover:text-[#c9a84c] transition duration-150 cursor-pointer"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-[#c9a84c] flex-shrink-0" />
-                      <div className="leading-tight">
-                        <p className="font-sans font-bold text-[11.5px]">Image d'Art / Carte</p>
-                        <p className="text-[8px] text-[#6b6355] font-mono uppercase tracking-wider mt-0.5">Enluminure & Studio IA</p>
-                      </div>
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
           </div>
         </div>

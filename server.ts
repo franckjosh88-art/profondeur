@@ -994,13 +994,13 @@ app.post("/api/gemini/dictionary", async (req: Request, res: Response): Promise<
       res.status(503).json({ error: "L'API Gemini n'est pas configurée pour le dictionnaire théologique." });
       return;
     }
-    const { query } = req.body;
+    const { query, bookName } = req.body;
     if (!query) {
       res.status(400).json({ error: "Le terme recherché est vide." });
       return;
     }
 
-    const prompt = `Génère une définition théologique et une fiche encyclopédique de haute précision pour le terme biblique: "${query}".
+    const prompt = `Génère une définition théologique et une fiche encyclopédique de haute précision pour le terme biblique: "${query}"${bookName ? ` (dans le contexte du livre de ${bookName})` : ""}.
 Il peut s'agir d'un personnage (ex: Moïse, Paul de Tarse), d'un lieu (ex: Jérusalem, Sodome), ou d'un événement / concept théologique (ex: L'Exode, La Pâque, La Transfiguration).
 
 Tu dois renvoyer STRICTEMENT un objet JSON structuré contenant:

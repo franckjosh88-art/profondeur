@@ -12,19 +12,35 @@ import {
   Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder 
 } from './types/bible';
 import { 
-  BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter 
+  BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter,
+  indexVerses, searchSmartVerses
 } from './data/bibleData';
 import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
 import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
+import { parseNoteContent, SpiritualNote } from './utils/spiritualNotes';
+import { DailyVerseModal } from './components/DailyVerseModal';
+import { BookmarksModal } from './components/BookmarksModal';
+import { DailyReadingModal } from './components/DailyReadingModal';
+import { SettingsModal } from './components/SettingsModal';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag, Mic, MicOff, Trash2, Radio, Dices
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Subcomponents import
 import { TopBar } from './components/TopBar';
 import { VerseItem } from './components/VerseItem';
+import { BibleReaderHeader } from './components/BibleReaderHeader';
+import { BibleDrawer, DrawerPageKey } from './components/BibleDrawer';
+import { BibleNavigatorModal } from './components/BibleNavigatorModal';
+import { BibleSearchModal } from './components/BibleSearchModal';
+import { DailyVerseModal } from './components/DailyVerseModal';
+import { DailyReadingModal } from './components/DailyReadingModal';
+import { BookmarksModal } from './components/BookmarksModal';
+import { SettingsModal } from './components/SettingsModal';
+import { BibleReaderView } from './components/BibleReaderView';
+import { AdFreeModal } from './components/AdFreeModal';
 import { StrongLexicon } from './components/StrongLexicon';
 import { ReadingChallenges } from './components/ReadingChallenges';
 import { StudyStatsChart } from './components/StudyStatsChart';
@@ -40,6 +56,7 @@ import { SpiritualNotesManager } from './components/SpiritualNotesManager';
 import { BookmarkFoldersManager } from './components/BookmarkFoldersManager';
 import { VerseComparison } from './components/VerseComparison';
 import { BibleDictionary } from './components/BibleDictionary';
+import { MeditationCard } from './components/MeditationCard';
 import { ambientMelody, MELODY_STYLES, MelodyStyle } from './utils/ambientSynth';
 import { natureSounds, NATURE_SOUNDS, NatureSoundType } from './utils/natureSounds';
 import { MemorizeModule } from './components/MemorizeModule';
@@ -195,7 +212,8 @@ export default function App() {
 
   // User Settings 
   const [textSize, setTextSize] = useState<number>(18);
-  const [themeMode, setThemeMode] = useState<'dark' | 'sepia'>('dark');
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'sepia'>('light');
+  const isNightMode = themeMode === 'dark';
   const [autoTheme, setAutoTheme] = useState<boolean>(() => {
     try {
       return localStorage.getItem('auto_theme_enabled') === 'true';
@@ -218,25 +236,58 @@ export default function App() {
   const [preDownloadProgress, setPreDownloadProgress] = useState<{ bookName: string, chapter: number, total: number, active: boolean } | null>(null);
 
   // App Navigation Tabs
-  // 'home' -> Dashboard, 'read' -> Bible text with interactive verse items, 'challenges' -> Reading plans & Stats, 'dictionary' -> Strong lexicon concordance, 'assistant' -> Chatbot, 'encyclopedia' -> Bible Dictionary, 'memorize' -> Memorization of verses, 'notes' -> Spiritual notes card list
+  // 'home' -> Dashboard & Accueil, 'read' -> Lecteur Biblique & Étude, etc.
   const [activeTab, setActiveTab] = useState<'home' | 'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize' | 'notes'>('home');
+  const [isRandomMeditationOpen, setIsRandomMeditationOpen] = useState<boolean>(false);
 
   // Local database initialization
   const [sqliteDbReady, setSqliteDbReady] = useState<boolean>(false);
   const [dbInitProgress, setDbInitProgress] = useState<number>(0);
   const [dbInitText, setDbInitText] = useState<string>('Préparation de la base de données...');
 
-  // Reading Passage States
-  const [selectedBook, setSelectedBook] = useState<Book>(BOOKS[0]); // Default to Genesis
-  const [selectedChapter, setSelectedChapter] = useState<number>(1);
+  // Reading Passage States (Defaults to last saved position or Psaumes 84)
+  const [lastReadingPosition, setLastReadingPosition] = useState<ReadingPosition | null>(() => loadMigratedLastReadingPosition());
+  const [selectedBook, setSelectedBook] = useState<Book>(() => {
+    const lastPos = loadMigratedLastReadingPosition();
+    if (lastPos) {
+      return BOOKS.find(b => b.id === lastPos.book_id) || BOOKS.find(b => b.id === 19) || BOOKS[0];
+    }
+    return BOOKS.find(b => b.id === 19) || BOOKS[0]; // Psaumes by default
+  });
+  const [selectedChapter, setSelectedChapter] = useState<number>(() => {
+    const lastPos = loadMigratedLastReadingPosition();
+    return lastPos ? lastPos.chapter : 84; // Psaumes 84 by default
+  });
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingVerses, setLoadingVerses] = useState<boolean>(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null); // formatted as "bookId_chapter_verse"
   const [targetResumeVerseNum, setTargetResumeVerseNum] = useState<number | null>(null);
   const [targetResumePosition, setTargetResumePosition] = useState<ReadingPosition | { book_id: number; chapter: number; verse: number } | null>(null);
-  const [lastReadingPosition, setLastReadingPosition] = useState<ReadingPosition | null>(() => loadMigratedLastReadingPosition());
   const [searchKeyword, setSearchKeyword] = useState<string>('');
+  const [isDictatingSearch, setIsDictatingSearch] = useState<boolean>(false);
+  const searchSpeechRecognitionRef = useRef<any>(null);
+  const [dictationToast, setDictationToast] = useState<string | null>(null);
+
+  // Mobile Clean Bible Navigation & Drawer States
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [isNavigatorOpen, setIsNavigatorOpen] = useState<boolean>(false);
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState<boolean>(false);
+  const [isAdFreeModalOpen, setIsAdFreeModalOpen] = useState<boolean>(false);
+  const [highlightedVerseNum, setHighlightedVerseNum] = useState<number | null>(null);
+  const [isDailyVerseModalOpen, setIsDailyVerseModalOpen] = useState<boolean>(false);
+  const [isDailyReadingModalOpen, setIsDailyReadingModalOpen] = useState<boolean>(false);
+  const [isBookmarksModalOpen, setIsBookmarksModalOpen] = useState<boolean>(false);
+  const [isNotesViewOpen, setIsNotesViewOpen] = useState<boolean>(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  const [drawerActivePage, setDrawerActivePage] = useState<DrawerPageKey>('read');
+  const [isAdvancedMode, setIsAdvancedMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_advanced_mode') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
   
   // Continuous scroll states
   const [isContinuousScroll, setIsContinuousScroll] = useState<boolean>(false);
@@ -290,8 +341,15 @@ export default function App() {
   // Daily Verse of the Day
   const dailyVerseForCurrentDay: DailyVerse = getDailyVerseForToday();
 
-  // Handle local database initialization on mount
+  // Handle local database and verse search indexing on mount
   useEffect(() => {
+    // Index all verses asynchronously on startup for instant search
+    try {
+      indexVerses();
+    } catch (e) {
+      console.warn("Verse indexing warning:", e);
+    }
+
     if (isSqliteInitialized()) {
       setSqliteDbReady(true);
     } else {
@@ -675,6 +733,12 @@ export default function App() {
 
   // Sync state variables with current theme preference
   useEffect(() => {
+    if (themeMode === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+
     if (themeMode === 'sepia') {
       document.documentElement.classList.add('theme-sepia');
       document.body.classList.add('theme-sepia');
@@ -1256,6 +1320,53 @@ export default function App() {
     }
   };
 
+  // Naviguer directement au verset ou chapitre suivant
+  const handleNextScripture = () => {
+    // Si un verset précis est sélectionné dans ce chapitre et qu'il n'est pas le dernier, avancer au verset suivant
+    if (selectedVerseId) {
+      const parts = selectedVerseId.split('_');
+      if (parts.length === 3) {
+        const vNum = Number(parts[2]);
+        const currentIdx = chapterVerses.findIndex(v => v.verse === vNum);
+        if (currentIdx !== -1 && currentIdx < chapterVerses.length - 1) {
+          const nextVerse = chapterVerses[currentIdx + 1];
+          const nextId = `${nextVerse.book_id}_${nextVerse.chapter}_${nextVerse.verse}`;
+          setSelectedVerseId(nextId);
+          const el = document.getElementById(`verse-${nextVerse.book_id}-${nextVerse.chapter}-${nextVerse.verse}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+          }
+        }
+      }
+    }
+    // Sinon avancer au chapitre suivant
+    handleNextChapter();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Infobulle dynamique indiquant la destination suivante
+  const nextTargetTooltip = useMemo(() => {
+    if (selectedVerseId) {
+      const parts = selectedVerseId.split('_');
+      if (parts.length === 3) {
+        const vNum = Number(parts[2]);
+        const currentIdx = chapterVerses.findIndex(v => v.verse === vNum);
+        if (currentIdx !== -1 && currentIdx < chapterVerses.length - 1) {
+          return `Passer au verset suivant (${vNum + 1})`;
+        }
+      }
+    }
+    if (selectedChapter < selectedBook.chapters_count) {
+      return `Passer au chapitre suivant (${selectedBook.name} ${selectedChapter + 1})`;
+    }
+    const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
+    if (currentIdx < BOOKS.length - 1) {
+      return `Passer au livre suivant (${BOOKS[currentIdx + 1].name} 1)`;
+    }
+    return "Passer au chapitre suivant";
+  }, [selectedVerseId, chapterVerses, selectedBook, selectedChapter]);
+
   // Synchronize reading log state, marking current chapter as completed or toggling status
   const markCurrentChapterRead = async (onlyMarkRead: boolean = false, targetEl?: HTMLElement | null) => {
     const existing = readingHistory.find(
@@ -1486,6 +1597,40 @@ export default function App() {
 
     const isDelete = textNote.trim() === '' && !targetAudio;
 
+    const noteItem: VerseNote = {
+      book_id: verse.book_id,
+      book_name: verse.book_name,
+      chapter: verse.chapter,
+      verse: verse.verse,
+      note: textNote,
+      updated_at: new Date().toISOString()
+    };
+    if (targetAudio) {
+      noteItem.audio = targetAudio;
+    }
+    if (emotionAnalysis) {
+      noteItem.emotion_analysis = emotionAnalysis;
+    } else if (existingNote?.emotion_analysis) {
+      noteItem.emotion_analysis = existingNote.emotion_analysis;
+    }
+
+    let nextNotes: VerseNote[];
+    if (isDelete) {
+      nextNotes = notes.filter(n => !(n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse));
+    } else {
+      if (existingNote) {
+        nextNotes = notes.map(n => (n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse) ? noteItem : n);
+      } else {
+        nextNotes = [...notes, noteItem];
+      }
+    }
+
+    // Immediate optimistic update
+    setNotes(nextNotes);
+    try {
+      localStorage.setItem('offline_notes', JSON.stringify(nextNotes));
+    } catch (_) {}
+
     if (user) {
       const docId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
       const docRef = doc(db, 'users', user.uid, 'notes', docId);
@@ -1494,58 +1639,80 @@ export default function App() {
         if (isDelete) {
           await deleteDoc(docRef);
         } else {
-          const noteItem: VerseNote = {
-            book_id: verse.book_id,
-            book_name: verse.book_name,
-            chapter: verse.chapter,
-            verse: verse.verse,
-            note: textNote,
-            updated_at: new Date().toISOString()
-          };
-          if (targetAudio) {
-            noteItem.audio = targetAudio;
-          }
-          if (emotionAnalysis) {
-            noteItem.emotion_analysis = emotionAnalysis;
-          } else if (existingNote?.emotion_analysis) {
-            noteItem.emotion_analysis = existingNote.emotion_analysis;
-          }
           await setDoc(docRef, cleanFirestoreData(noteItem));
         }
       } catch (error) {
         console.error("Could not save note:", error);
       }
-    } else {
-      // Offline mode
-      let nextNotes;
-      if (isDelete) {
-        nextNotes = notes.filter(n => !(n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse));
-      } else {
-        const noteItem: VerseNote = {
-          book_id: verse.book_id,
-          book_name: verse.book_name,
-          chapter: verse.chapter,
-          verse: verse.verse,
-          note: textNote,
-          updated_at: new Date().toISOString()
-        };
-        if (targetAudio) {
-          noteItem.audio = targetAudio;
-        }
-        if (emotionAnalysis) {
-          noteItem.emotion_analysis = emotionAnalysis;
-        } else if (existingNote?.emotion_analysis) {
-          noteItem.emotion_analysis = existingNote.emotion_analysis;
-        }
-        
-        if (existingNote) {
-          nextNotes = notes.map(n => (n.book_id === verse.book_id && n.chapter === verse.chapter && n.verse === verse.verse) ? noteItem : n);
-        } else {
-          nextNotes = [...notes, noteItem];
-        }
-      }
-      setNotes(nextNotes);
+    }
+  };
+
+  const handleDeleteSpiritualNote = async (noteId: string) => {
+    const nextNotes = notes.filter(n => n.id !== noteId);
+    setNotes(nextNotes);
+    try {
       localStorage.setItem('offline_notes', JSON.stringify(nextNotes));
+    } catch (_) {}
+    if (user) {
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'notes', noteId));
+      } catch (error) {
+        console.error("Could not delete note:", error);
+      }
+    }
+  };
+
+  const handleUpdateSpiritualNote = async (updatedNote: SpiritualNote) => {
+    const nextNotes = notes.map(n => n.id === updatedNote.id ? { ...n, ...updatedNote } : n);
+    setNotes(nextNotes as VerseNote[]);
+    try {
+      localStorage.setItem('offline_notes', JSON.stringify(nextNotes));
+    } catch (_) {}
+    if (user) {
+      try {
+        await setDoc(doc(db, 'users', user.uid, 'notes', updatedNote.id), cleanFirestoreData(updatedNote), { merge: true });
+      } catch (error) {
+        console.error("Could not update note:", error);
+      }
+    }
+  };
+
+  const handleDrawerSelectPage = (page: DrawerPageKey) => {
+    setDrawerActivePage(page);
+    setIsDrawerOpen(false);
+    switch (page) {
+      case 'read':
+        setIsNotesViewOpen(false);
+        setActiveTab('read');
+        if (lastReadingPosition) {
+          navigateToScripture({
+            livre: lastReadingPosition.book_id,
+            chapitre: lastReadingPosition.chapter,
+            verset: lastReadingPosition.verse
+          });
+        }
+        break;
+      case 'toc':
+        setIsNavigatorOpen(true);
+        break;
+      case 'daily_verse':
+        setIsDailyVerseModalOpen(true);
+        break;
+      case 'daily_reading':
+        setIsDailyReadingModalOpen(true);
+        break;
+      case 'bookmarks':
+        setIsBookmarksModalOpen(true);
+        break;
+      case 'highlights':
+        setIsBookmarksModalOpen(true);
+        break;
+      case 'notes':
+        setActiveTab('notes');
+        break;
+      case 'settings':
+        setIsSettingsModalOpen(true);
+        break;
     }
   };
 
@@ -2409,6 +2576,311 @@ export default function App() {
     }
   };
 
+  // Quick Voice Note State & Handlers (press-and-hold on current audio button)
+  const [isQuickRecordingVoiceNote, setIsQuickRecordingVoiceNote] = useState<boolean>(false);
+  const [isQuickRecordHolding, setIsQuickRecordHolding] = useState<boolean>(false);
+  const [quickRecordDuration, setQuickRecordDuration] = useState<number>(0);
+  const [quickRecordTargetVerse, setQuickRecordTargetVerse] = useState<Verse | null>(null);
+  const [quickRecordTranscript, setQuickRecordTranscript] = useState<string>('');
+  const [isQuickVoiceSaving, setIsQuickVoiceSaving] = useState<boolean>(false);
+
+  const quickLongPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isQuickLongPressTriggeredRef = useRef<boolean>(false);
+  const quickMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const quickAudioStreamRef = useRef<MediaStream | null>(null);
+  const quickAudioChunksRef = useRef<Blob[]>([]);
+  const quickSpeechRecognitionRef = useRef<any>(null);
+  const quickDurationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clean up recording resources on unmount
+  useEffect(() => {
+    return () => {
+      if (quickLongPressTimerRef.current) clearTimeout(quickLongPressTimerRef.current);
+      if (quickDurationIntervalRef.current) clearInterval(quickDurationIntervalRef.current);
+      if (quickAudioStreamRef.current) {
+        quickAudioStreamRef.current.getTracks().forEach(t => t.stop());
+      }
+      if (quickSpeechRecognitionRef.current) {
+        try { quickSpeechRecognitionRef.current.stop(); } catch (_) {}
+      }
+    };
+  }, []);
+
+  const startQuickVoiceNote = async () => {
+    // 1. Identify target verse: selected verse > currently spoken verse > first verse of chapter
+    let targetVerse: Verse | null = null;
+    if (selectedVerseId) {
+      const parts = selectedVerseId.split('_');
+      if (parts.length === 3) {
+        const vNum = Number(parts[2]);
+        targetVerse = chapterVerses.find(v => v.verse === vNum) || null;
+      }
+    }
+    if (!targetVerse && currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length) {
+      targetVerse = chapterVerses[currentSpeakingVerseIndex];
+    }
+    if (!targetVerse && chapterVerses.length > 0) {
+      targetVerse = chapterVerses[0];
+    }
+    if (!targetVerse) {
+      setTtsWarning("Aucun verset disponible pour rattacher la note vocale.");
+      return;
+    }
+
+    // 2. Pause / Stop TTS if speaking so mic isn't contaminated
+    if (isSpeaking) {
+      stopSpeaking();
+    }
+
+    // 3. Request microphone access
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setTtsWarning("L'accès au microphone n'est pas pris en charge par ce navigateur.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      quickAudioStreamRef.current = stream;
+      quickAudioChunksRef.current = [];
+
+      let mimeType = '';
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+          mimeType = 'audio/ogg';
+        }
+      }
+
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      quickMediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          quickAudioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.start(250);
+      setIsQuickRecordingVoiceNote(true);
+      setQuickRecordTargetVerse(targetVerse);
+      setQuickRecordDuration(0);
+      setQuickRecordTranscript('');
+
+      // Duration counter
+      if (quickDurationIntervalRef.current) clearInterval(quickDurationIntervalRef.current);
+      quickDurationIntervalRef.current = setInterval(() => {
+        setQuickRecordDuration(prev => prev + 1);
+      }, 1000);
+
+      // Web Speech API Transcription if supported
+      const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionClass) {
+        try {
+          const rec = new SpeechRecognitionClass();
+          rec.continuous = true;
+          rec.interimResults = true;
+          rec.lang = 'fr-FR';
+          rec.onresult = (event: any) => {
+            let sessionTranscript = '';
+            for (let i = 0; i < event.results.length; ++i) {
+              sessionTranscript += event.results[i][0].transcript + ' ';
+            }
+            setQuickRecordTranscript(sessionTranscript.trim());
+          };
+          rec.onerror = () => {};
+          rec.start();
+          quickSpeechRecognitionRef.current = rec;
+        } catch (_) {}
+      }
+    } catch (err: any) {
+      console.error("Microphone access error:", err);
+      setTtsWarning("Accès au microphone refusé. Veuillez autoriser le microphone dans votre navigateur pour enregistrer une note vocale.");
+    }
+  };
+
+  const stopAndSaveQuickVoiceNote = () => {
+    if (!quickMediaRecorderRef.current || quickMediaRecorderRef.current.state === 'inactive') {
+      cancelQuickVoiceNote();
+      return;
+    }
+
+    setIsQuickVoiceSaving(true);
+    if (quickDurationIntervalRef.current) {
+      clearInterval(quickDurationIntervalRef.current);
+      quickDurationIntervalRef.current = null;
+    }
+
+    const recorder = quickMediaRecorderRef.current;
+    const target = quickRecordTargetVerse || chapterVerses[0];
+
+    recorder.onstop = () => {
+      const mimeType = recorder.mimeType || 'audio/webm';
+      const audioBlob = new Blob(quickAudioChunksRef.current, { type: mimeType });
+      const reader = new FileReader();
+      reader.readAsDataURL(audioBlob);
+      reader.onloadend = async () => {
+        const base64Audio = reader.result as string;
+        const noteText = quickRecordTranscript.trim() || "Note vocale rapide";
+        
+        if (target) {
+          await handleSaveSpiritualNote(target, noteText, base64Audio);
+          setAudioBookmarkToast({
+            verse: target.verse,
+            message: `🎙️ Note vocale enregistrée pour ${target.book_name} ${target.chapter}:${target.verse}`
+          });
+        }
+
+        // Clean up tracks
+        if (quickAudioStreamRef.current) {
+          quickAudioStreamRef.current.getTracks().forEach(t => t.stop());
+          quickAudioStreamRef.current = null;
+        }
+        if (quickSpeechRecognitionRef.current) {
+          try { quickSpeechRecognitionRef.current.stop(); } catch (_) {}
+          quickSpeechRecognitionRef.current = null;
+        }
+        setIsQuickVoiceSaving(false);
+        setIsQuickRecordingVoiceNote(false);
+        setQuickRecordTargetVerse(null);
+        setQuickRecordDuration(0);
+        setQuickRecordTranscript('');
+      };
+    };
+
+    recorder.stop();
+    if (quickSpeechRecognitionRef.current) {
+      try { quickSpeechRecognitionRef.current.stop(); } catch (_) {}
+    }
+  };
+
+  const cancelQuickVoiceNote = () => {
+    if (quickDurationIntervalRef.current) {
+      clearInterval(quickDurationIntervalRef.current);
+      quickDurationIntervalRef.current = null;
+    }
+    if (quickMediaRecorderRef.current && quickMediaRecorderRef.current.state !== 'inactive') {
+      try { quickMediaRecorderRef.current.stop(); } catch (_) {}
+    }
+    if (quickAudioStreamRef.current) {
+      quickAudioStreamRef.current.getTracks().forEach(t => t.stop());
+      quickAudioStreamRef.current = null;
+    }
+    if (quickSpeechRecognitionRef.current) {
+      try { quickSpeechRecognitionRef.current.stop(); } catch (_) {}
+      quickSpeechRecognitionRef.current = null;
+    }
+    setIsQuickVoiceSaving(false);
+    setIsQuickRecordingVoiceNote(false);
+    setQuickRecordTargetVerse(null);
+    setQuickRecordDuration(0);
+    setQuickRecordTranscript('');
+  };
+
+  // Search Dictation via Web Speech API
+  const handleToggleSearchDictation = () => {
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionClass) {
+      setDictationToast("La reconnaissance vocale n'est pas supportée par ce navigateur.");
+      setTimeout(() => setDictationToast(null), 3500);
+      return;
+    }
+
+    if (isDictatingSearch) {
+      if (searchSpeechRecognitionRef.current) {
+        try {
+          searchSpeechRecognitionRef.current.stop();
+        } catch (_) {}
+      }
+      setIsDictatingSearch(false);
+      return;
+    }
+
+    try {
+      const rec = new SpeechRecognitionClass();
+      rec.lang = 'fr-FR';
+      rec.continuous = false;
+      rec.interimResults = true;
+
+      rec.onstart = () => {
+        setIsDictatingSearch(true);
+        setDictationToast("🎙️ Parlez maintenant (ex: « soyez féconds »)...");
+        setTimeout(() => setDictationToast(null), 3000);
+      };
+
+      rec.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        if (transcript.trim()) {
+          setSearchKeyword(transcript.trim());
+        }
+      };
+
+      rec.onerror = (event: any) => {
+        console.warn("Speech recognition error:", event?.error);
+        setIsDictatingSearch(false);
+        if (event?.error === 'not-allowed') {
+          setDictationToast("Accès au micro refusé. Veuillez autoriser le microphone.");
+          setTimeout(() => setDictationToast(null), 4000);
+        }
+      };
+
+      rec.onend = () => {
+        setIsDictatingSearch(false);
+      };
+
+      searchSpeechRecognitionRef.current = rec;
+      rec.start();
+    } catch (err: any) {
+      console.error("Failed to start speech recognition:", err);
+      setIsDictatingSearch(false);
+      setDictationToast("Impossible d'activer le microphone.");
+      setTimeout(() => setDictationToast(null), 3000);
+    }
+  };
+
+  const handleAudioButtonPointerDown = (e: React.PointerEvent) => {
+    isQuickLongPressTriggeredRef.current = false;
+    setIsQuickRecordHolding(true);
+
+    quickLongPressTimerRef.current = setTimeout(() => {
+      isQuickLongPressTriggeredRef.current = true;
+      setIsQuickRecordHolding(false);
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try { navigator.vibrate([40, 30, 40]); } catch (_) {}
+      }
+      startQuickVoiceNote();
+    }, 500);
+  };
+
+  const handleAudioButtonPointerUp = (e: React.PointerEvent) => {
+    if (quickLongPressTimerRef.current) {
+      clearTimeout(quickLongPressTimerRef.current);
+      quickLongPressTimerRef.current = null;
+    }
+    setIsQuickRecordHolding(false);
+
+    if (!isQuickLongPressTriggeredRef.current) {
+      // Normal short tap -> play/pause TTS
+      handlePlayPause();
+    }
+  };
+
+  const handleAudioButtonPointerCancel = () => {
+    if (quickLongPressTimerRef.current) {
+      clearTimeout(quickLongPressTimerRef.current);
+      quickLongPressTimerRef.current = null;
+    }
+    setIsQuickRecordHolding(false);
+  };
+
   // Toggle favorite bookmark directly from audio player controls for the spoken verse
   const handleToggleAudioVerseBookmark = (targetVerse?: Verse) => {
     const verseToBookmark = targetVerse || (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length 
@@ -2823,7 +3295,7 @@ export default function App() {
     );
   }
 
-  // Main Authenticated Layout
+  // Main Authenticated Layout (Design Sacré Noir & Or)
   return (
     <div 
       className={`min-h-screen prayer-bg-cover text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c] relative overflow-x-hidden`}
@@ -2831,45 +3303,57 @@ export default function App() {
         backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.65) 0%, rgba(5, 4, 3, 0.78) 45%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`
       }}
     >
-      
-      {/* Veille spirituelle overlays (Sunset eye protection + physical screen dimmer) */}
-      {isVigilActive && (
-        <>
-          {/* Sunset warm orange light blocker filter */}
-          <div 
-            className="fixed inset-0 pointer-events-none z-[9998] transition-opacity duration-1000"
-            style={{
-              backgroundColor: '#cc5a01',
-              opacity: Math.min(0.20, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.20),
-              mixBlendMode: 'color-burn'
-            }}
-          />
-          {/* Pitch-black dimmer filter */}
-          <div 
-            className="fixed inset-0 pointer-events-none z-[9999] transition-opacity duration-1000"
-            style={{
-              backgroundColor: '#050403',
-              opacity: Math.min(0.85, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.85)
-            }}
-          />
-        </>
-      )}
+      {/* 1. TIROIR LATÉRAL GAUCHE EN STYLE NOIR & OR (~60% DE LARGEUR) */}
+      <BibleDrawer
+        isOpen={isDrawerOpen}
+        activePage={drawerActivePage}
+        onClose={() => setIsDrawerOpen(false)}
+        onSelectPage={handleDrawerSelectPage}
+      />
 
-      {/* Dynamic luxury TopBar header, syncing click navigations */}
-      {!isZenMode && (
-        <TopBar 
-          onSearchPress={() => {
-            setActiveTab('read');
-            // focus input if available
-            setTimeout(() => {
-              const inputEl = document.getElementById('bible-search-input');
-              if (inputEl) inputEl.focus();
-            }, 100);
-          }}
-          onStudyPress={() => setActiveTab('read')}
-          onProfilePress={() => setIsSettingsOpen(!isSettingsOpen)}
-        />
-      )}
+      {/* 2. CONTENEUR PRINCIPAL DÉCALÉ À DROITE DE 60% QUAND LE TIROIR EST OUVERT */}
+      <div 
+        className={`relative min-h-screen flex flex-col transition-transform duration-300 ease-out ${
+          isDrawerOpen 
+            ? 'translate-x-[60%] sm:translate-x-[300px] shadow-[0_0_50px_rgba(0,0,0,0.8)] opacity-90' 
+            : 'translate-x-0'
+        }`}
+        onClick={() => {
+          if (isDrawerOpen) setIsDrawerOpen(false);
+        }}
+      >
+        {/* Veille spirituelle overlays (Sunset eye protection + physical screen dimmer) */}
+        {isVigilActive && (
+          <>
+            {/* Sunset warm orange light blocker filter */}
+            <div 
+              className="fixed inset-0 pointer-events-none z-[9998] transition-opacity duration-1000"
+              style={{
+                backgroundColor: '#cc5a01',
+                opacity: Math.min(0.20, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.20),
+                mixBlendMode: 'color-burn'
+              }}
+            />
+            {/* Pitch-black dimmer filter */}
+            <div 
+              className="fixed inset-0 pointer-events-none z-[9999] transition-opacity duration-1000"
+              style={{
+                backgroundColor: '#050403',
+                opacity: Math.min(0.85, (1 - vigilTimeRemaining / (vigilDuration * 60)) * 0.85)
+              }}
+            />
+          </>
+        )}
+
+        {/* 1) BARRE DU HAUT FIXE ET VISIBLE SUR TOUTES LES PAGES (STYLE DORÉ/NOIR) */}
+        {!isZenMode && (
+          <TopBar 
+            currentPassage={`${selectedBook.name} ${selectedChapter}`}
+            onOpenDrawer={() => setIsDrawerOpen(true)}
+            onOpenSelector={() => setIsNavigatorOpen(true)}
+            onSearchPress={() => setIsSearchModalOpen(true)}
+          />
+        )}
 
       {/* Embedded Settings Box/Drawer */}
       <AnimatePresence>
@@ -3539,25 +4023,37 @@ export default function App() {
                 Études Hors-ligne ({popularExplanations.length})
               </span>
               <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 scroller-thin">
-                {popularExplanations.map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => handleLoadCachedExplanation(item)}
-                    className="w-full text-[#e8e0d0]/90 text-left p-1.5 bg-[#12100c]/80 hover:bg-[#1a1712] border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 rounded-lg transition duration-150 cursor-pointer text-[10px] space-y-0.5 group block select-none"
-                  >
-                    <div className="flex justify-between items-center">
-                      <span className="font-serif font-bold text-[#c9a84c] group-hover:text-white transition">
-                        {item.reference}
-                      </span>
-                      <span className="text-[8px] font-mono text-[#6b6355]">
-                        👁️ {item.viewCount}
-                      </span>
-                    </div>
-                    <p className="text-[9px] text-[#6b6355] font-serif truncate">
-                      {item.content.replace(/[#*`_[\]]/g, '').slice(0, 45)}...
-                    </p>
-                  </button>
-                ))}
+                {popularExplanations.map((item) => {
+                  const parsed = parseNoteContent(item.content);
+                  const displayTitle = parsed.titre || item.reference;
+                  const displaySnippet = (parsed.contenu || item.content).replace(/[#*`_[\]]/g, '').trim();
+
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => handleLoadCachedExplanation(item)}
+                      className="w-full text-[#e8e0d0]/90 text-left p-1.5 bg-[#12100c]/80 hover:bg-[#1a1712] border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 rounded-lg transition duration-150 cursor-pointer text-[10px] space-y-0.5 group block select-none"
+                    >
+                      <div className="flex justify-between items-center gap-1">
+                        <span className="font-serif font-bold text-[#c9a84c] group-hover:text-white transition truncate">
+                          {displayTitle}
+                        </span>
+                        {parsed.categorie ? (
+                          <span className="text-[7.5px] font-mono text-[#c9a84c]/80 uppercase px-1 py-0.2 bg-[#c9a84c]/10 rounded border border-[#c9a84c]/20 shrink-0">
+                            {parsed.categorie}
+                          </span>
+                        ) : (
+                          <span className="text-[8px] font-mono text-[#6b6355] shrink-0">
+                            👁️ {item.viewCount}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-[#6b6355] font-serif truncate">
+                        {displaySnippet.slice(0, 50)}...
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
               <button
                 onClick={async () => {
@@ -3586,7 +4082,8 @@ export default function App() {
             >
               <ContemplativeHome 
                 onNavigateToTab={(tab) => setActiveTab(tab)}
-                onOpenSettings={() => setIsSettingsOpen(true)}
+                onOpenSettings={() => setIsSettingsModalOpen(true)}
+                onOpenNavigator={() => setIsNavigatorOpen(true)}
                 notesCount={notes.length}
                 goalPercent={goalPercent}
                 currentStreak={currentStreak}
@@ -3595,6 +4092,7 @@ export default function App() {
                 onPlayAudioCurrentChapter={() => speakVerse(0)}
                 onSelectSanctuaryBg={(bgUrl) => setSanctuaryBgImage(bgUrl)}
                 currentSanctuaryBg={sanctuaryBgImage}
+                onOpenRandomMeditation={() => setIsRandomMeditationOpen(true)}
               />
             </motion.div>
           )}
@@ -3730,8 +4228,18 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Chapter back and forward paging buttons */}
+                  {/* Chapter back and forward paging buttons & Random verse button */}
                   <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => setIsRandomMeditationOpen(true)}
+                      className="h-9 px-3 bg-[#17140f] hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/40 hover:border-[#c9a84c] rounded-xl text-[9.5px] font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                      title="Sélectionner un verset au hasard dans la base de données locale et ouvrir la carte de méditation dédiée"
+                    >
+                      <Dices className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Verset au Hasard</span>
+                      <span className="sm:hidden">Hasard 🎲</span>
+                    </button>
+
                     <button
                       onClick={handlePreviousChapter}
                       className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
@@ -3767,27 +4275,72 @@ export default function App() {
               {/* Integrated offline concordance keyword search in the reader page */}
               {!isZenMode && (
                 <>
-                  <div className="bg-[#12100c] border border-[#2e2a1e] p-4 sm:p-5 rounded-2xl flex items-center gap-2.5 select-none">
+                  <div className="bg-[#12100c] border border-[#2e2a1e] p-3.5 sm:p-4 rounded-2xl flex items-center gap-2 select-none relative">
                     <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
                     <input 
                       id="bible-search-input"
                       type="text"
                       value={searchKeyword}
                       onChange={(e) => setSearchKeyword(e.target.value)}
-                      placeholder="Rechercher localement un verset (ex: berger, paix, foi)..."
-                      className="bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355]"
+                      placeholder={isDictatingSearch ? "🎙️ Écoute en cours, dictez votre verset..." : "Rechercher un verset (ex: soyez féconds, berger, paix)..."}
+                      className={`bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355] ${isDictatingSearch ? 'placeholder:text-rose-400 placeholder:animate-pulse' : ''}`}
                     />
-                    {searchKeyword ? (
+
+                    {/* Bouton Effacer si texte saisi */}
+                    {searchKeyword && (
                       <button 
                         onClick={() => setSearchKeyword('')}
-                        className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition"
+                        className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition cursor-pointer"
+                        title="Effacer la recherche"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
-                    ) : (
-                      <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-0.5 rounded uppercase">Concinnance</span>
                     )}
+
+                    {/* Bouton 'Dicter' (Web Speech API) */}
+                    <button
+                      type="button"
+                      onClick={handleToggleSearchDictation}
+                      className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-mono uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                        isDictatingSearch
+                          ? 'bg-rose-500/20 border-rose-500/60 text-rose-300 font-bold animate-pulse shadow-sm'
+                          : 'bg-[#1a1712] hover:bg-[#252018] border-[#2e2a1e] hover:border-[#c9a84c]/50 text-[#c9a84c]'
+                      }`}
+                      title={isDictatingSearch ? "Arrêter la dictée vocale" : "Dicter votre recherche avec la voix (Web Speech API)"}
+                    >
+                      {isDictatingSearch ? (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-rose-400 animate-ping"></span>
+                          <Mic className="w-3.5 h-3.5 text-rose-400" />
+                          <span className="hidden xs:inline">Écoute...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-3.5 h-3.5" />
+                          <span>Dicter</span>
+                        </>
+                      )}
+                    </button>
+
+                    <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-1 rounded uppercase hidden sm:inline shrink-0">
+                      Concordance
+                    </span>
                   </div>
+
+                  {/* Dictation Status Toast */}
+                  <AnimatePresence>
+                    {dictationToast && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="text-[10px] font-mono text-[#c9a84c] bg-[#1a1712] border border-[#c9a84c]/30 rounded-xl px-3 py-1.5 flex items-center gap-1.5 shadow-sm text-left"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
+                        <span>{dictationToast}</span>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* Secondary results placeholder for localized keywords lookups */}
                   {searchKeyword.trim() !== "" && (
@@ -3805,7 +4358,18 @@ export default function App() {
                                 if (target) {
                                   setSelectedBook(target);
                                   setSelectedChapter(v.chapter);
+                                  setSelectedVerseId(`${target.id}_${v.chapter}_${v.verse}`);
                                   setSearchKeyword('');
+                                  if (isDictatingSearch && searchSpeechRecognitionRef.current) {
+                                    try { searchSpeechRecognitionRef.current.stop(); } catch (_) {}
+                                    setIsDictatingSearch(false);
+                                  }
+                                  setTimeout(() => {
+                                    const verseEl = document.getElementById(`verse-${target.id}-${v.chapter}-${v.verse}`);
+                                    if (verseEl) {
+                                      verseEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    }
+                                  }, 300);
                                 }
                               }}
                               className="bg-[#0d0b07] hover:bg-[#14120e] p-2.5 rounded-xl border border-[#2e2a1e]/40 transition text-left cursor-pointer space-y-1"
@@ -3910,8 +4474,23 @@ export default function App() {
                       {/* Top Header Row of Player (Modern and Simplified) */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-[#12100c] border border-[#2e2a1e] shadow-inner shrink-0">
-                            {isSpeaking && !isPaused ? (
+                          <button
+                            type="button"
+                            onPointerDown={handleAudioButtonPointerDown}
+                            onPointerUp={handleAudioButtonPointerUp}
+                            onPointerLeave={handleAudioButtonPointerCancel}
+                            onPointerCancel={handleAudioButtonPointerCancel}
+                            onContextMenu={(e) => e.preventDefault()}
+                            className={`relative flex items-center justify-center w-10 h-10 rounded-full border shadow-inner shrink-0 transition-all cursor-pointer select-none ${
+                              isQuickRecordHolding
+                                ? 'bg-[#c9a84c]/25 border-[#c9a84c] ring-2 ring-[#c9a84c] scale-110 shadow-gold-glow'
+                                : 'bg-[#12100c] border-[#2e2a1e] hover:border-[#c9a84c]/50'
+                            }`}
+                            title="Clic : Lecture/Pause audio | Maintenir : Note vocale rapide 🎙️"
+                          >
+                            {isQuickRecordHolding ? (
+                              <Mic className="w-4 h-4 text-[#c9a84c] animate-pulse" />
+                            ) : isSpeaking && !isPaused ? (
                               <>
                                 <span className="absolute inset-0 rounded-full bg-[#c9a84c]/10 animate-ping"></span>
                                 <Volume2 className="w-4 h-4 text-[#c9a84c] animate-pulse" />
@@ -3919,7 +4498,7 @@ export default function App() {
                             ) : (
                               <VolumeX className="w-4 h-4 text-[#6b6355]" />
                             )}
-                          </div>
+                          </button>
                           <div className="text-left">
                             <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#6b6355] block">
                               {isSpeaking && !isPaused ? 'Lecture active' : 'Audio'}
@@ -4027,18 +4606,42 @@ export default function App() {
                           <SkipBack className="w-4 h-4" />
                         </button>
 
-                        {/* Unified Play / Pause Golden Hero Trigger */}
-                        <button
-                          onClick={handlePlayPause}
-                          className="w-14 h-14 rounded-full bg-[#c9a84c] text-[#0d0b07] flex items-center justify-center transition-all duration-300 transform hover:scale-105 active:scale-95 cursor-pointer shadow-lg shadow-[#c9a84c]/15 hover:shadow-[#c9a84c]/25 border border-white/10"
-                          title={isSpeaking && !isPaused ? "Pause" : "Lecture"}
-                        >
-                          {isSpeaking && !isPaused ? (
-                            <Pause className="w-5 h-5 fill-[#0d0b07]" />
-                          ) : (
-                            <Play className="w-5 h-5 fill-[#0d0b07] ml-0.5" />
+                        {/* Unified Play / Pause Golden Hero Trigger with Press-and-Hold for Quick Voice Note */}
+                        <div className="relative flex flex-col items-center select-none">
+                          <button
+                            type="button"
+                            onPointerDown={handleAudioButtonPointerDown}
+                            onPointerUp={handleAudioButtonPointerUp}
+                            onPointerLeave={handleAudioButtonPointerCancel}
+                            onPointerCancel={handleAudioButtonPointerCancel}
+                            onContextMenu={(e) => e.preventDefault()}
+                            className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 transform cursor-pointer border relative select-none ${
+                              isQuickRecordHolding
+                                ? 'scale-110 bg-[#dfba5a] text-[#0d0b07] ring-4 ring-[#c9a84c]/70 shadow-[0_0_25px_rgba(201,168,76,0.6)] border-white'
+                                : 'bg-[#c9a84c] text-[#0d0b07] hover:scale-105 active:scale-95 shadow-lg shadow-[#c9a84c]/15 hover:shadow-[#c9a84c]/25 border-white/10'
+                            }`}
+                            title={
+                              isSpeaking && !isPaused 
+                                ? "Pause (maintenez appuyé pour enregistrer une note vocale rapide 🎙️)" 
+                                : "Lecture (maintenez appuyé pour enregistrer une note vocale rapide 🎙️)"
+                            }
+                          >
+                            {isQuickRecordHolding ? (
+                              <Mic className="w-6 h-6 text-[#0d0b07] animate-pulse" />
+                            ) : isSpeaking && !isPaused ? (
+                              <Pause className="w-5 h-5 fill-[#0d0b07]" />
+                            ) : (
+                              <Play className="w-5 h-5 fill-[#0d0b07] ml-0.5" />
+                            )}
+                          </button>
+
+                          {/* Floating indicator while holding down */}
+                          {isQuickRecordHolding && (
+                            <span className="absolute -top-7 px-2.5 py-0.5 bg-[#12100c] text-[#c9a84c] border border-[#c9a84c]/50 text-[9px] font-mono font-bold rounded-full animate-bounce whitespace-nowrap shadow-gold-glow pointer-events-none z-10">
+                              Enregistrement micro... 🎙️
+                            </span>
                           )}
-                        </button>
+                        </div>
 
                         {/* Stop Button */}
                         <button
@@ -4091,6 +4694,12 @@ export default function App() {
                             </button>
                           );
                         })()}
+                      </div>
+
+                      {/* Press-and-Hold Quick Voice Note Hint */}
+                      <div className="flex items-center justify-center gap-1.5 text-[9.5px] font-mono text-[#8c8270] bg-[#12100c]/60 border border-[#2e2a1e]/40 rounded-xl py-1.5 px-3 w-fit mx-auto select-none">
+                        <Mic className="w-3.5 h-3.5 text-[#c9a84c] shrink-0" />
+                        <span>Astuce : Maintenez le bouton d'audio appuyé pour enregistrer une note vocale rapide</span>
                       </div>
 
                       {/* Side-by-side Ambient Toggles (Compact switches) */}
@@ -4888,18 +5497,29 @@ export default function App() {
                       <p className="text-[9px] font-mono text-[#6b6355] uppercase">Marquer comme lu enregistre votre fidelité et vos streaks</p>
                     </div>
                     
-                    <button
-                      onClick={(e) => markCurrentChapterRead(false, e.currentTarget)}
-                      className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 ${
-                        readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)
-                          ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-                          : 'bg-emerald-950/15 hover:bg-emerald-950/35 border-emerald-500/25 text-emerald-400/80 hover:text-emerald-400'
-                      }`}
-                      title={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? "Lecture déjà complétée et enregistrée. Cliquez pour retirer." : "Marquer ce chapitre comme lu et enregistrer la progression."}
-                    >
-                      <Check className={`w-3.5 h-3.5 transition-transform duration-200 ${readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'scale-110' : ''}`} />
-                      <span>{readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'COMPLÉTÉ ET ENREGISTRÉ' : 'MARQUER LECTURE FAITE'}</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        onClick={(e) => markCurrentChapterRead(false, e.currentTarget)}
+                        className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 ${
+                          readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)
+                            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                            : 'bg-emerald-950/15 hover:bg-emerald-950/35 border-emerald-500/25 text-emerald-400/80 hover:text-emerald-400'
+                        }`}
+                        title={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? "Lecture déjà complétée et enregistrée. Cliquez pour retirer." : "Marquer ce chapitre comme lu et enregistrer la progression."}
+                      >
+                        <Check className={`w-3.5 h-3.5 transition-transform duration-200 ${readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'scale-110' : ''}`} />
+                        <span>{readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'COMPLÉTÉ ET ENREGISTRÉ' : 'MARQUER LECTURE FAITE'}</span>
+                      </button>
+
+                      <button
+                        onClick={handleNextScripture}
+                        className="px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 bg-[#181510] hover:bg-[#252017] border-[#c9a84c]/35 hover:border-[#c9a84c]/65 text-[#dfba5a] hover:text-[#f3d889] shadow-[0_0_10px_rgba(201,168,76,0.1)] hover:shadow-[0_0_15px_rgba(201,168,76,0.22)] active:scale-95 group"
+                        title={nextTargetTooltip}
+                      >
+                        <span>SUIVANT</span>
+                        <ChevronRight className="w-3.5 h-3.5 text-[#c9a84c] group-hover:text-[#f3d889] transition-transform duration-200 group-hover:translate-x-0.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5048,6 +5668,7 @@ export default function App() {
               className="space-y-4"
             >
               <BibleDictionary 
+                initialBookId={selectedBook?.id}
                 onSearchReference={(reference) => {
                   // Reference looks like: "Exode 2:10" or "Genèse 15:1"
                   const parts = reference.trim().split(' ');
@@ -5463,6 +6084,203 @@ export default function App() {
         </div>
       )}
 
+      {/* DEDICATED RANDOM VERSE MEDITATION CARD MODAL */}
+      <AnimatePresence>
+        {isRandomMeditationOpen && (
+          <div className="fixed inset-0 z-[115] flex items-center justify-center p-3 sm:p-5 pointer-events-auto select-none">
+            {/* Backdrop with dark blur */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsRandomMeditationOpen(false)}
+              className="absolute inset-0 bg-black/85 backdrop-blur-md cursor-pointer"
+            />
+
+            {/* Modal Dialog Content */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
+              className="relative w-full max-w-2xl max-h-[92vh] overflow-y-auto no-scrollbar z-10"
+            >
+              <MeditationCard
+                onClose={() => setIsRandomMeditationOpen(false)}
+                onNavigateToScripture={(bookId, chapter, verseNum) => {
+                  navigateToScripture({
+                    livre: bookId,
+                    chapitre: chapter,
+                    verset: verseNum || 1
+                  });
+                  setIsRandomMeditationOpen(false);
+                }}
+                isVerseFavorite={(b, c, v) => favorites.some(f => f.book_id === b && f.chapter === c && f.verse === v)}
+                onToggleFavorite={handleToggleFavorite}
+                onSaveNote={(v, noteTxt) => handleSaveSpiritualNote(v, noteTxt)}
+                bookmarkFolders={bookmarkFolders}
+              />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* QUICK VOICE NOTE ACTIVE RECORDING MODAL */}
+      <AnimatePresence>
+        {isQuickRecordingVoiceNote && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 pointer-events-auto select-none">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={cancelQuickVoiceNote}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm cursor-pointer"
+            />
+
+            {/* Recording Console Dialog */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 15 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 300 }}
+              className="relative w-full max-w-lg bg-[#0e0c08] border-2 border-[#c9a84c]/60 rounded-3xl p-5 sm:p-6 shadow-[0_0_50px_rgba(201,168,76,0.35)] backdrop-blur-xl text-left space-y-4 z-10"
+            >
+              {/* Header: Title, recording status, duration */}
+              <div className="flex items-center justify-between pb-3 border-b border-[#2e2a1e]">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-rose-500/15 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                    <Mic className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+                      <span className="text-[10px] font-mono uppercase font-black tracking-widest text-rose-400">
+                        NOTE VOCALE RAPIDE
+                      </span>
+                    </div>
+                    <p className="text-xs font-serif font-extrabold text-[#e8e0d0] tracking-tight">
+                      Enregistrement micro en direct
+                    </p>
+                  </div>
+                </div>
+
+                {/* Live timer badge */}
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-[#16130e] border border-rose-500/30 rounded-xl">
+                  <Radio className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+                  <span className="font-mono text-sm font-bold text-[#e8e0d0]">
+                    {Math.floor(quickRecordDuration / 60)}:{(quickRecordDuration % 60).toString().padStart(2, '0')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Target Verse Selector Row */}
+              <div className="p-3 bg-[#14110b] border border-[#2e2a1e] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#8c8270] block">
+                  Verset rattaché :
+                </span>
+                
+                <div className="flex items-center gap-2">
+                  <span className="font-serif font-bold text-xs text-[#c9a84c]">
+                    {quickRecordTargetVerse ? `${quickRecordTargetVerse.book_name} ${quickRecordTargetVerse.chapter}:` : `${selectedBook.name} ${selectedChapter}:`}
+                  </span>
+                  <select
+                    value={quickRecordTargetVerse?.verse || 1}
+                    onChange={(e) => {
+                      const vNum = Number(e.target.value);
+                      const found = chapterVerses.find(v => v.verse === vNum);
+                      if (found) {
+                        setQuickRecordTargetVerse(found);
+                      }
+                    }}
+                    className="bg-[#0b0906] border border-[#c9a84c]/40 text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-2.5 py-1 outline-none focus:border-[#c9a84c] cursor-pointer"
+                  >
+                    {chapterVerses.map(v => (
+                      <option key={v.verse} value={v.verse} className="bg-[#12100c] text-[#e8e0d0]">
+                        Verset {v.verse}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Dynamic Sound Wave Activity Indicator */}
+              <div className="flex items-center justify-center gap-1.5 py-3 h-14 bg-[#12100c]/80 rounded-2xl border border-[#2e2a1e]/60 px-4 overflow-hidden">
+                {[6, 12, 24, 18, 30, 22, 14, 28, 16, 26, 12, 20, 8, 22, 16, 28].map((baseHeight, i) => (
+                  <motion.span
+                    key={i}
+                    className="w-1.5 bg-gradient-to-t from-rose-500 to-[#c9a84c] rounded-full"
+                    animate={{
+                      height: [
+                        `${Math.max(6, baseHeight * 0.4)}px`,
+                        `${Math.min(42, baseHeight * 1.5)}px`,
+                        `${Math.max(6, baseHeight * 0.5)}px`
+                      ]
+                    }}
+                    transition={{
+                      repeat: Infinity,
+                      duration: 0.6 + (i % 5) * 0.15,
+                      ease: 'easeInOut'
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Transcription & Guidance Box */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono text-[#8c8270] uppercase tracking-wider block">
+                  Transcription & Méditation :
+                </span>
+                <div className="p-3 bg-[#12100c] border border-[#2e2a1e] rounded-2xl min-h-[64px] max-h-28 overflow-y-auto">
+                  {quickRecordTranscript ? (
+                    <p className="text-xs font-serif text-[#e8e0d0] leading-relaxed italic">
+                      « {quickRecordTranscript} »
+                    </p>
+                  ) : (
+                    <p className="text-xs font-serif text-[#6b6355] italic">
+                      Parlez au microphone... Exprimez votre méditation, prière ou témoignage spirituel.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Bottom Actions Row */}
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={cancelQuickVoiceNote}
+                  className="px-4 py-2.5 text-xs font-mono font-bold uppercase rounded-xl border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 cursor-pointer flex items-center gap-1.5 transition active:scale-95"
+                  title="Abandonner sans sauvegarder"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Annuler</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={stopAndSaveQuickVoiceNote}
+                  disabled={isQuickVoiceSaving}
+                  className="flex-1 py-2.5 px-4 text-xs font-serif font-extrabold uppercase rounded-xl bg-gold-gradient text-[#0d0b07] shadow-gold-glow hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center justify-center gap-2 transition disabled:opacity-50"
+                  title="Finaliser l'enregistrement et l'associer au verset"
+                >
+                  {isQuickVoiceSaving ? (
+                    <>
+                      <div className="w-4 h-4 rounded-full border-2 border-black border-t-transparent animate-spin" />
+                      <span>Enregistrement...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4 stroke-[3]" />
+                      <span>Terminer & Sauvegarder</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* French TTS Guidance / Warning Toast */}
       {ttsWarning && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] max-w-md w-[92%] bg-[#12100c]/98 border border-amber-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md flex items-start gap-3 animate-fade-slide-up select-none">
@@ -5482,6 +6300,104 @@ export default function App() {
           </button>
         </div>
       )}
+
+      </div>
+
+      {/* 3. MODALES ET MENUS FLOTTANTS (NAVIGATION, RECHERCHE, VERSET DU JOUR, ETC.) */}
+      <BibleNavigatorModal
+        isOpen={isNavigatorOpen}
+        currentBook={selectedBook}
+        currentChapter={selectedChapter}
+        currentVerse={targetResumeVerseNum || 1}
+        onClose={() => setIsNavigatorOpen(false)}
+        onSelectPassage={(book, chapter, verseNum) => {
+          navigateToScripture({
+            livre: book.id,
+            chapitre: chapter,
+            verset: verseNum || 1
+          });
+          if (verseNum) {
+            setHighlightedVerseNum(verseNum);
+            setTimeout(() => setHighlightedVerseNum(null), 3500);
+          }
+        }}
+      />
+
+      <BibleSearchModal
+        isOpen={isSearchModalOpen}
+        onClose={() => setIsSearchModalOpen(false)}
+        onSelectVerse={(book, chapter, verseNum) => {
+          navigateToScripture({
+            livre: book.id,
+            chapitre: chapter,
+            verset: verseNum
+          });
+          setHighlightedVerseNum(verseNum);
+          setTimeout(() => setHighlightedVerseNum(null), 3500);
+        }}
+      />
+
+      <DailyVerseModal
+        isOpen={isDailyVerseModalOpen}
+        dailyVerse={dailyVerseForCurrentDay}
+        onClose={() => setIsDailyVerseModalOpen(false)}
+        onNavigateToPassage={(bookId, chapter, verseNum) => {
+          navigateToScripture({ livre: bookId, chapitre: chapter, verset: verseNum });
+          setHighlightedVerseNum(verseNum);
+          setTimeout(() => setHighlightedVerseNum(null), 3500);
+        }}
+      />
+
+      <DailyReadingModal
+        isOpen={isDailyReadingModalOpen}
+        readingHistory={readingHistory}
+        readingTimeToday={readingTimeToday}
+        dailyTimeGoal={dailyTimeGoal}
+        currentStreak={currentStreak}
+        onClose={() => setIsDailyReadingModalOpen(false)}
+        onNavigateToChapter={(bookId, chapter, verse) => {
+          navigateToScripture({ livre: bookId, chapitre: chapter, verset: verse || 1 });
+        }}
+      />
+
+      <BookmarksModal
+        isOpen={isBookmarksModalOpen}
+        favorites={favorites}
+        initialTab={drawerActivePage === 'highlights' ? 'highlights' : 'bookmarks'}
+        onClose={() => setIsBookmarksModalOpen(false)}
+        onNavigateToVerse={(bookId, chapter, verseNum) => {
+          navigateToScripture({ livre: bookId, chapitre: chapter, verset: verseNum });
+          setHighlightedVerseNum(verseNum);
+          setTimeout(() => setHighlightedVerseNum(null), 3500);
+        }}
+        onRemoveFavorite={(favId) => {
+          const fav = favorites.find(f => f.id === favId);
+          if (fav) {
+            handleToggleFavorite(fav);
+          }
+        }}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        textSize={textSize}
+        speechRate={playbackRate}
+        speechVolume={voiceVolume}
+        selectedVoiceGender={voiceGender}
+        userEmail={user?.email || undefined}
+        onClose={() => setIsSettingsModalOpen(false)}
+        onChangeTextSize={(size) => setTextSize(size)}
+        onChangeSpeechRate={(rate) => setPlaybackRate(rate)}
+        onChangeSpeechVolume={(vol) => {
+          setVoiceVolume(vol);
+          try { localStorage.setItem('bible_voice_volume', String(vol)); } catch (_) {}
+        }}
+        onChangeVoiceGender={(gender) => {
+          setVoiceGender(gender);
+          try { localStorage.setItem('bible_voice_gender', gender); } catch (_) {}
+        }}
+        onSignOut={handleSignOut}
+      />
 
     </div>
   );

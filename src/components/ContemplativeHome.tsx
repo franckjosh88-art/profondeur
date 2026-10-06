@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Menu, Bell, ChevronLeft, ChevronRight, Home, FolderClosed, 
   Sparkles, X, Heart, HelpCircle, Settings, Quote, BookOpen, Flame, Play, Volume2,
-  Sun, Leaf, Mountain
+  Sun, Leaf, Mountain, Dices
 } from 'lucide-react';
 import { ReadingHistory } from '../types/bible';
 import { getChapterMaxVerses } from '../data/bibleChapterVerseCounts';
@@ -61,6 +61,7 @@ const REAL_SPIRITUAL_PHOTOS = [
 interface ContemplativeHomeProps {
   onNavigateToTab: (tab: 'home' | 'read' | 'challenges' | 'dictionary' | 'assistant' | 'encyclopedia' | 'memorize' | 'notes') => void;
   onOpenSettings?: () => void;
+  onOpenNavigator?: () => void;
   notesCount?: number;
   goalPercent?: number;
   currentStreak?: number;
@@ -69,6 +70,7 @@ interface ContemplativeHomeProps {
   onPlayAudioCurrentChapter?: () => void;
   onSelectSanctuaryBg?: (bgUrl: string) => void;
   currentSanctuaryBg?: string;
+  onOpenRandomMeditation?: () => void;
 }
 
 interface ContemplativeVerse {
@@ -126,13 +128,15 @@ const CONTEMPLATIVE_VERSES: ContemplativeVerse[] = [
 export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   onNavigateToTab,
   onOpenSettings,
+  onOpenNavigator,
   notesCount = 0,
   goalPercent = 0,
   currentStreak = 0,
   readingHistory = [],
   onNavigateToChapter,
   onPlayAudioCurrentChapter,
-  onSelectSanctuaryBg
+  onSelectSanctuaryBg,
+  onOpenRandomMeditation
 }) => {
   // Démarre sur Psaume 23:4 (index 6) conformément à la maquette
   const [currentIdx, setCurrentIdx] = useState<number>(6);
@@ -160,9 +164,19 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
   const handleResumeReading = () => {
     if (latestReading && onNavigateToChapter) {
       onNavigateToChapter(latestReading.book_id, latestReading.chapter, validLatestVerse);
-    } else {
-      onNavigateToTab('read');
+      return;
     }
+    try {
+      const saved = localStorage.getItem('bible_last_reading_position');
+      if (saved && onNavigateToChapter) {
+        const parsed = JSON.parse(saved);
+        if (parsed.book_id && parsed.chapter) {
+          onNavigateToChapter(parsed.book_id, parsed.chapter, parsed.verse || 1);
+          return;
+        }
+      }
+    } catch (_) {}
+    onNavigateToTab('read');
   };
 
   const activeVerse = CONTEMPLATIVE_VERSES[currentIdx];
@@ -336,8 +350,43 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
       {viewMode === 'contemplation' ? (
         <main className="relative z-10 flex-1 flex flex-col justify-center items-center px-4 sm:px-6 py-6 text-center select-text">
           <div className="w-full max-w-sm flex flex-col items-center space-y-4">
+
+            {/* 1. GROS BOUTON « ALLER À UN VERSET » (LIVRE, CHAPITRE, VERSET) EN STYLE DORÉ & NOIR */}
+            <button
+              type="button"
+              onClick={() => {
+                if (onOpenNavigator) {
+                  onOpenNavigator();
+                } else {
+                  onNavigateToTab('read');
+                }
+              }}
+              className="w-full px-5 py-4 rounded-[12px] bg-[#050403]/90 border border-[#D9B26A]/50 hover:border-[#D9B26A] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-[0_2px_12px_rgba(0,0,0,0.6),0_0_15px_rgba(217,178,106,0.15)] cursor-pointer text-left backdrop-blur-sm active:scale-98"
+              title="Aller directement à un livre, chapitre ou verset de la Bible"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-[10px] bg-[#D9B26A]/15 border border-[#D9B26A]/35 flex items-center justify-center text-[#D9B26A] group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition duration-300 shadow-sm">
+                  <BookOpen className="w-5 h-5 ml-0.5" />
+                </div>
+                <div>
+                  <span className="text-[8.5px] font-mono uppercase text-[#D9B26A] tracking-[0.2em] block font-bold">
+                    Navigation Directe
+                  </span>
+                  <span className="text-sm sm:text-base font-serif font-extrabold text-[#f4efe2] group-hover:text-[#D9B26A] transition">
+                    Aller à un verset
+                  </span>
+                  <span className="text-[10px] font-mono text-[#8c8270] block mt-0.5">
+                    Livre → Chapitre → Verset en 2 appuis
+                  </span>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono uppercase font-bold text-[#D9B26A] px-3 py-1.5 rounded-[8px] bg-[#D9B26A]/10 border border-[#D9B26A]/30 group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition flex items-center gap-1">
+                <span>Ouvrir</span>
+                <span>→</span>
+              </span>
+            </button>
             
-            {/* CARTE CONTEMPLATIVE DU VERSET SACRÉ AVEC COINS ARRONDIS 12PX, BORDURE DORÉE #D9B26A ET FOND SOMBRE PROFOND #050403 */}
+            {/* 2. CARTE CONTEMPLATIVE DU VERSET SACRÉ AVEC COINS ARRONDIS 12PX, BORDURE DORÉE #D9B26A ET FOND SOMBRE PROFOND #050403 */}
             <div className="w-full bg-[#050403]/90 backdrop-blur-md border border-[#D9B26A]/45 hover:border-[#D9B26A]/75 rounded-[12px] p-5 sm:p-6 shadow-[0_4px_24px_rgba(0,0,0,0.6),0_0_18px_rgba(217,178,106,0.12)] flex flex-col items-center space-y-4 transition-all duration-300">
               {/* Grand guillemet d'or stylisé au-dessus */}
               <motion.div 
@@ -413,8 +462,9 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
               </div>
             </div>
 
-            {/* Cartes Reprendre la Lecture & Lecture Audio avec coins 12px, fond #050403 et bordures dorées #D9B26A */}
+            {/* 3. CARTES REPRENDRE LA LECTURE, MÉDITATION ALÉATOIRE & LECTURE AUDIO */}
             <div className="w-full space-y-2.5">
+              {/* « Reprendre la lecture » en premier directement après le verset du jour */}
               <button
                 onClick={handleResumeReading}
                 className="w-full px-4 py-3 rounded-[12px] bg-[#050403]/90 border border-[#D9B26A]/45 hover:border-[#D9B26A] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.1)] cursor-pointer text-left backdrop-blur-sm"
@@ -434,6 +484,31 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   Reprendre →
                 </span>
               </button>
+
+              {/* Carte Verset au Hasard & Méditation */}
+              {onOpenRandomMeditation && (
+                <button
+                  type="button"
+                  onClick={onOpenRandomMeditation}
+                  className="w-full px-4 py-3 rounded-[12px] bg-[#050403]/90 border border-[#D9B26A]/45 hover:border-[#D9B26A] text-[#e8e0d0] flex items-center justify-between group transition-all duration-300 shadow-[0_2px_10px_rgba(0,0,0,0.5),0_0_12px_rgba(217,178,106,0.1)] cursor-pointer text-left backdrop-blur-sm"
+                  title="Sélectionner un verset au hasard dans la base de données locale et ouvrir la carte de méditation dédiée"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-[10px] bg-[#D9B26A]/15 border border-[#D9B26A]/35 flex items-center justify-center text-[#D9B26A] group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition duration-300">
+                      <Dices className="w-4 h-4 ml-0.5" />
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-mono uppercase text-[#D9B26A] tracking-wider block font-bold">Méditation & Recueillement</span>
+                      <span className="text-[11px] font-serif font-extrabold text-[#e8e0d0] group-hover:text-[#D9B26A] transition">
+                        Verset au hasard dans la Bible
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-mono uppercase font-bold text-[#D9B26A] px-2.5 py-1 rounded-[8px] bg-[#D9B26A]/10 border border-[#D9B26A]/25 group-hover:bg-[#D9B26A] group-hover:text-[#050403] transition">
+                    Tirer 🎲
+                  </span>
+                </button>
+              )}
 
               <button
                 type="button"

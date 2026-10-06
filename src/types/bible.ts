@@ -91,13 +91,20 @@ export interface EmotionAnalysisResult {
 }
 
 export interface VerseNote {
+  id?: string;
   book_id: number;
   book_name: string;
   chapter: number;
   verse: number;
+  reference?: string;
+  titre?: string;
+  contenu?: string;
   note: string;
   audio?: string;
+  created_at?: string;
   updated_at: string;
+  createdAt?: string;
+  updatedAt?: string;
   emotion_analysis?: EmotionAnalysisResult;
 }
 

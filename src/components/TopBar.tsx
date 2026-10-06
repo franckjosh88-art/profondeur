@@ -1,59 +1,60 @@
 import React from 'react';
-import { BookOpen, Search, User } from 'lucide-react';
+import { Menu, Search, ChevronDown, User, Dices } from 'lucide-react';
 
 interface TopBarProps {
+  currentPassage?: string;
+  onOpenDrawer?: () => void;
+  onOpenSelector?: () => void;
   onSearchPress?: () => void;
   onStudyPress?: () => void;
   onProfilePress?: () => void;
+  onMeditationPress?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
+  currentPassage = "Genèse 1",
+  onOpenDrawer,
+  onOpenSelector,
   onSearchPress,
   onStudyPress,
-  onProfilePress
+  onProfilePress,
+  onMeditationPress
 }) => {
   return (
-    <div className="w-full bg-luxury-bg h-14 px-4 flex items-center justify-between border-b border-transparent relative select-none">
-      
-      {/* Left Icon - Book Open in Gold */}
+    <header className="w-full bg-[#050403]/95 backdrop-blur-md h-14 px-3 sm:px-4 flex items-center justify-between border-b border-[#2e2a1e] sticky top-0 z-40 select-none text-[#e8e0d0]">
+      {/* GAUCHE : Menu Hamburger (3 traits) */}
       <div className="flex items-center gap-2">
-        <div className="w-8 h-8 rounded-full bg-luxury-button-bg flex items-center justify-center border border-luxury-gold/20">
-          <BookOpen className="w-4 h-4 text-luxury-gold" />
-        </div>
-        <span className="font-serif font-extrabold tracking-wide text-xs uppercase text-luxury-gold filter drop-shadow">
-          BIBLE PROFONDE
-        </span>
+        <button
+          onClick={onOpenDrawer}
+          className="p-2 rounded-xl text-[#c9a84c] hover:bg-[#1a1712] hover:text-[#ebd092] border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 transition cursor-pointer active:scale-95"
+          title="Ouvrir le menu"
+          aria-label="Menu"
+        >
+          <Menu className="w-5 h-5 stroke-[2.2]" />
+        </button>
       </div>
 
-      {/* Right Icons Container */}
-      <div className="flex items-center gap-3">
-        {/* Search icon */}
+      {/* CENTRE : Passage en cours cliquable -> Sélecteur Livre -> Chapitre -> Verset */}
+      <button
+        onClick={onOpenSelector}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#12100c]/90 hover:bg-[#1a1712] border border-[#2e2a1e] hover:border-[#c9a84c]/60 text-[#c9a84c] font-serif font-extrabold text-xs sm:text-sm tracking-wide transition cursor-pointer shadow-sm max-w-[55%] truncate active:scale-98"
+        title="Changer de livre, chapitre ou verset"
+      >
+        <span className="truncate">{currentPassage}</span>
+        <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-80" />
+      </button>
+
+      {/* DROITE : Icône recherche (loupe) */}
+      <div className="flex items-center gap-1.5">
         <button 
           onClick={onSearchPress}
-          className="p-1.5 hover:bg-luxury-surface/80 text-luxury-text-muted hover:text-luxury-gold rounded-full transition cursor-pointer"
-          title="Recherche"
+          className="p-2 text-[#c9a84c] hover:bg-[#1a1712] hover:text-[#ebd092] rounded-xl border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 transition cursor-pointer active:scale-95"
+          title="Rechercher un verset par mot-clé ou référence directe (ex : Ps 23:4)"
+          aria-label="Recherche"
         >
-          <Search className="w-4 h-4" />
-        </button>
-
-        {/* OUTLINED STUDY BUTTON */}
-        <button
-          onClick={onStudyPress}
-          className="h-8 px-3.5 bg-transparent hover:bg-luxury-button-bg text-luxury-gold font-serif text-[11px] font-extrabold tracking-widest uppercase border border-luxury-gold hover:border-luxury-gold-light rounded-[12px] transition shadow-gold-glow flex items-center justify-center cursor-pointer"
-        >
-          ÉTUDIER
-        </button>
-
-        {/* User icon */}
-        <button
-          onClick={onProfilePress}
-          className="w-8 h-8 rounded-full bg-luxury-surface hover:bg-luxury-button-bg text-luxury-text-muted hover:text-luxury-gold flex items-center justify-center transition border border-luxury-border/60 cursor-pointer"
-          title="Mon Espace"
-        >
-          <User className="w-4 h-4" />
+          <Search className="w-5 h-5 stroke-[2.2]" />
         </button>
       </div>
-
-    </div>
+    </header>
   );
 };
