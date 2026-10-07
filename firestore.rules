@@ -38,6 +38,16 @@ service cloud.firestore {
       match /history/{historyId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Chapter meditations subcollection
+      match /chapter_meditations/{meditationId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Chapter audio meditations subcollection
+      match /chapter_audio_meditations/{audioId} {
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }

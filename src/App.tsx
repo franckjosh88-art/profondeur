@@ -9,7 +9,7 @@ import {
   auth, db, googleProvider, handleFirestoreError, OperationType, cleanFirestoreData 
 } from './lib/firebase';
 import { 
-  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder 
+  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder, ChapterMeditation, ChapterAudioMeditation 
 } from './types/bible';
 import { 
   BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter,
@@ -18,13 +18,10 @@ import {
 import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
 import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
 import { parseNoteContent, SpiritualNote } from './utils/spiritualNotes';
-import { DailyVerseModal } from './components/DailyVerseModal';
-import { BookmarksModal } from './components/BookmarksModal';
-import { DailyReadingModal } from './components/DailyReadingModal';
-import { SettingsModal } from './components/SettingsModal';
+import { saveAudioBlob, deleteAudioBlob } from './utils/audioStorage';
 
 import { 
-  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag, Mic, MicOff, Trash2, Radio, Dices
+  BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag, Mic, MicOff, Trash2, Radio, Dices, Feather
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -39,6 +36,9 @@ import { DailyVerseModal } from './components/DailyVerseModal';
 import { DailyReadingModal } from './components/DailyReadingModal';
 import { BookmarksModal } from './components/BookmarksModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ChapterMeditationCard } from './components/ChapterMeditationCard';
+import { ChapterMeditationsManager } from './components/ChapterMeditationsManager';
+import { ChapterAudiosManager } from './components/ChapterAudiosManager';
 import { BibleReaderView } from './components/BibleReaderView';
 import { AdFreeModal } from './components/AdFreeModal';
 import { StrongLexicon } from './components/StrongLexicon';
@@ -281,6 +281,7 @@ export default function App() {
   const [isNotesViewOpen, setIsNotesViewOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [drawerActivePage, setDrawerActivePage] = useState<DrawerPageKey>('read');
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState<boolean>(true);
   const [isAdvancedMode, setIsAdvancedMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem('bible_advanced_mode') === 'true';
@@ -334,8 +335,24 @@ export default function App() {
     } catch (_) {}
     return DEFAULT_BOOKMARK_FOLDERS;
   });
-  const [librarySubTab, setLibrarySubTab] = useState<'folders' | 'notes'>('folders');
+  const [librarySubTab, setLibrarySubTab] = useState<'folders' | 'notes' | 'meditations' | 'audios'>('folders');
   const [notes, setNotes] = useState<VerseNote[]>([]);
+  const [chapterMeditations, setChapterMeditations] = useState<ChapterMeditation[]>(() => {
+    try {
+      const local = localStorage.getItem('offline_chapter_meditations');
+      return local ? JSON.parse(local) : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const [chapterAudios, setChapterAudios] = useState<ChapterAudioMeditation[]>(() => {
+    try {
+      const local = localStorage.getItem('offline_chapter_audios_meta');
+      return local ? JSON.parse(local) : [];
+    } catch (_) {
+      return [];
+    }
+  });
   const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
 
   // Daily Verse of the Day
@@ -712,6 +729,20 @@ export default function App() {
         }
 
         try {
+          const offlineMeds = localStorage.getItem('offline_chapter_meditations');
+          setChapterMeditations(offlineMeds ? JSON.parse(offlineMeds) : []);
+        } catch (e) {
+          setChapterMeditations([]);
+        }
+
+        try {
+          const offlineAudios = localStorage.getItem('offline_chapter_audios_meta');
+          setChapterAudios(offlineAudios ? JSON.parse(offlineAudios) : []);
+        } catch (e) {
+          setChapterAudios([]);
+        }
+
+        try {
           const offlineHistory = localStorage.getItem('offline_reading_history');
           if (offlineHistory) {
             const sanitized = sanitizeReadingHistory(JSON.parse(offlineHistory));
@@ -1058,11 +1089,47 @@ export default function App() {
       console.error("Bookmark folders sync error:", error);
     });
 
+    // 5. Chapter Meditations
+    const meditationsRef = collection(db, 'users', uid, 'chapter_meditations');
+    const unsubscribeMeditations = onSnapshot(meditationsRef, (snapshot) => {
+      const list: ChapterMeditation[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push(docSnap.data() as ChapterMeditation);
+      });
+      setChapterMeditations(list);
+      try {
+        localStorage.setItem('offline_chapter_meditations', JSON.stringify(list));
+      } catch (e) {
+        console.error("Error backing up chapter meditations to localStorage:", e);
+      }
+    }, (error) => {
+      console.error("Chapter meditations sync error:", error);
+    });
+
+    // 6. Chapter Audio Meditations
+    const audiosRef = collection(db, 'users', uid, 'chapter_audio_meditations');
+    const unsubscribeAudios = onSnapshot(audiosRef, (snapshot) => {
+      const list: ChapterAudioMeditation[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push(docSnap.data() as ChapterAudioMeditation);
+      });
+      setChapterAudios(list);
+      try {
+        localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(list));
+      } catch (e) {
+        console.error("Error backing up chapter audios to localStorage:", e);
+      }
+    }, (error) => {
+      console.error("Chapter audios sync error:", error);
+    });
+
     return () => {
       unsubscribeBookmarks();
       unsubscribeNotes();
       unsubscribeHistory();
       unsubscribeFolders();
+      unsubscribeMeditations();
+      unsubscribeAudios();
     };
   };
 
@@ -1677,10 +1744,166 @@ export default function App() {
     }
   };
 
+  // Chapter Meditation Handlers
+  const handleSaveChapterMeditation = async (bookId: number, bookName: string, chapter: number, text: string): Promise<boolean> => {
+    try {
+      const trimmed = text.trim();
+      const docId = `${bookId}_${chapter}`;
+      const key = `${bookName}-${chapter}`;
+      const existing = chapterMeditations.find(m => m.book_id === bookId && m.chapter === chapter);
+      const now = new Date().toISOString();
+
+      const meditationItem: ChapterMeditation = {
+        id: docId,
+        key,
+        book_id: bookId,
+        book_name: bookName,
+        chapter,
+        text: trimmed,
+        created_at: existing?.created_at || now,
+        updated_at: now
+      };
+
+      let nextMeditations: ChapterMeditation[];
+      if (existing) {
+        nextMeditations = chapterMeditations.map(m => (m.book_id === bookId && m.chapter === chapter) ? meditationItem : m);
+      } else {
+        nextMeditations = [...chapterMeditations, meditationItem];
+      }
+
+      setChapterMeditations(nextMeditations);
+      try {
+        localStorage.setItem('offline_chapter_meditations', JSON.stringify(nextMeditations));
+      } catch (_) {}
+
+      if (user) {
+        const docRef = doc(db, 'users', user.uid, 'chapter_meditations', docId);
+        await setDoc(docRef, cleanFirestoreData(meditationItem), { merge: true });
+      }
+      return true;
+    } catch (error) {
+      console.error("Could not save chapter meditation:", error);
+      return false;
+    }
+  };
+
+  const handleDeleteChapterMeditation = async (bookId: number, chapter: number): Promise<void> => {
+    try {
+      const docId = `${bookId}_${chapter}`;
+      const nextMeditations = chapterMeditations.filter(m => !(m.book_id === bookId && m.chapter === chapter));
+      setChapterMeditations(nextMeditations);
+      try {
+        localStorage.setItem('offline_chapter_meditations', JSON.stringify(nextMeditations));
+      } catch (_) {}
+
+      if (user) {
+        const docRef = doc(db, 'users', user.uid, 'chapter_meditations', docId);
+        await deleteDoc(docRef);
+      }
+    } catch (error) {
+      console.error("Could not delete chapter meditation:", error);
+    }
+  };
+
+  // Chapter Audio Meditation Handlers
+  const handleSaveChapterAudioMeditation = async (
+    bookId: number,
+    bookName: string,
+    chapter: number,
+    title: string,
+    durationSeconds: number,
+    audioBlob: Blob,
+    mimeType: string,
+    writtenMeditationId?: string
+  ): Promise<boolean> => {
+    try {
+      const audioId = `audio_${bookId}_${chapter}_${Date.now()}`;
+      // 1. Save binary in IndexedDB
+      await saveAudioBlob(audioId, audioBlob, mimeType, durationSeconds, user?.uid || null);
+
+      // 2. Prepare metadata
+      const audioItem: ChapterAudioMeditation = {
+        id: audioId,
+        title,
+        book_id: bookId,
+        book_name: bookName,
+        chapter,
+        created_at: new Date().toISOString(),
+        duration_seconds: durationSeconds,
+        audio_mime_type: mimeType,
+        written_meditation_id: writtenMeditationId
+      };
+
+      // 3. Local state & localStorage metadata
+      const nextList = [audioItem, ...chapterAudios];
+      setChapterAudios(nextList);
+      try {
+        localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
+      } catch (_) {}
+
+      // 4. Firestore sync if authenticated
+      if (user) {
+        const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
+        await setDoc(docRef, cleanFirestoreData(audioItem));
+      }
+
+      return true;
+    } catch (err) {
+      console.error("Could not save chapter audio meditation:", err);
+      return false;
+    }
+  };
+
+  const handleDeleteChapterAudioMeditation = async (audioId: string): Promise<void> => {
+    try {
+      await deleteAudioBlob(audioId);
+      const nextList = chapterAudios.filter(a => a.id !== audioId);
+      setChapterAudios(nextList);
+      try {
+        localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
+      } catch (_) {}
+
+      if (user) {
+        const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
+        await deleteDoc(docRef);
+      }
+    } catch (err) {
+      console.error("Could not delete chapter audio meditation:", err);
+    }
+  };
+
+  const handleRenameChapterAudioMeditation = async (audioId: string, newTitle: string): Promise<void> => {
+    try {
+      const nextList = chapterAudios.map(a => a.id === audioId ? { ...a, title: newTitle } : a);
+      setChapterAudios(nextList);
+      try {
+        localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
+      } catch (_) {}
+
+      if (user) {
+        const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
+        await updateDoc(docRef, { title: newTitle });
+      }
+    } catch (err) {
+      console.error("Could not rename chapter audio meditation:", err);
+    }
+  };
+
+  const handleToggleMenu = () => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 1024) {
+      setIsDesktopSidebarOpen(prev => !prev);
+    } else {
+      setIsDrawerOpen(prev => !prev);
+    }
+  };
+
   const handleDrawerSelectPage = (page: DrawerPageKey) => {
     setDrawerActivePage(page);
     setIsDrawerOpen(false);
     switch (page) {
+      case 'home':
+        setActiveTab('home');
+        break;
       case 'read':
         setIsNotesViewOpen(false);
         setActiveTab('read');
@@ -1690,6 +1913,32 @@ export default function App() {
             chapitre: lastReadingPosition.chapter,
             verset: lastReadingPosition.verse
           });
+        }
+        break;
+      case 'dictionary':
+        setActiveTab('dictionary');
+        setTargetedStrongCode(null);
+        break;
+      case 'encyclopedia':
+        setActiveTab('encyclopedia');
+        break;
+      case 'assistant':
+        setActiveTab('assistant');
+        break;
+      case 'challenges':
+        setActiveTab('challenges');
+        break;
+      case 'memorize':
+        setActiveTab('memorize');
+        break;
+      case 'notes':
+        setActiveTab('notes');
+        break;
+      case 'offline':
+        if (popularExplanations.length > 0) {
+          handleLoadCachedExplanation(popularExplanations[0]);
+        } else {
+          setActiveTab('read');
         }
         break;
       case 'toc':
@@ -1702,13 +1951,8 @@ export default function App() {
         setIsDailyReadingModalOpen(true);
         break;
       case 'bookmarks':
-        setIsBookmarksModalOpen(true);
-        break;
       case 'highlights':
         setIsBookmarksModalOpen(true);
-        break;
-      case 'notes':
-        setActiveTab('notes');
         break;
       case 'settings':
         setIsSettingsModalOpen(true);
@@ -3303,24 +3547,17 @@ export default function App() {
         backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.65) 0%, rgba(5, 4, 3, 0.78) 45%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`
       }}
     >
-      {/* 1. TIROIR LATÉRAL GAUCHE EN STYLE NOIR & OR (~60% DE LARGEUR) */}
+      {/* 1. TIROIR LATÉRAL GAUCHE EN STYLE NOIR & OR */}
       <BibleDrawer
         isOpen={isDrawerOpen}
-        activePage={drawerActivePage}
+        activePage={activeTab}
         onClose={() => setIsDrawerOpen(false)}
         onSelectPage={handleDrawerSelectPage}
       />
 
-      {/* 2. CONTENEUR PRINCIPAL DÉCALÉ À DROITE DE 60% QUAND LE TIROIR EST OUVERT */}
+      {/* 2. CONTENEUR PRINCIPAL */}
       <div 
-        className={`relative min-h-screen flex flex-col transition-transform duration-300 ease-out ${
-          isDrawerOpen 
-            ? 'translate-x-[60%] sm:translate-x-[300px] shadow-[0_0_50px_rgba(0,0,0,0.8)] opacity-90' 
-            : 'translate-x-0'
-        }`}
-        onClick={() => {
-          if (isDrawerOpen) setIsDrawerOpen(false);
-        }}
+        className="relative min-h-screen flex flex-col"
       >
         {/* Veille spirituelle overlays (Sunset eye protection + physical screen dimmer) */}
         {isVigilActive && (
@@ -3349,9 +3586,10 @@ export default function App() {
         {!isZenMode && (
           <TopBar 
             currentPassage={`${selectedBook.name} ${selectedChapter}`}
-            onOpenDrawer={() => setIsDrawerOpen(true)}
+            onOpenDrawer={handleToggleMenu}
             onOpenSelector={() => setIsNavigatorOpen(true)}
             onSearchPress={() => setIsSearchModalOpen(true)}
+            onProfilePress={() => setIsSettingsModalOpen(true)}
           />
         )}
 
@@ -3923,90 +4161,106 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-5 sm:px-6 md:px-8 pt-4 pb-28 sm:pb-32 flex flex-col md:flex-row gap-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 md:px-8 pt-4 pb-28 sm:pb-32 flex flex-col lg:flex-row gap-6 lg:gap-8">
         
-        {/* SIDEBAR NAVIGATION TAB COLUMN FOR MEDIUM+ DISPLAY */}
-        <aside className={`w-full md:w-60 shrink-0 ${isZenMode ? 'hidden' : 'hidden md:flex'} flex-col gap-1.5 text-left font-serif py-1`}>
-          <span className="text-[10px] font-mono font-black uppercase text-[#6b6355] tracking-[0.24em] px-3 mb-2">Sanctuaire</span>
+        {/* SIDEBAR NAVIGATION TAB COLUMN FOR DESKTOP (>= 1024px) */}
+        <aside className={`w-full lg:w-60 shrink-0 ${isZenMode || !isDesktopSidebarOpen ? 'hidden' : 'hidden lg:flex'} flex-col gap-1.5 text-left font-serif py-1 select-none`}>
+          <span className="text-[10px] font-mono font-black uppercase text-[#c9a84c] tracking-[0.24em] px-3 mb-2">
+            SANCTUAIRE
+          </span>
           
           <button
             onClick={() => setActiveTab('home')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'home' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'home' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <Home className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <Home className={`w-4.5 h-4.5 ${activeTab === 'home' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Accueil</span>
           </button>
 
           <button
             onClick={() => setActiveTab('read')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'read' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'read' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <BookOpen className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <BookOpen className={`w-4.5 h-4.5 ${activeTab === 'read' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Étude & Lecteur</span>
           </button>
 
           <button
             onClick={() => { setActiveTab('dictionary'); setTargetedStrongCode(null); }}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'dictionary' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'dictionary' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <Search className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <Search className={`w-4.5 h-4.5 ${activeTab === 'dictionary' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Concordance Strong</span>
           </button>
 
           <button
             onClick={() => setActiveTab('encyclopedia')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'encyclopedia' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'encyclopedia' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <Library className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <Library className={`w-4.5 h-4.5 ${activeTab === 'encyclopedia' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Dictionnaire IA</span>
           </button>
 
           <button
             onClick={() => setActiveTab('assistant')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'assistant' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'assistant' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <MessageSquare className="w-4.5 h-4.5 text-[#c9a84c] animate-pulse" />
+            <MessageSquare className={`w-4.5 h-4.5 ${activeTab === 'assistant' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Assistant Biblique</span>
           </button>
 
           <button
             onClick={() => setActiveTab('challenges')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'challenges' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'challenges' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <Flame className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <Flame className={`w-4.5 h-4.5 ${activeTab === 'challenges' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Défis & Fidélité</span>
           </button>
 
           <button
             onClick={() => setActiveTab('memorize')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'memorize' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'memorize' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <Brain className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <Brain className={`w-4.5 h-4.5 ${activeTab === 'memorize' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Mémorisation</span>
           </button>
 
           <button
             onClick={() => setActiveTab('notes')}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase ${
-              activeTab === 'notes' ? 'bg-[#1a1712] text-[#c9a84c] border border-[#c9a84c]/20 shadow-soft font-bold' : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#12100c]'
+              activeTab === 'notes' ? 'bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/60 shadow-[0_0_12px_rgba(201,168,76,0.15)] font-bold' : 'text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]'
             }`}
           >
-            <ScrollText className="w-4.5 h-4.5 text-[#c9a84c]" />
+            <ScrollText className={`w-4.5 h-4.5 ${activeTab === 'notes' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
             <span>Notes Spirituelles</span>
+          </button>
+
+          <button
+            onClick={() => {
+              if (popularExplanations.length > 0) {
+                handleLoadCachedExplanation(popularExplanations[0]);
+              } else {
+                setActiveTab('read');
+              }
+            }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]`}
+          >
+            <Download className="w-4.5 h-4.5 text-[#8c8270]" />
+            <span>Études Hors-ligne</span>
           </button>
 
           <div className="pt-4 border-t border-[#2e2a1e]/40 mt-2 px-3">
@@ -4078,7 +4332,7 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="w-full max-w-sm mx-auto p-1 text-left shrink-0"
+              className="w-full max-w-[900px] mx-auto p-1 text-left shrink-0"
             >
               <ContemplativeHome 
                 onNavigateToTab={(tab) => setActiveTab(tab)}
@@ -5488,6 +5742,20 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                {/* Chapter Meditation Card */}
+                {!loadingVerses && chapterVerses.length > 0 && (
+                  <ChapterMeditationCard
+                    bookId={selectedBook.id}
+                    bookName={selectedBook.name}
+                    chapter={selectedChapter}
+                    savedMeditation={chapterMeditations.find(m => m.book_id === selectedBook.id && m.chapter === selectedChapter)}
+                    chapterAudios={chapterAudios.filter(a => a.book_id === selectedBook.id && a.chapter === selectedChapter)}
+                    onSaveMeditation={handleSaveChapterMeditation}
+                    onSaveAudioMeditation={handleSaveChapterAudioMeditation}
+                    onDeleteAudioMeditation={handleDeleteChapterAudioMeditation}
+                  />
+                )}
                 
                 {/* Chapter study validation */}
                 {!loadingVerses && (
@@ -5877,34 +6145,58 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-5"
             >
-              {/* Dual Sub-Tabs Selector */}
-              <div className="flex bg-[#12100c] border border-[#2e2a1e] p-1.5 rounded-2xl max-w-lg mx-auto shadow-inner">
+              {/* Quadruple Sub-Tabs Selector */}
+              <div className="flex flex-wrap sm:flex-nowrap bg-[#12100c] border border-[#2e2a1e] p-1.5 rounded-2xl max-w-2xl mx-auto shadow-inner gap-1">
                 <button
                   onClick={() => setLibrarySubTab('folders')}
-                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer ${
+                  className={`flex-1 min-w-[95px] py-2 px-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer ${
                     librarySubTab === 'folders'
                       ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
                       : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
                   }`}
                 >
-                  <Folder className="w-3.5 h-3.5" />
-                  <span>Favoris par Thèmes ({favorites.length})</span>
+                  <Folder className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Favoris ({favorites.length})</span>
                 </button>
 
                 <button
                   onClick={() => setLibrarySubTab('notes')}
-                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 cursor-pointer ${
+                  className={`flex-1 min-w-[95px] py-2 px-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer ${
                     librarySubTab === 'notes'
                       ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
                       : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
                   }`}
                 >
-                  <Bookmark className="w-3.5 h-3.5" />
-                  <span>Journal de Notes ({notes.length})</span>
+                  <Bookmark className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Journal ({notes.length})</span>
+                </button>
+
+                <button
+                  onClick={() => setLibrarySubTab('meditations')}
+                  className={`flex-1 min-w-[105px] py-2 px-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer ${
+                    librarySubTab === 'meditations'
+                      ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
+                  }`}
+                >
+                  <Feather className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Méditations ({chapterMeditations.length})</span>
+                </button>
+
+                <button
+                  onClick={() => setLibrarySubTab('audios')}
+                  className={`flex-1 min-w-[105px] py-2 px-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 cursor-pointer ${
+                    librarySubTab === 'audios'
+                      ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                      : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">Mes audios ({chapterAudios.length})</span>
                 </button>
               </div>
 
-              {librarySubTab === 'folders' ? (
+              {librarySubTab === 'folders' && (
                 <BookmarkFoldersManager 
                   favorites={favorites}
                   folders={bookmarkFolders}
@@ -5915,11 +6207,44 @@ export default function App() {
                   onUpdateFolder={handleUpdateBookmarkFolder}
                   onDeleteFolder={handleDeleteBookmarkFolder}
                 />
-              ) : (
+              )}
+
+              {librarySubTab === 'notes' && (
                 <SpiritualNotesManager 
                   notes={notes}
                   onNavigateToVerse={handleNavigateVerseToReader}
                   onSaveNote={handleSaveSpiritualNote}
+                />
+              )}
+
+              {librarySubTab === 'meditations' && (
+                <ChapterMeditationsManager
+                  meditations={chapterMeditations}
+                  onNavigateToChapter={(bookId, chapter, verseNum) => {
+                    navigateToScripture({
+                      livre: bookId,
+                      chapitre: chapter,
+                      verset: verseNum || 1
+                    });
+                  }}
+                  onDeleteMeditation={handleDeleteChapterMeditation}
+                />
+              )}
+
+              {librarySubTab === 'audios' && (
+                <ChapterAudiosManager
+                  audios={chapterAudios}
+                  writtenMeditations={chapterMeditations}
+                  onNavigateToChapter={(bookId, chapter, verseNum) => {
+                    navigateToScripture({
+                      livre: bookId,
+                      chapitre: chapter,
+                      verset: verseNum || 1
+                    });
+                  }}
+                  onNavigateToWrittenTab={() => setLibrarySubTab('meditations')}
+                  onDeleteAudio={handleDeleteChapterAudioMeditation}
+                  onRenameAudio={handleRenameChapterAudioMeditation}
                 />
               )}
             </motion.div>
@@ -5928,10 +6253,9 @@ export default function App() {
         </div>
       </main>
 
-      {/* GLOBAL FIXED BOTTOM NAVIGATION BAR */}
-      {/* "Il ne doit y avoir qu'une seule barre de navigation en bas, fixe (sticky/fixed), avec ces éléments : [Accueil, Étudier, Bibliothèque, Notifications]" */}
+      {/* GLOBAL FIXED BOTTOM NAVIGATION BAR (Mobile & Tablette uniquement) */}
       {!isZenMode && (
-        <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex justify-around z-40 select-none shadow-gold-glow">
+        <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex lg:hidden justify-around z-40 select-none shadow-gold-glow">
           <button
             onClick={() => {
               setActiveTab('home');

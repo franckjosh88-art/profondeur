@@ -127,3 +127,27 @@ export interface SimilarVersesResponse {
   versets_similaires: SimilarVerse[];
 }
 
+export interface ChapterMeditation {
+  id: string; // e.g. `${book_id}_${chapter}`
+  key: string; // e.g. `${book_name}-${chapter}` (ex: "Jean-3")
+  book_id: number;
+  book_name: string;
+  chapter: number;
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChapterAudioMeditation {
+  id: string; // unique audio recording id (e.g. `audio_${book_id}_${chapter}_${timestamp}`)
+  title: string; // e.g. "Jean 3 – 7 octobre 2026"
+  book_id: number;
+  book_name: string;
+  chapter: number;
+  created_at: string;
+  duration_seconds: number;
+  audio_mime_type?: string;
+  written_meditation_id?: string;
+  audio_url?: string; // transient Object URL for playback
+}
+

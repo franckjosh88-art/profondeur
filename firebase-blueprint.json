@@ -69,6 +69,38 @@
         "timestamp": { "type": "string" }
       },
       "required": ["book_id", "book_name", "chapter", "timestamp"]
+    },
+    "ChapterMeditation": {
+      "title": "ChapterMeditation",
+      "description": "User personal chapter meditation reflections",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "text": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["key", "book_id", "book_name", "chapter", "text", "created_at", "updated_at"]
+    },
+    "ChapterAudioMeditation": {
+      "title": "ChapterAudioMeditation",
+      "description": "User voice meditation recordings for chapters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "created_at": { "type": "string" },
+        "duration_seconds": { "type": "number" },
+        "audio_mime_type": { "type": "string" },
+        "written_meditation_id": { "type": "string" }
+      },
+      "required": ["id", "title", "book_id", "book_name", "chapter", "created_at", "duration_seconds"]
     }
   },
   "firestore": {
@@ -91,6 +123,14 @@
     "users/{userId}/history/{historyId}": {
       "schema": "ReadingHistory",
       "description": "User reading history for study charts and plans"
+    },
+    "users/{userId}/chapter_meditations/{meditationId}": {
+      "schema": "ChapterMeditation",
+      "description": "User chapter general takeaway reflections"
+    },
+    "users/{userId}/chapter_audio_meditations/{audioId}": {
+      "schema": "ChapterAudioMeditation",
+      "description": "User voice meditation recordings for chapters"
     }
   }
 }

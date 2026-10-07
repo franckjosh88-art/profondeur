@@ -3,6 +3,7 @@ import { Bookmark, Highlighter, X, Trash2, BookOpen, Search } from 'lucide-react
 import { motion, AnimatePresence } from 'motion/react';
 import { FavoriteVerse } from '../types/bible';
 import { cleanBibleMarkdown } from '../lib/bibleFormatter';
+import { cleanStrongCodes } from '../data/bibleData';
 
 interface BookmarksModalProps {
   isOpen: boolean;
