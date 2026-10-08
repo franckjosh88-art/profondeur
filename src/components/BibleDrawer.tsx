@@ -27,6 +27,8 @@ interface BibleDrawerProps {
   activePage: string;
   onClose: () => void;
   onSelectPage: (page: DrawerPageKey) => void;
+  userEmail?: string | null;
+  onOpenAuth?: () => void;
 }
 
 export const SANCTUARY_NAV_ITEMS = [
@@ -45,7 +47,9 @@ export const BibleDrawer: React.FC<BibleDrawerProps> = ({
   isOpen,
   activePage,
   onClose,
-  onSelectPage
+  onSelectPage,
+  userEmail,
+  onOpenAuth
 }) => {
   return (
     <AnimatePresence>
@@ -113,8 +117,32 @@ export const BibleDrawer: React.FC<BibleDrawerProps> = ({
             </nav>
 
             {/* PIED DE TIROIR */}
-            <div className="p-3.5 border-t border-[#2e2a1e]/80 text-center text-[9px] font-mono text-[#6b6355] bg-[#050403]/90">
+            <div className="p-3.5 border-t border-[#2e2a1e]/80 flex items-center justify-between text-[9px] font-mono text-[#6b6355] bg-[#050403]/90">
               <span>Bible Profonde · Mode Sacré</span>
+              {userEmail ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    if (onOpenAuth) onOpenAuth();
+                  }}
+                  className="text-[#c9a84c] hover:underline cursor-pointer truncate max-w-[120px]"
+                  title={userEmail}
+                >
+                  {userEmail.split('@')[0]}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    if (onOpenAuth) onOpenAuth();
+                  }}
+                  className="text-[#c9a84c] hover:underline cursor-pointer font-bold uppercase tracking-wider"
+                >
+                  Se connecter
+                </button>
+              )}
             </div>
           </motion.aside>
         </div>

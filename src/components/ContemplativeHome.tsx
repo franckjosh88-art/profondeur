@@ -25,7 +25,7 @@ export const CONTEMPLATIVE_ATMOSPHERES = [
   {
     id: 'sanctuary' as const,
     name: 'Sanctuaire',
-    label: 'Neutre / Bokeh',
+    label: 'Nuance / Bokeh',
     icon: Leaf,
     url: PRAYER_BG_SANCTUARY,
     description: 'Lumière dorée douce en clair-obscur, bokeh intime et sacré'

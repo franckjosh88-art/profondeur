@@ -3,23 +3,35 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,700;1,400;1,700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500&family=Cinzel:wght@400;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&family=Alex+Brush&family=Montserrat:wght@300;400;600;700&display=swap');
 
 :root {
-  --luxury-bg-deep: #050403;
-  --luxury-bg: #050403;
-  --luxury-surface: #0c0a07;
-  --luxury-elevated: #16130e;
-  --luxury-border: rgba(217, 178, 106, 0.3);
+  --bg: #050403;
+  --surface: #12100c;
+  --surface-hover: #1c1913;
+  --text: #f4efe2;
+  --text-muted: #8c8270;
+  --accent: #c9a84c;
+  --border: #2e2a1e;
+  --verse-num: #6e6555;
+  --font-reading: 'Lora', 'Playfair Display', Georgia, serif;
+  --line-height: 1.8;
+  --text-size: 18px;
+
+  --luxury-bg-deep: var(--bg);
+  --luxury-bg: var(--bg);
+  --luxury-surface: var(--surface);
+  --luxury-elevated: var(--surface-hover);
+  --luxury-border: var(--border);
   
-  --luxury-text-primary: #f4efe2;
-  --luxury-text-verse: #D9B26A;
-  --luxury-text-muted: #8c8270;
-  --luxury-text-accent: #D9B26A;
+  --luxury-text-primary: var(--text);
+  --luxury-text-verse: var(--accent);
+  --luxury-text-muted: var(--text-muted);
+  --luxury-text-accent: var(--accent);
   
-  --luxury-gold: #D9B26A;
+  --luxury-gold: var(--accent);
   --luxury-gold-light: #ebd092;
   --luxury-gold-dark: #9e7d38;
   
-  --luxury-button-bg: rgba(217, 178, 106, 0.12);
-  --simulator-border: #1a1610;
+  --luxury-button-bg: rgba(201, 168, 76, 0.12);
+  --simulator-border: var(--border);
 }
 
 .theme-sepia {
@@ -44,28 +56,45 @@
 
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-serif: 'Playfair Display', 'Cormorant Garamond', 'Lora', Georgia, serif;
-  --font-reading: 'Lora', 'Cormorant Garamond', Georgia, serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-serif: 'Lora', 'Playfair Display', Georgia, serif;
+  --font-reading: var(--font-reading);
+  --font-mono: 'Inter', system-ui, -apple-system, sans-serif;
+
+  --color-app-bg: var(--bg);
+  --color-app-surface: var(--surface);
+  --color-app-surface-hover: var(--surface-hover);
+  --color-app-text: var(--text);
+  --color-app-text-muted: var(--text-muted);
+  --color-app-accent: var(--accent);
+  --color-app-border: var(--border);
+  --color-app-verse-num: var(--verse-num);
   
-  --color-luxury-bg-deep: var(--luxury-bg-deep);
-  --color-luxury-bg: var(--luxury-bg);
-  --color-luxury-surface: var(--luxury-surface);
-  --color-luxury-elevated: var(--luxury-elevated);
-  --color-luxury-border: var(--luxury-border);
+  --color-luxury-bg-deep: var(--bg);
+  --color-luxury-bg: var(--bg);
+  --color-luxury-surface: var(--surface);
+  --color-luxury-elevated: var(--surface-hover);
+  --color-luxury-border: var(--border);
   
-  --color-luxury-text-primary: var(--luxury-text-primary);
-  --color-luxury-text-verse: var(--luxury-text-verse);
-  --color-luxury-text-muted: var(--luxury-text-muted);
-  --color-luxury-text-accent: var(--luxury-text-accent);
+  --color-luxury-text-primary: var(--text);
+  --color-luxury-text-verse: var(--accent);
+  --color-luxury-text-muted: var(--text-muted);
+  --color-luxury-text-accent: var(--accent);
   
-  --color-luxury-gold: var(--luxury-gold);
-  --color-luxury-gold-light: var(--luxury-gold-light);
-  --color-luxury-gold-dark: var(--luxury-gold-dark);
+  --color-luxury-gold: var(--accent);
+  --color-luxury-gold-light: var(--accent);
+  --color-luxury-gold-dark: var(--accent);
   
   --color-luxury-button-bg: var(--luxury-button-bg);
-  --color-simulator-border: var(--simulator-border);
+  --color-simulator-border: var(--border);
 }
+
+.bg-app { background-color: var(--bg); }
+.bg-surface { background-color: var(--surface); }
+.bg-surface-hover:hover { background-color: var(--surface-hover); }
+.text-app { color: var(--text); }
+.text-muted { color: var(--text-muted); }
+.text-accent { color: var(--accent); }
+.border-app { border-color: var(--border); }
 
 @utility shadow-gold-glow {
   box-shadow: 0 0 20px rgba(217, 178, 106, 0.2);

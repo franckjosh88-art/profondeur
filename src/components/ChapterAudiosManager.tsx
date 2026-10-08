@@ -434,7 +434,12 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
                 max={isCurrent ? playbackDuration || item.duration_seconds || 1 : item.duration_seconds || 1}
                 step={0.1}
                 value={isCurrent ? playbackTime : 0}
-                onChange={isCurrent ? handleSeek : undefined}
+                readOnly={!isCurrent}
+                onChange={(e) => {
+                  if (isCurrent) {
+                    handleSeek(e);
+                  }
+                }}
                 className="w-full accent-[#c9a84c] h-1.5 bg-[#1a1712] rounded-lg cursor-pointer"
               />
               <div className="flex items-center justify-between text-[10px] font-mono text-[#8c8270]">

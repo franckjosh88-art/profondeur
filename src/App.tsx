@@ -40,6 +40,7 @@ import { ChapterMeditationCard } from './components/ChapterMeditationCard';
 import { ChapterMeditationsManager } from './components/ChapterMeditationsManager';
 import { ChapterAudiosManager } from './components/ChapterAudiosManager';
 import { BibleReaderView } from './components/BibleReaderView';
+import { PureBibleReader } from './components/PureBibleReader';
 import { AdFreeModal } from './components/AdFreeModal';
 import { StrongLexicon } from './components/StrongLexicon';
 import { ReadingChallenges } from './components/ReadingChallenges';
@@ -198,9 +199,9 @@ export default function App() {
         if (saved.includes('bible')) return PRAYER_BG_BIBLE;
         if (!saved.startsWith('/src/')) return saved;
       }
-      return PRAYER_IN_LIGHT_BG;
+      return PRAYER_BG_BIBLE;
     } catch (_) {
-      return PRAYER_IN_LIGHT_BG;
+      return PRAYER_BG_BIBLE;
     }
   });
 
@@ -280,6 +281,7 @@ export default function App() {
   const [isBookmarksModalOpen, setIsBookmarksModalOpen] = useState<boolean>(false);
   const [isNotesViewOpen, setIsNotesViewOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [drawerActivePage, setDrawerActivePage] = useState<DrawerPageKey>('read');
   const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState<boolean>(true);
   const [isAdvancedMode, setIsAdvancedMode] = useState<boolean>(() => {
@@ -1745,12 +1747,14 @@ export default function App() {
   };
 
   // Chapter Meditation Handlers
-  const handleSaveChapterMeditation = async (bookId: number, bookName: string, chapter: number, text: string): Promise<boolean> => {
+  const handleSaveChapterMeditation = async (bookId: number, bookName: string, chapter: number, text: string, noteId?: string): Promise<boolean> => {
     try {
       const trimmed = text.trim();
-      const docId = `${bookId}_${chapter}`;
+      const existing = noteId 
+        ? chapterMeditations.find(m => m.id === noteId)
+        : chapterMeditations.find(m => m.book_id === bookId && m.chapter === chapter);
+      const docId = noteId || existing?.id || `${bookId}_${chapter}_${Date.now()}`;
       const key = `${bookName}-${chapter}`;
-      const existing = chapterMeditations.find(m => m.book_id === bookId && m.chapter === chapter);
       const now = new Date().toISOString();
 
       const meditationItem: ChapterMeditation = {
@@ -1765,10 +1769,10 @@ export default function App() {
       };
 
       let nextMeditations: ChapterMeditation[];
-      if (existing) {
-        nextMeditations = chapterMeditations.map(m => (m.book_id === bookId && m.chapter === chapter) ? meditationItem : m);
+      if (chapterMeditations.some(m => m.id === docId)) {
+        nextMeditations = chapterMeditations.map(m => m.id === docId ? meditationItem : m);
       } else {
-        nextMeditations = [...chapterMeditations, meditationItem];
+        nextMeditations = [meditationItem, ...chapterMeditations];
       }
 
       setChapterMeditations(nextMeditations);
@@ -1787,18 +1791,23 @@ export default function App() {
     }
   };
 
-  const handleDeleteChapterMeditation = async (bookId: number, chapter: number): Promise<void> => {
+  const handleDeleteChapterMeditation = async (bookId: number, chapter: number, noteId?: string): Promise<void> => {
     try {
-      const docId = `${bookId}_${chapter}`;
-      const nextMeditations = chapterMeditations.filter(m => !(m.book_id === bookId && m.chapter === chapter));
+      const targetId = noteId;
+      const nextMeditations = chapterMeditations.filter(m => targetId ? m.id !== targetId : !(m.book_id === bookId && m.chapter === chapter));
       setChapterMeditations(nextMeditations);
       try {
         localStorage.setItem('offline_chapter_meditations', JSON.stringify(nextMeditations));
       } catch (_) {}
 
       if (user) {
-        const docRef = doc(db, 'users', user.uid, 'chapter_meditations', docId);
-        await deleteDoc(docRef);
+        if (targetId) {
+          const docRef = doc(db, 'users', user.uid, 'chapter_meditations', targetId);
+          await deleteDoc(docRef);
+        } else {
+          const docRef = doc(db, 'users', user.uid, 'chapter_meditations', `${bookId}_${chapter}`);
+          await deleteDoc(docRef);
+        }
       }
     } catch (error) {
       console.error("Could not delete chapter meditation:", error);
@@ -3356,7 +3365,7 @@ export default function App() {
           <div className="w-16 h-16 rounded-full border-t-2 border-r-2 border-[#c9a84c] animate-spin"></div>
           <BookOpen className="w-8 h-8 text-[#c9a84c] absolute inset-0 m-auto animate-pulse" />
         </div>
-        <h2 className="text-xl font-serif tracking-[0.12em] text-[#c9a84c] uppercase font-extrabold">BIBLE MOBILE</h2>
+        <h2 className="text-xl font-serif tracking-[0.12em] text-[#c9a84c] uppercase font-extrabold">BIBLE PROFONDE</h2>
         <p className="text-xs text-[#6b6355] mt-2 tracking-wider font-mono max-w-sm leading-relaxed">
           {dbInitText}
         </p>
@@ -3380,171 +3389,20 @@ export default function App() {
         }}
       >
         <div className="w-8 h-8 rounded-full border-b border-r border-[#c9a84c] animate-spin mb-4"></div>
-        <p className="text-xs text-[#6b6355] tracking-widest font-mono uppercase">Vérification de l'alliance...</p>
+        <p className="text-xs text-[#6b6355] tracking-widest font-mono uppercase">Ouverture du Sanctuaire...</p>
       </div>
     );
   }
 
-  // Non-authenticated luxury portal screen
-  if (!user) {
-    return (
-      <div 
-        className="min-h-screen prayer-bg-cover flex items-center justify-center p-4 relative"
-        style={{
-          backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.68) 0%, rgba(5, 4, 3, 0.85) 100%), url('${sanctuaryBgImage}')`
-        }}
-      >
-        <div className="w-full max-w-md bg-[#12100c] border border-[#2e2a1e] p-8 rounded-[2rem] shadow-gold-glow relative overflow-hidden text-center">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="absolute -bottom-10 -left-10 w-36 h-36 bg-[#c9a84c]/5 rounded-full blur-3xl pointer-events-none"></div>
-
-          {/* Majestic Icon Header */}
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 bg-luxury-button-bg border border-[#c9a84c]/25 text-[#c9a84c] rounded-full flex items-center justify-center shadow-inner mb-3.5">
-              <BookOpen className="w-7 h-7 text-[#c9a84c]" />
-            </div>
-            <h1 className="text-2xl font-serif tracking-[0.1em] text-[#c9a84c] font-black uppercase">Bible Mobile</h1>
-            <p className="text-xs text-[#6b6355] mt-2 font-serif leading-relaxed max-w-xs">
-              Exégèse érudite de la Bible Louis Segond 1910 par intelligence artificielle théologique
-            </p>
-          </div>
-
-          {/* In-tab Auth Segment Panel */}
-          <div className="flex bg-[#0d0b07] border border-[#2e2a1e]/85 p-1 rounded-xl mb-6">
-            <button
-              onClick={() => { setAuthMode('login'); setAuthError(null); }}
-              className={`flex-1 py-2 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
-                authMode === 'login' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-              }`}
-            >
-              Connexion
-            </button>
-            <button
-              onClick={() => { setAuthMode('signup'); setAuthError(null); }}
-              className={`flex-1 py-1.5 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
-                authMode === 'signup' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
-              }`}
-            >
-              Inscription
-            </button>
-          </div>
-
-          {authError && (
-            <motion.div 
-              initial={{ opacity: 0, y: -4 }} 
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-red-950/20 border border-red-900/35 text-red-300 p-3.5 rounded-xl text-xs mb-5 flex items-start gap-2 text-left"
-            >
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
-              <span className="font-sans leading-relaxed">{authError}</span>
-            </motion.div>
-          )}
-
-          {/* Form Entries block */}
-          <form onSubmit={handleAuthSubmit} className="space-y-4 text-left">
-            {authMode === 'signup' && (
-              <div className="space-y-1">
-                <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Nom d'Étudiant ou Pseudo</label>
-                <div className="relative">
-                  <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Grand Voyageur"
-                    className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-4 py-3 rounded-xl transition outline-none"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-1">
-              <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Adresse Email</label>
-              <div className="relative">
-                <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="nom@exemple.com"
-                  className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-4 py-3 rounded-xl transition outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Mot de passe</label>
-              <div className="relative">
-                <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3.5" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/20 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-10 py-3 rounded-xl transition outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="p-1 hover:text-[#c9a84c] text-[#6b6355] absolute right-3.5 top-3 transition cursor-pointer"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3.5 bg-gold-gradient text-[#0d0b07] font-bold font-serif text-xs uppercase tracking-widest rounded-xl transition shadow-gold-glow cursor-pointer mt-6 flex items-center justify-center gap-1 hover:opacity-95"
-            >
-              <span>{authMode === 'login' ? 'Accéder au Sanctuaire' : 'S\'engager dans la Foi'}</span>
-              <ArrowRight className="w-4 h-4 text-[#0d0b07]" />
-            </button>
-          </form>
-
-          {/* Social Sign-In option divider */}
-          <div className="relative flex py-4 items-center select-none">
-            <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
-            <span className="flex-shrink mx-4 text-[9px] font-mono uppercase text-[#6b6355] tracking-[0.18em]">Ou s'assembler par</span>
-            <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
-          </div>
-
-          <button
-            onClick={handleGoogleSignIn}
-            disabled={isGoogleSigningIn}
-            className="w-full py-3 bg-[#0d0b07] hover:bg-[#1a1712] text-[#e8e0d0] border border-[#2e2a1e] rounded-xl transition text-[10px] font-mono tracking-widest uppercase flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isGoogleSigningIn ? (
-              <span className="flex items-center gap-2">
-                <span className="w-3.5 h-3.5 border-2 border-[#c9a84c] border-t-transparent rounded-full animate-spin" />
-                Connexion en cours...
-              </span>
-            ) : (
-              <>
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
-                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
-                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
-                </svg>
-                <span>Google Sign-In</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Main Authenticated Layout (Design Sacré Noir & Or)
+  // Main Layout (Design Sacré Noir & Or - Accès direct sans barrière d'authentification)
   return (
     <div 
       className={`min-h-screen prayer-bg-cover text-[#e8e0d0] flex flex-col font-sans selection:bg-[#c9a84c]/20 ${isZenMode ? 'pb-6' : 'pb-20 md:pb-6'} text-left selection:text-[#c9a84c] relative overflow-x-hidden`}
       style={{
-        backgroundImage: `linear-gradient(to bottom, rgba(5, 4, 3, 0.65) 0%, rgba(5, 4, 3, 0.78) 45%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`
+        backgroundImage: activeTab === 'read'
+          ? 'none'
+          : `linear-gradient(to bottom, rgba(5, 4, 3, 0.65) 0%, rgba(5, 4, 3, 0.78) 45%, rgba(5, 4, 3, 0.88) 100%), url('${sanctuaryBgImage}')`,
+        backgroundColor: '#0c0a07'
       }}
     >
       {/* 1. TIROIR LATÉRAL GAUCHE EN STYLE NOIR & OR */}
@@ -3553,6 +3411,14 @@ export default function App() {
         activePage={activeTab}
         onClose={() => setIsDrawerOpen(false)}
         onSelectPage={handleDrawerSelectPage}
+        userEmail={user?.email || null}
+        onOpenAuth={() => {
+          if (user) {
+            setIsSettingsModalOpen(true);
+          } else {
+            setIsAuthModalOpen(true);
+          }
+        }}
       />
 
       {/* 2. CONTENEUR PRINCIPAL */}
@@ -3583,13 +3449,19 @@ export default function App() {
         )}
 
         {/* 1) BARRE DU HAUT FIXE ET VISIBLE SUR TOUTES LES PAGES (STYLE DORÉ/NOIR) */}
-        {!isZenMode && (
+        {!isZenMode && activeTab !== 'read' && (
           <TopBar 
             currentPassage={`${selectedBook.name} ${selectedChapter}`}
             onOpenDrawer={handleToggleMenu}
             onOpenSelector={() => setIsNavigatorOpen(true)}
             onSearchPress={() => setIsSearchModalOpen(true)}
-            onProfilePress={() => setIsSettingsModalOpen(true)}
+            onProfilePress={() => {
+              if (user) {
+                setIsSettingsModalOpen(true);
+              } else {
+                setIsAuthModalOpen(true);
+              }
+            }}
           />
         )}
 
@@ -3619,9 +3491,9 @@ export default function App() {
                   <div className="space-y-1">
                     <span className="text-[8px] font-mono uppercase tracking-wider text-[#6b6355]">COMPTE ACTIF</span>
                     <h5 className="font-serif font-bold text-[#e8e0d0] text-sm truncate">
-                      {displayName || user.displayName || user.email?.split('@')[0]}
+                      {displayName || user?.displayName || user?.email?.split('@')[0] || "Pèlerin de Foi"}
                     </h5>
-                    <p className="text-[10px] font-mono text-[#6b6355] truncate">{user.email}</p>
+                    <p className="text-[10px] font-mono text-[#6b6355] truncate">{user?.email || "Mode Invité (Local)"}</p>
                   </div>
                   <button 
                     onClick={handleSignOut}
@@ -4161,10 +4033,10 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 md:px-8 pt-4 pb-28 sm:pb-32 flex flex-col lg:flex-row gap-6 lg:gap-8">
+      <main className={`flex-1 w-full mx-auto ${activeTab === 'read' ? 'p-0 max-w-none' : 'max-w-7xl px-4 sm:px-6 md:px-8 pt-4'} ${activeTab === 'home' ? 'pb-10 lg:pb-12' : (activeTab === 'read' ? 'pb-0' : 'pb-28 sm:pb-32')} flex flex-col lg:flex-row ${activeTab === 'read' ? 'gap-0' : 'gap-6 lg:gap-8'}`}>
         
         {/* SIDEBAR NAVIGATION TAB COLUMN FOR DESKTOP (>= 1024px) */}
-        <aside className={`w-full lg:w-60 shrink-0 ${isZenMode || !isDesktopSidebarOpen ? 'hidden' : 'hidden lg:flex'} flex-col gap-1.5 text-left font-serif py-1 select-none`}>
+        <aside className={`w-full lg:w-60 shrink-0 ${isZenMode || !isDesktopSidebarOpen || activeTab === 'read' ? 'hidden' : 'hidden lg:flex'} flex-col gap-1.5 text-left font-serif py-1 select-none`}>
           <span className="text-[10px] font-mono font-black uppercase text-[#c9a84c] tracking-[0.24em] px-3 mb-2">
             SANCTUAIRE
           </span>
@@ -4186,7 +4058,7 @@ export default function App() {
             }`}
           >
             <BookOpen className={`w-4.5 h-4.5 ${activeTab === 'read' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
-            <span>Étude & Lecteur</span>
+            <span>Étude & lecture</span>
           </button>
 
           <button
@@ -4216,7 +4088,7 @@ export default function App() {
             }`}
           >
             <MessageSquare className={`w-4.5 h-4.5 ${activeTab === 'assistant' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
-            <span>Assistant Biblique</span>
+            <span>Assistant biblique</span>
           </button>
 
           <button
@@ -4226,7 +4098,7 @@ export default function App() {
             }`}
           >
             <Flame className={`w-4.5 h-4.5 ${activeTab === 'challenges' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
-            <span>Défis & Fidélité</span>
+            <span>Défis & fidélité</span>
           </button>
 
           <button
@@ -4246,7 +4118,7 @@ export default function App() {
             }`}
           >
             <ScrollText className={`w-4.5 h-4.5 ${activeTab === 'notes' ? 'text-[#c9a84c]' : 'text-[#8c8270]'}`} />
-            <span>Notes Spirituelles</span>
+            <span>Notes spirituelles</span>
           </button>
 
           <button
@@ -4260,68 +4132,8 @@ export default function App() {
             className={`flex items-center gap-3 px-4 py-3 rounded-xl text-xs tracking-wider transition cursor-pointer font-serif uppercase text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#12100c] border border-transparent hover:border-[#2e2a1e]`}
           >
             <Download className="w-4.5 h-4.5 text-[#8c8270]" />
-            <span>Études Hors-ligne</span>
+            <span>Études hors-ligne</span>
           </button>
-
-          <div className="pt-4 border-t border-[#2e2a1e]/40 mt-2 px-3">
-            <span className="text-[8.5px] font-mono uppercase text-[#6b6355] tracking-widest block">PASSAGE ACTUEL</span>
-            <p className="text-xs font-serif italic text-[#c9a84c] font-bold mt-1">
-              {selectedBook.name} · {selectedChapter}
-            </p>
-          </div>
-
-          {popularExplanations.length > 0 && (
-            <div className="pt-4 border-t border-[#2e2a1e]/40 mt-3 px-3 space-y-2">
-              <span className="text-[8.5px] font-mono uppercase text-[#6b6355] tracking-widest flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
-                Études Hors-ligne ({popularExplanations.length})
-              </span>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 scroller-thin">
-                {popularExplanations.map((item) => {
-                  const parsed = parseNoteContent(item.content);
-                  const displayTitle = parsed.titre || item.reference;
-                  const displaySnippet = (parsed.contenu || item.content).replace(/[#*`_[\]]/g, '').trim();
-
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={() => handleLoadCachedExplanation(item)}
-                      className="w-full text-[#e8e0d0]/90 text-left p-1.5 bg-[#12100c]/80 hover:bg-[#1a1712] border border-[#2e2a1e]/40 hover:border-[#c9a84c]/40 rounded-lg transition duration-150 cursor-pointer text-[10px] space-y-0.5 group block select-none"
-                    >
-                      <div className="flex justify-between items-center gap-1">
-                        <span className="font-serif font-bold text-[#c9a84c] group-hover:text-white transition truncate">
-                          {displayTitle}
-                        </span>
-                        {parsed.categorie ? (
-                          <span className="text-[7.5px] font-mono text-[#c9a84c]/80 uppercase px-1 py-0.2 bg-[#c9a84c]/10 rounded border border-[#c9a84c]/20 shrink-0">
-                            {parsed.categorie}
-                          </span>
-                        ) : (
-                          <span className="text-[8px] font-mono text-[#6b6355] shrink-0">
-                            👁️ {item.viewCount}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[9px] text-[#6b6355] font-serif truncate">
-                        {displaySnippet.slice(0, 50)}...
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-              <button
-                onClick={async () => {
-                  if (confirm("Voulez-vous vider tout le cache d'étude hors-ligne ?")) {
-                    await explainCache.clearAll();
-                    refreshPopularExplanations();
-                  }
-                }}
-                className="w-full text-center text-[8px] font-mono uppercase text-[#6b6355]/60 hover:text-red-400/90 transition cursor-pointer font-bold"
-              >
-                Vider le cache hors-ligne
-              </button>
-            </div>
-          )}
         </aside>
 
         {/* CONTAINER SWITCH FOR THE POWERFUL ACTIVE TABS */}
@@ -4351,1448 +4163,85 @@ export default function App() {
             </motion.div>
           )}
 
-          {/* A. STUDY AND READING MODULE TAB */}
+          {/* A. STUDY AND READING MODULE TAB - PURE MINIMALIST READER */}
           {activeTab === 'read' && (
             <motion.div
               initial={{ opacity: 0, y: 5 }} 
               animate={{ opacity: 1, y: 0 }}
-              className="space-y-4"
+              className="w-full"
             >
-              {/* Daily Verse of the day Hero banner */}
-              {!isZenMode && (
-                <div className="bg-[#12100c] border border-[#2e2a1e] p-6 rounded-[2rem] shadow-soft text-center space-y-4 relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-24 h-24 bg-[#c9a84c]/5 rounded-full blur-2xl"></div>
-                  <div className="text-center">
-                    <RevelationBadge text="RÉVÉLATION DU JOUR" isCrown={true} />
-                  </div>
-                  
-                  <p className="font-serif italic text-lg leading-relaxed text-[#c9a84c] max-w-2xl mx-auto px-2">
-                    « {dailyVerseForCurrentDay.verse.text} »
-                  </p>
-                  <div className="text-center font-mono text-[10px] tracking-widest text-[#6b6355] uppercase font-bold">
-                    {dailyVerseForCurrentDay.verse.book_name} {dailyVerseForCurrentDay.verse.chapter}:{dailyVerseForCurrentDay.verse.verse}
-                  </div>
-                  
-                  <p className="text-xs text-[#a0947f] max-w-xl mx-auto font-sans leading-relaxed">
-                    {dailyVerseForCurrentDay.explanation}
-                  </p>
-
-                  <div className="flex justify-center pt-2">
-                    <button
-                      onClick={() => {
-                        navigateToScripture({
-                          livre: dailyVerseForCurrentDay.verse.book_id,
-                          chapitre: dailyVerseForCurrentDay.verse.chapter,
-                          verset: dailyVerseForCurrentDay.verse.verse
-                        });
-                      }}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-luxury-button-bg hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/30 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150"
-                    >
-                      <BookOpen className="w-3.5 h-3.5" />
-                      <span>Rejoindre la Lecture</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Daily Chapter Reading Goal & Progress Bar widget */}
-              {!isZenMode && (
-                <DailyReadingGoal 
-                  readingHistory={readingHistory} 
-                  readingTimeToday={readingTimeToday}
-                  setReadingTimeToday={setReadingTimeToday}
-                  dailyTimeGoal={dailyTimeGoal}
-                  setDailyTimeGoal={setDailyTimeGoal}
-                  goalType={goalType}
-                  setGoalType={setGoalType}
-                />
-              )}
-
-              {/* Dynamic Scripture Selector and Chapter Nav Box */}
-              {!isZenMode && (
-                <div className="bg-[#12100c] border border-[#2e2a1e] p-5 md:p-6 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-                    {/* Book dropdown selector */}
-                    <div className="flex flex-col text-left">
-                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Livre Saint</label>
-                      <select
-                        value={selectedBook.id}
-                        onChange={(e) => {
-                          const nextBookId = Number(e.target.value);
-                          navigateToScripture({ livre: nextBookId, chapitre: 1, verset: 1 });
-                        }}
-                        className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-serif font-bold text-[#e8e0d0] rounded-xl px-3.5 py-2 outline-none focus:border-[#c9a84c] select-none text-left"
-                      >
-                        {BOOKS.map((b) => (
-                          <option key={b.id} value={b.id} className="font-serif text-[#0d0b07] bg-[#e8e0d0]">
-                            {b.name} ({b.testament})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Chapter picker dropdown */}
-                    <div className="flex flex-col text-left">
-                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Chapitre</label>
-                      <select
-                        value={selectedChapter}
-                        onChange={(e) => {
-                          const nextChapter = Number(e.target.value);
-                          navigateToScripture({ livre: selectedBook.id, chapitre: nextChapter, verset: 1 });
-                        }}
-                        className="bg-[#0d0b07] border border-[#2e2a1e] text-xs font-mono font-bold text-[#e8e0d0] rounded-xl px-4 py-2 outline-none focus:border-[#c9a84c] select-none"
-                      >
-                        {Array.from({ length: selectedBook.chapters_count }, (_, index) => index + 1).map((n) => (
-                          <option key={n} value={n} className="font-mono text-[#0d0b07] bg-[#e8e0d0]">
-                            {n}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Mode Selector Pill Swapper */}
-                    <div className="flex flex-col text-left">
-                      <label className="text-[8px] font-mono uppercase text-[#6b6355] mb-1">Périmètre de lecture</label>
-                      <div className="flex bg-[#0d0b07] border border-[#2e2a1e] rounded-xl p-0.5 h-9 items-center">
-                        <button
-                          onClick={() => setIsContinuousScroll(false)}
-                          className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-                            !isContinuousScroll 
-                              ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                              : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                          }`}
-                          title="Lire chapitre par chapitre"
-                        >
-                          <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                          <span>Chapitre</span>
-                        </button>
-                        <button
-                          onClick={() => setIsContinuousScroll(true)}
-                          className={`h-full px-3.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
-                            isContinuousScroll 
-                              ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                              : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                          }`}
-                          title="Défilement continu de tout le livre"
-                        >
-                          <ScrollText className="w-3.5 h-3.5 shrink-0" />
-                          <span>Livre Entier</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Chapter back and forward paging buttons & Random verse button */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => setIsRandomMeditationOpen(true)}
-                      className="h-9 px-3 bg-[#17140f] hover:bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/40 hover:border-[#c9a84c] rounded-xl text-[9.5px] font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
-                      title="Sélectionner un verset au hasard dans la base de données locale et ouvrir la carte de méditation dédiée"
-                    >
-                      <Dices className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Verset au Hasard</span>
-                      <span className="sm:hidden">Hasard 🎲</span>
-                    </button>
-
-                    <button
-                      onClick={handlePreviousChapter}
-                      className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
-                      title="Chapitre précédent"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-
-                    <button
-                      onClick={handleSummarizeChapter}
-                      disabled={loadingSummary}
-                      className="h-8 px-3 bg-gradient-to-r from-[#8a6f2e]/10 to-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 rounded-xl text-[10px] font-mono font-bold tracking-wider uppercase transition flex items-center justify-center gap-1 cursor-pointer hover:border-[#c9a84c]/40"
-                    >
-                      {loadingSummary ? (
-                        <div className="w-3.5 h-3.5 rounded-full border border-t-transparent border-[#c9a84c] animate-spin"></div>
-                      ) : (
-                        <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                      )}
-                      <span>Résumer le Chapitre</span>
-                    </button>
-
-                    <button
-                      onClick={handleNextChapter}
-                      className="p-2 bg-[#0d0b07] hover:bg-luxury-button-bg text-[#c9a84c] border border-[#2e2a1e] rounded-xl transition cursor-pointer"
-                      title="Chapitre suivant"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Integrated offline concordance keyword search in the reader page */}
-              {!isZenMode && (
-                <>
-                  <div className="bg-[#12100c] border border-[#2e2a1e] p-3.5 sm:p-4 rounded-2xl flex items-center gap-2 select-none relative">
-                    <Search className="w-4.5 h-4.5 text-[#6b6355] shrink-0 ml-1" />
-                    <input 
-                      id="bible-search-input"
-                      type="text"
-                      value={searchKeyword}
-                      onChange={(e) => setSearchKeyword(e.target.value)}
-                      placeholder={isDictatingSearch ? "🎙️ Écoute en cours, dictez votre verset..." : "Rechercher un verset (ex: soyez féconds, berger, paix)..."}
-                      className={`bg-transparent text-xs text-[#e8e0d0] outline-none border-none flex-1 placeholder:text-[#6b6355] ${isDictatingSearch ? 'placeholder:text-rose-400 placeholder:animate-pulse' : ''}`}
-                    />
-
-                    {/* Bouton Effacer si texte saisi */}
-                    {searchKeyword && (
-                      <button 
-                        onClick={() => setSearchKeyword('')}
-                        className="p-1 hover:bg-[#1a1712] rounded-full text-[#6b6355] hover:text-white transition cursor-pointer"
-                        title="Effacer la recherche"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-
-                    {/* Bouton 'Dicter' (Web Speech API) */}
-                    <button
-                      type="button"
-                      onClick={handleToggleSearchDictation}
-                      className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-mono uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
-                        isDictatingSearch
-                          ? 'bg-rose-500/20 border-rose-500/60 text-rose-300 font-bold animate-pulse shadow-sm'
-                          : 'bg-[#1a1712] hover:bg-[#252018] border-[#2e2a1e] hover:border-[#c9a84c]/50 text-[#c9a84c]'
-                      }`}
-                      title={isDictatingSearch ? "Arrêter la dictée vocale" : "Dicter votre recherche avec la voix (Web Speech API)"}
-                    >
-                      {isDictatingSearch ? (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-rose-400 animate-ping"></span>
-                          <Mic className="w-3.5 h-3.5 text-rose-400" />
-                          <span className="hidden xs:inline">Écoute...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Mic className="w-3.5 h-3.5" />
-                          <span>Dicter</span>
-                        </>
-                      )}
-                    </button>
-
-                    <span className="text-[8px] font-mono bg-[#1a1712] text-[#6b6355] border border-[#2e2a1e] px-1.5 py-1 rounded uppercase hidden sm:inline shrink-0">
-                      Concordance
-                    </span>
-                  </div>
-
-                  {/* Dictation Status Toast */}
-                  <AnimatePresence>
-                    {dictationToast && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        className="text-[10px] font-mono text-[#c9a84c] bg-[#1a1712] border border-[#c9a84c]/30 rounded-xl px-3 py-1.5 flex items-center gap-1.5 shadow-sm text-left"
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
-                        <span>{dictationToast}</span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Secondary results placeholder for localized keywords lookups */}
-                  {searchKeyword.trim() !== "" && (
-                    <div className="bg-[#12100c] border border-[#2e2a1e] p-4 rounded-2xl space-y-3">
-                      <span className="text-[8px] font-mono uppercase tracking-widest text-[#c9a84c] font-black block">Occurrences trouvées pour "{searchKeyword}" :</span>
-                      <div className="max-h-60 overflow-y-auto space-y-2 scroller-thin pr-1">
-                        {searchLocalVerses(searchKeyword).length === 0 ? (
-                          <p className="text-xs text-[#6b6355] italic">Aucune concordance locale trouvée. Essayez un autre mot clé.</p>
-                        ) : (
-                          searchLocalVerses(searchKeyword).map((v, i) => (
-                            <div 
-                              key={i}
-                              onClick={() => {
-                                const target = BOOKS.find(b => b.id === v.book_id);
-                                if (target) {
-                                  setSelectedBook(target);
-                                  setSelectedChapter(v.chapter);
-                                  setSelectedVerseId(`${target.id}_${v.chapter}_${v.verse}`);
-                                  setSearchKeyword('');
-                                  if (isDictatingSearch && searchSpeechRecognitionRef.current) {
-                                    try { searchSpeechRecognitionRef.current.stop(); } catch (_) {}
-                                    setIsDictatingSearch(false);
-                                  }
-                                  setTimeout(() => {
-                                    const verseEl = document.getElementById(`verse-${target.id}-${v.chapter}-${v.verse}`);
-                                    if (verseEl) {
-                                      verseEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                    }
-                                  }, 300);
-                                }
-                              }}
-                              className="bg-[#0d0b07] hover:bg-[#14120e] p-2.5 rounded-xl border border-[#2e2a1e]/40 transition text-left cursor-pointer space-y-1"
-                            >
-                              <p className="text-xs text-[#e8e0d0] leading-relaxed font-serif truncate">« {v.text.replace(/\[[HG]\d+\]/g, '')} »</p>
-                              <span className="text-[9px] font-mono text-[#c9a84c] block uppercase">{v.book_name} {v.chapter}:{v.verse}</span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Display chapter summary if queried */}
-              {chapterSummary && (
-                <div className="bg-[#12100c] border border-[#c9a84c]/20 p-5 rounded-[2rem] text-left space-y-3 shadow-gold-glow animate-fade-slide-up select-text">
-                  <div className="flex flex-wrap gap-2 justify-between items-center pb-2 border-b border-[#2e2a1e]/60">
-                    <span className="text-[9px] font-mono tracking-widest text-[#c9a84c] uppercase font-black flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" />
-                      <span>Sagesse & Synthèse IA du Chapitre {selectedChapter}</span>
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase tracking-widest text-[#c9a84c] bg-[#c9a84c]/10 border border-[#c9a84c]/20 rounded-full select-none">
-                        Analyse générée par IA — à vérifier
-                      </span>
-                      <button 
-                        onClick={() => setChapterSummary(null)}
-                        className="p-1 hover:bg-[#1a1712] rounded text-[#6b6355] hover:text-white transition"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="font-sans text-[13.5px] leading-relaxed text-[#c9a84c] whitespace-pre-line prose max-w-none">
-                    {cleanBibleMarkdown(chapterSummary)}
-                  </div>
-                </div>
-              )}
-
-              {/* Main Scriptures container */}
-              <div className="bg-[#12100c] border border-[#2e2a1e] p-5 rounded-[2.5rem] shadow-soft">
-                <div className="flex flex-col gap-4 pb-3 border-b border-[#2e2a1e]/50 mb-4">
-                  <div className="flex items-center justify-between select-none">
-                    <h3 className="font-serif font-extrabold text-[#c9a84c] text-sm uppercase flex items-center gap-1.5">
-                      {isContinuousScroll ? (
-                        <>
-                          <ScrollText className="w-4.5 h-4.5 text-[#c9a84c]" />
-                          <span>{selectedBook.name} · Livre Entier</span>
-                          <span className="text-[8px] font-mono px-1.5 py-0.5 bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 uppercase rounded leading-none ml-1">Continu</span>
-                        </>
-                      ) : (
-                        <>
-                          <BookOpen className="w-4.5 h-4.5" />
-                          <span>{selectedBook.name} · Chapitre {selectedChapter}</span>
-                        </>
-                      )}
-                    </h3>
-                    
-                    <div className="flex items-center gap-1.5">
-                      <select
-                        value={selectedTranslation}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSelectedTranslation(val);
-                          try {
-                            localStorage.setItem('bible_translation', val);
-                          } catch (_) {}
-                        }}
-                        className="text-[9.5px] font-mono text-[#c9a84c] uppercase tracking-wider bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/50 px-2.5 py-1 rounded-lg cursor-pointer focus:outline-none focus:border-[#c9a84c] transition"
-                      >
-                        <option value="local">Louis Segond (Offline)</option>
-                        <option value="web">WEB English (Online)</option>
-                        <option value="rvr09">RVR09 Spanish (Online)</option>
-                        <option value="almeida">Almeida Portuguese (Online)</option>
-                        <option value="clementine">Clementine Latin (Online)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* High-Fidelity Audio Reader Controls */}
-                  {!loadingVerses && chapterVerses.length > 0 && (
-                    <div className="bg-[#0b0a08] border border-[#2e2a1e]/40 shadow-xl rounded-3xl p-5 md:p-6 flex flex-col gap-5 select-none transition-all duration-300">
-                      
-                      {/* Audio Bookmark Toast Notification */}
-                      {audioBookmarkToast && (
-                        <div className="bg-[#181510] border border-[#c9a84c]/50 text-[#e8e0d0] px-3.5 py-2 rounded-xl flex items-center justify-between gap-2.5 animate-fade-in shadow-gold-glow">
-                          <div className="flex items-center gap-2">
-                            <Bookmark className="w-3.5 h-3.5 fill-[#c9a84c] text-[#c9a84c]" />
-                            <span className="text-xs font-serif font-bold text-[#e8e0d0]">{audioBookmarkToast.message}</span>
-                          </div>
-                          <button 
-                            onClick={() => setAudioBookmarkToast(null)} 
-                            className="text-[#6b6355] hover:text-[#e8e0d0] p-0.5 cursor-pointer"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Top Header Row of Player (Modern and Simplified) */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <button
-                            type="button"
-                            onPointerDown={handleAudioButtonPointerDown}
-                            onPointerUp={handleAudioButtonPointerUp}
-                            onPointerLeave={handleAudioButtonPointerCancel}
-                            onPointerCancel={handleAudioButtonPointerCancel}
-                            onContextMenu={(e) => e.preventDefault()}
-                            className={`relative flex items-center justify-center w-10 h-10 rounded-full border shadow-inner shrink-0 transition-all cursor-pointer select-none ${
-                              isQuickRecordHolding
-                                ? 'bg-[#c9a84c]/25 border-[#c9a84c] ring-2 ring-[#c9a84c] scale-110 shadow-gold-glow'
-                                : 'bg-[#12100c] border-[#2e2a1e] hover:border-[#c9a84c]/50'
-                            }`}
-                            title="Clic : Lecture/Pause audio | Maintenir : Note vocale rapide 🎙️"
-                          >
-                            {isQuickRecordHolding ? (
-                              <Mic className="w-4 h-4 text-[#c9a84c] animate-pulse" />
-                            ) : isSpeaking && !isPaused ? (
-                              <>
-                                <span className="absolute inset-0 rounded-full bg-[#c9a84c]/10 animate-ping"></span>
-                                <Volume2 className="w-4 h-4 text-[#c9a84c] animate-pulse" />
-                              </>
-                            ) : (
-                              <VolumeX className="w-4 h-4 text-[#6b6355]" />
-                            )}
-                          </button>
-                          <div className="text-left">
-                            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-[#6b6355] block">
-                              {isSpeaking && !isPaused ? 'Lecture active' : 'Audio'}
-                            </span>
-                            <span className="text-xs font-sans font-bold text-[#e8e0d0] block">
-                              {isSpeaking 
-                                ? `Verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || (currentSpeakingVerseIndex + 1)}` 
-                                : "Écouter le chapitre"
-                              }
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Top Header Actions (Bookmark & Settings) */}
-                        <div className="flex items-center gap-2">
-                          {/* Quick Bookmark Button in Header */}
-                          <button
-                            onClick={() => handleToggleAudioVerseBookmark(chapterVerses[currentSpeakingVerseIndex] || chapterVerses[0])}
-                            disabled={chapterVerses.length === 0}
-                            className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
-                                ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] shadow-[0_0_12px_rgba(201,168,76,0.3)]'
-                                : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0] hover:border-[#c9a84c]/50'
-                            }`}
-                            title={
-                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
-                                ? `Verset ${chapterVerses[currentSpeakingVerseIndex].verse} dans vos favoris (cliquer pour retirer)`
-                                : `Marquer le verset ${chapterVerses[currentSpeakingVerseIndex]?.verse || 1} comme favori`
-                            }
-                          >
-                            <Bookmark className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                              (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
-                                ? 'fill-[#c9a84c] scale-110 text-[#c9a84c]'
-                                : ''
-                            }`} />
-                            <span>
-                              {(currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && getVerseHasBookmark(chapterVerses[currentSpeakingVerseIndex]))
-                                ? "Favori"
-                                : "Signet"
-                              }
-                            </span>
-                          </button>
-
-                          {/* Collapsible toggle button */}
-                          <button
-                            onClick={() => setIsAudioSettingsExpanded(!isAudioSettingsExpanded)}
-                            className={`px-3 py-1.5 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                              isAudioSettingsExpanded 
-                                ? 'bg-[#c9a84c]/10 border-[#c9a84c]/30 text-[#c9a84c]' 
-                                : 'bg-[#12100c] border-[#2e2a1e]/60 text-[#a0947f] hover:text-[#e8e0d0]'
-                            }`}
-                          >
-                            <Settings className={`w-3.5 h-3.5 transition-transform duration-300 ${isAudioSettingsExpanded ? 'rotate-45' : ''}`} />
-                            <span>{isAudioSettingsExpanded ? "Masquer" : "Réglages"}</span>
-                            {isAudioSettingsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Live Spoken Verse Indicator & Bookmark Bar */}
-                      {isSpeaking && currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length && (() => {
-                        const spokenVerse = chapterVerses[currentSpeakingVerseIndex];
-                        const isFav = getVerseHasBookmark(spokenVerse);
-                        return (
-                          <div className="bg-[#12100c]/90 border border-[#c9a84c]/25 rounded-2xl p-3 flex items-center justify-between gap-3 text-left animate-fade-in shadow-inner">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <span className="w-6 h-6 rounded-lg bg-[#c9a84c]/15 text-[#c9a84c] font-mono text-[10px] font-bold flex items-center justify-center shrink-0 border border-[#c9a84c]/30">
-                                {spokenVerse.verse}
-                              </span>
-                              <p className="text-xs font-serif italic text-[#e8e0d0]/90 truncate">
-                                « {spokenVerse.text.replace(/\[[HG]\d+\]/g, '').trim()} »
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => handleToggleAudioVerseBookmark(spokenVerse)}
-                              className={`px-2.5 py-1 rounded-xl border text-[10px] font-mono font-bold flex items-center gap-1.5 transition-all duration-200 shrink-0 cursor-pointer ${
-                                isFav
-                                  ? 'bg-[#c9a84c] text-[#0d0b07] border-[#c9a84c] shadow-gold-glow'
-                                  : 'bg-[#181510] border-[#2e2a1e] text-[#c9a84c] hover:border-[#c9a84c]/60'
-                              }`}
-                              title={isFav ? "Retirer des favoris" : "Marquer comme favori"}
-                            >
-                              <Bookmark className={`w-3 h-3 ${isFav ? 'fill-[#0d0b07]' : ''}`} />
-                              <span className="hidden sm:inline">{isFav ? 'Favori ✓' : 'Signet'}</span>
-                            </button>
-                          </div>
-                        );
-                      })()}
-
-                      {/* Main Transport Control Row (Hero playback controls) */}
-                      <div className="flex items-center justify-center gap-3.5 sm:gap-5 py-2">
-                        {/* Skip Back Button */}
-                        <button
-                          onClick={() => {
-                            if (currentSpeakingVerseIndex > 0) {
-                              speakVerse(currentSpeakingVerseIndex - 1);
-                            } else {
-                              speakVerse(0);
-                            }
-                          }}
-                          disabled={!isSpeaking}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                          title="Verset précédent"
-                        >
-                          <SkipBack className="w-4 h-4" />
-                        </button>
-
-                        {/* Unified Play / Pause Golden Hero Trigger with Press-and-Hold for Quick Voice Note */}
-                        <div className="relative flex flex-col items-center select-none">
-                          <button
-                            type="button"
-                            onPointerDown={handleAudioButtonPointerDown}
-                            onPointerUp={handleAudioButtonPointerUp}
-                            onPointerLeave={handleAudioButtonPointerCancel}
-                            onPointerCancel={handleAudioButtonPointerCancel}
-                            onContextMenu={(e) => e.preventDefault()}
-                            className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-300 transform cursor-pointer border relative select-none ${
-                              isQuickRecordHolding
-                                ? 'scale-110 bg-[#dfba5a] text-[#0d0b07] ring-4 ring-[#c9a84c]/70 shadow-[0_0_25px_rgba(201,168,76,0.6)] border-white'
-                                : 'bg-[#c9a84c] text-[#0d0b07] hover:scale-105 active:scale-95 shadow-lg shadow-[#c9a84c]/15 hover:shadow-[#c9a84c]/25 border-white/10'
-                            }`}
-                            title={
-                              isSpeaking && !isPaused 
-                                ? "Pause (maintenez appuyé pour enregistrer une note vocale rapide 🎙️)" 
-                                : "Lecture (maintenez appuyé pour enregistrer une note vocale rapide 🎙️)"
-                            }
-                          >
-                            {isQuickRecordHolding ? (
-                              <Mic className="w-6 h-6 text-[#0d0b07] animate-pulse" />
-                            ) : isSpeaking && !isPaused ? (
-                              <Pause className="w-5 h-5 fill-[#0d0b07]" />
-                            ) : (
-                              <Play className="w-5 h-5 fill-[#0d0b07] ml-0.5" />
-                            )}
-                          </button>
-
-                          {/* Floating indicator while holding down */}
-                          {isQuickRecordHolding && (
-                            <span className="absolute -top-7 px-2.5 py-0.5 bg-[#12100c] text-[#c9a84c] border border-[#c9a84c]/50 text-[9px] font-mono font-bold rounded-full animate-bounce whitespace-nowrap shadow-gold-glow pointer-events-none z-10">
-                              Enregistrement micro... 🎙️
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Stop Button */}
-                        <button
-                          onClick={stopSpeaking}
-                          disabled={!isSpeaking}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                          title="Arrêter"
-                        >
-                          <Square className="w-3.5 h-3.5 fill-current" />
-                        </button>
-
-                        {/* Skip Forward Button */}
-                        <button
-                          onClick={() => {
-                            if (currentSpeakingVerseIndex < chapterVerses.length - 1) {
-                              speakVerse(currentSpeakingVerseIndex + 1);
-                            }
-                          }}
-                          disabled={!isSpeaking || currentSpeakingVerseIndex >= chapterVerses.length - 1}
-                          className="w-10 h-10 rounded-full bg-[#12100c] hover:bg-[#1a1712]/80 border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] disabled:opacity-30 disabled:pointer-events-none transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                          title="Verset suivant"
-                        >
-                          <SkipForward className="w-4 h-4" />
-                        </button>
-
-                        {/* Bookmark Icon Button in Transport Controls */}
-                        {(() => {
-                          const activeVerse = (currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length)
-                            ? chapterVerses[currentSpeakingVerseIndex]
-                            : chapterVerses[0];
-                          const isFav = activeVerse ? getVerseHasBookmark(activeVerse) : false;
-                          return (
-                            <button
-                              onClick={() => handleToggleAudioVerseBookmark(activeVerse)}
-                              disabled={chapterVerses.length === 0}
-                              className={`w-10 h-10 rounded-full border transition-all duration-200 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-30 disabled:pointer-events-none relative group ${
-                                isFav
-                                  ? 'bg-[#c9a84c]/20 border-[#c9a84c] text-[#c9a84c] shadow-[0_0_14px_rgba(201,168,76,0.35)] ring-1 ring-[#c9a84c]/40'
-                                  : 'bg-[#12100c] hover:bg-[#1a1712]/80 border-[#2e2a1e] text-[#a0947f] hover:text-[#c9a84c] hover:border-[#c9a84c]/50'
-                              }`}
-                              title={
-                                activeVerse
-                                  ? (isFav
-                                      ? `Verset ${activeVerse.verse} dans vos favoris (cliquez pour retirer)`
-                                      : `Marquer le verset ${activeVerse.verse} comme favori`)
-                                  : "Marquer le verset comme favori"
-                              }
-                            >
-                              <Bookmark className={`w-4 h-4 transition-transform duration-200 ${isFav ? 'fill-[#c9a84c] scale-110 text-[#c9a84c]' : ''}`} />
-                            </button>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Press-and-Hold Quick Voice Note Hint */}
-                      <div className="flex items-center justify-center gap-1.5 text-[9.5px] font-mono text-[#8c8270] bg-[#12100c]/60 border border-[#2e2a1e]/40 rounded-xl py-1.5 px-3 w-fit mx-auto select-none">
-                        <Mic className="w-3.5 h-3.5 text-[#c9a84c] shrink-0" />
-                        <span>Astuce : Maintenez le bouton d'audio appuyé pour enregistrer une note vocale rapide</span>
-                      </div>
-
-                      {/* Side-by-side Ambient Toggles (Compact switches) */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {/* Melody Card */}
-                        <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-xl bg-[#1a1712] border border-[#2e2a1e]/60 text-[#a0947f]">
-                              <Music className={`w-4 h-4 ${isMelodyEnabled ? 'text-[#c9a84c]' : ''}`} />
-                            </div>
-                            <div className="text-left">
-                              <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Mélodie Céleste</span>
-                              <span className="text-[10px] text-[#6b6355] block">
-                                {isMelodyEnabled ? (MELODY_STYLES.find(s => s.id === melodyStyle)?.name || 'Active') : 'Désactivée'}
-                              </span>
-                            </div>
-                          </div>
-                          {/* Elegant Apple Switch Toggle */}
-                          <button
-                            onClick={() => {
-                              const nextVal = !isMelodyEnabled;
-                              setIsMelodyEnabled(nextVal);
-                              try {
-                                localStorage.setItem('bible_melody_enabled', String(nextVal));
-                              } catch (_) {}
-                            }}
-                            className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                              isMelodyEnabled ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                            }`}
-                          >
-                            <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                              isMelodyEnabled ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                            }`} />
-                          </button>
-                        </div>
-
-                        {/* Nature Sounds Card */}
-                        <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="p-2 rounded-xl bg-[#1a1712] border border-[#2e2a1e]/60 text-[#a0947f]">
-                              <span className={`text-sm ${isNatureEnabled ? 'opacity-100' : 'opacity-60'}`}>🌲</span>
-                            </div>
-                            <div className="text-left">
-                              <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Sons de la Nature</span>
-                              <span className="text-[10px] text-[#6b6355] block">
-                                {isNatureEnabled ? (NATURE_SOUNDS.find(s => s.id === natureSoundType)?.name || 'Actifs') : 'Désactivés'}
-                              </span>
-                            </div>
-                          </div>
-                          {/* Elegant Apple Switch Toggle */}
-                          <button
-                            onClick={() => {
-                              const nextVal = !isNatureEnabled;
-                              setIsNatureEnabled(nextVal);
-                              try {
-                                localStorage.setItem('bible_nature_enabled', String(nextVal));
-                              } catch (_) {}
-                            }}
-                            className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                              isNatureEnabled ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                            }`}
-                          >
-                            <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                              isNatureEnabled ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                            }`} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Expandable Secondary Settings Panel */}
-                      {isAudioSettingsExpanded && (
-                        <div className="pt-4 border-t border-[#2e2a1e]/40 space-y-7 md:space-y-9 animate-fade-in text-left">
-                          
-                          {/* Voix & Vitesse Group */}
-                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs">🎙️</span>
-                              <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Voix & Vitesse</h5>
-                            </div>
-
-                            {/* playbackRate Selector */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                              <span className="text-xs text-[#6b6355] font-sans font-medium">Vitesse de lecture</span>
-                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 self-start sm:self-auto">
-                                {[0.8, 1.0, 1.25, 1.5].map((rate) => (
-                                  <button
-                                    key={rate}
-                                    onClick={() => {
-                                      setPlaybackRate(rate);
-                                      if (isSpeaking && !isPaused) {
-                                        speakVerse(currentSpeakingVerseIndex);
-                                      }
-                                    }}
-                                    className={`px-3 py-1 text-[10px] font-mono font-bold rounded-lg transition-all duration-200 cursor-pointer ${
-                                      playbackRate === rate 
-                                        ? 'bg-[#c9a84c] text-[#0d0b07] shadow-sm font-black' 
-                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
-                                    }`}
-                                  >
-                                    {rate}x
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* voiceGender Selector */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                              <div>
-                                <span className="text-xs text-[#a89d8b] font-sans font-medium block">Timbre du lecteur</span>
-                                <span className="text-[9px] text-[#6b6355] font-mono">
-                                  {voiceGender === 'female' 
-                                    ? (availableVoices.some(v => classifyFrenchVoiceGender(v) === 'female') 
-                                        ? 'Voix féminine française active' 
-                                        : 'Timbre féminin harmonisé (ajusté sur voix française)')
-                                    : voiceGender === 'male'
-                                    ? (availableVoices.some(v => classifyFrenchVoiceGender(v) === 'male') 
-                                        ? 'Voix masculine française active' 
-                                        : 'Timbre masculin ajusté')
-                                    : 'Choix automatique solennel'}
-                                </span>
-                              </div>
-                              <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5 self-start sm:self-auto">
-                                {[
-                                  { label: 'Auto', value: 'auto' },
-                                  { label: 'Homme ♂', value: 'male' },
-                                  { label: 'Femme ♀', value: 'female' }
-                                ].map((genderOption) => (
-                                  <button
-                                    key={genderOption.value}
-                                    onClick={() => {
-                                      setVoiceGender(genderOption.value as 'auto' | 'male' | 'female');
-                                      try {
-                                        localStorage.setItem('bible_voice_gender', genderOption.value);
-                                      } catch (_) {}
-                                      // Clear precise voice selection to let automatic gender-matching take effect
-                                      setSelectedVoiceURI('');
-                                      try {
-                                        localStorage.removeItem('bible_preferred_voice_uri');
-                                      } catch (_) {}
-
-                                      // Invalidate/clear active utterances queue & cancel synthesis to avoid old voice cache playing
-                                      if (typeof window !== 'undefined' && window.speechSynthesis) {
-                                        window.speechSynthesis.cancel();
-                                        (window as any)._activeUtterances = [];
-                                      }
-
-                                      if (isSpeaking && currentSpeakingVerseIndex !== -1) {
-                                        speakVerse(currentSpeakingVerseIndex);
-                                      }
-                                    }}
-                                    className={`px-3 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 cursor-pointer ${
-                                      voiceGender === genderOption.value 
-                                        ? 'bg-[#c9a84c] text-[#0d0b07] shadow-sm font-black' 
-                                        : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/30'
-                                    }`}
-                                  >
-                                    {genderOption.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* rawReading Switch Toggle */}
-                            <div className="flex items-center justify-between py-1.5 border-t border-[#2e2a1e]/20">
-                              <div className="text-left space-y-0.5">
-                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Lecture Directe (Anti-bruit)</span>
-                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Bypasse le pitch-shifter pour éviter les micro-saccades vocales</p>
-                              </div>
-                              <button
-                                onClick={() => {
-                                  const nextVal = !isRawReading;
-                                  setIsRawReading(nextVal);
-                                }}
-                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                  isRawReading ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                }`}
-                              >
-                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                  isRawReading ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                }`} />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Melody Style & Volume Config (Only visible when melody is enabled) */}
-                          {isMelodyEnabled && (
-                            <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4 animate-fade-in">
-                              <div className="flex items-center gap-2 mb-1">
-                                <Music className="w-3.5 h-3.5 text-[#a0947f]" />
-                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Réglages Mélodie</h5>
-                              </div>
-
-                              {/* Style Choices */}
-                              <div className="space-y-1.5">
-                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Style céleste</span>
-                                <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-1.5 gap-2 sm:gap-2.5">
-                                  {MELODY_STYLES.map((styleOption) => (
-                                    <button
-                                      key={styleOption.id}
-                                      onClick={() => {
-                                        setMelodyStyle(styleOption.id);
-                                        try {
-                                          localStorage.setItem('bible_melody_style', styleOption.id);
-                                        } catch (_) {}
-                                      }}
-                                      className={`px-2.5 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
-                                        melodyStyle === styleOption.id
-                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] font-black'
-                                          : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
-                                      }`}
-                                      title={styleOption.description}
-                                    >
-                                      <span className="text-xs shrink-0">{styleOption.icon}</span>
-                                      <span>{styleOption.name}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* Volume range slider */}
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Volume de l'ambiance</span>
-                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold">
-                                    {Math.round(melodyVolume * 250)}%
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="text-xs text-[#6b6355]">🔈</span>
-                                  <input
-                                    type="range"
-                                    min="0"
-                                    max="0.4"
-                                    step="0.02"
-                                    value={melodyVolume}
-                                    onChange={(e) => {
-                                      const vol = Number(e.target.value);
-                                      setMelodyVolume(vol);
-                                      try {
-                                        localStorage.setItem('bible_melody_volume', String(vol));
-                                      } catch (_) {}
-                                    }}
-                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
-                                  />
-                                  <span className="text-xs text-[#6b6355]">🔊</span>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Nature Style & Volume Config (Only visible when nature is enabled) */}
-                          {isNatureEnabled && (
-                            <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4 animate-fade-in">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-xs">🌲</span>
-                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Réglages Nature</h5>
-                              </div>
-
-                              {/* Style Choices */}
-                              <div className="space-y-1.5">
-                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Ambiance naturelle</span>
-                                <div className="flex flex-wrap bg-[#12100c] border border-[#2e2a1e] rounded-xl p-1.5 gap-2 sm:gap-2.5">
-                                  {NATURE_SOUNDS.filter(s => s.id !== 'none').map((soundOption) => (
-                                    <button
-                                      key={soundOption.id}
-                                      onClick={() => {
-                                        setNatureSoundType(soundOption.id);
-                                        try {
-                                          localStorage.setItem('bible_nature_type', soundOption.id);
-                                        } catch (_) {}
-                                      }}
-                                      className={`px-2.5 py-1 text-[10px] font-sans font-bold rounded-lg transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
-                                        natureSoundType === soundOption.id
-                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] font-black'
-                                          : 'text-[#6b6355] hover:text-[#e8e0d0] hover:bg-[#1a1712]/20'
-                                      }`}
-                                      title={soundOption.description}
-                                    >
-                                      <span className="text-xs shrink-0">{soundOption.icon}</span>
-                                      <span>{soundOption.name}</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              {/* Volume range slider */}
-                              <div className="space-y-1.5">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Volume de la nature</span>
-                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold">
-                                    {Math.round(natureSoundVolume * 100)}%
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="text-xs text-[#6b6355]">🔈</span>
-                                  <input
-                                    type="range"
-                                    min="0"
-                                    max="1.0"
-                                    step="0.05"
-                                    value={natureSoundVolume}
-                                    onChange={(e) => {
-                                      const vol = Number(e.target.value);
-                                      setNatureSoundVolume(vol);
-                                      try {
-                                        localStorage.setItem('bible_nature_volume', String(vol));
-                                      } catch (_) {}
-                                    }}
-                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
-                                  />
-                                  <span className="text-xs text-[#6b6355]">🔊</span>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Sleep Timer (Veille Spirituelle) Group */}
-                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
-                            <div className="flex items-center justify-between py-1">
-                              <div className="flex items-center gap-2">
-                                <Moon className="w-3.5 h-3.5 text-[#a0947f]" />
-                                <div className="text-left space-y-0.5">
-                                  <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Minuteur de Sommeil</span>
-                                  <p className="text-[10px] text-[#6b6355] leading-relaxed">Atténue progressivement les volumes pour le coucher</p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2.5">
-                                {isVigilActive && (
-                                  <div className="flex items-center gap-1.5 bg-[#c9a84c]/10 border border-[#c9a84c]/30 px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold text-[#c9a84c]">
-                                    <Timer className="w-3 h-3 animate-spin" />
-                                    <span>{Math.floor(vigilTimeRemaining / 60)}:{(vigilTimeRemaining % 60).toString().padStart(2, '0')}</span>
-                                  </div>
-                                )}
-                                <button
-                                  onClick={toggleVigilMode}
-                                  className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                    isVigilActive ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                  }`}
-                                >
-                                  <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                    isVigilActive ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                  }`} />
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Duration selectors if not active */}
-                            {!isVigilActive && (
-                              <div className="flex items-center justify-between gap-4 pt-1.5 border-t border-[#2e2a1e]/20">
-                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Durée de veille</span>
-                                <div className="flex bg-[#12100c] border border-[#2e2a1e] rounded-xl p-0.5">
-                                  {[
-                                    { label: '20m', val: 20 },
-                                    { label: '10m', val: 10 },
-                                    { label: '5m', val: 5 },
-                                    { label: '1m (Test)', val: 1 }
-                                  ].map((opt) => (
-                                    <button
-                                      key={opt.val}
-                                      onClick={() => setVigilDuration(opt.val)}
-                                      className={`px-2 py-1 text-[9px] font-mono font-bold rounded-lg transition-all cursor-pointer ${
-                                        vigilDuration === opt.val 
-                                          ? 'bg-[#c9a84c]/20 text-[#c9a84c] border border-[#c9a84c]/20' 
-                                          : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                                      }`}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Navigation & Layout Options (Subtle switches list) */}
-                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Eye className="w-3.5 h-3.5 text-[#a0947f]" />
-                              <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Affichage & Défilement</h5>
-                            </div>
-
-                            {/* Suivi vocal actif switch */}
-                            <div className="flex items-center justify-between py-1">
-                              <div className="text-left space-y-0.5">
-                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Suivi vocal automatique</span>
-                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Centre l'écran sur le verset prononcé en temps réel</p>
-                              </div>
-                              <button
-                                onClick={() => setIsAutoScrollWithSpeech(prev => !prev)}
-                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                  isAutoScrollWithSpeech ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                }`}
-                              >
-                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                  isAutoScrollWithSpeech ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Défilement continu switch */}
-                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
-                              <div className="text-left space-y-0.5">
-                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Défilement continu fluide</span>
-                                <p className="text-[10px] text-[#6b6355] leading-relaxed">Fait descendre lentement le papyrus sans interruption</p>
-                              </div>
-                              <button
-                                onClick={() => {
-                                  const nextVal = !isFluidAutoScrolling;
-                                  setIsFluidAutoScrolling(nextVal);
-                                }}
-                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                  isFluidAutoScrolling ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                }`}
-                              >
-                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                  isFluidAutoScrolling ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Scroll speed slider if enabled */}
-                            {isFluidAutoScrolling && (
-                              <div className="pl-4 pt-1 flex items-center justify-between gap-4 animate-fade-in">
-                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider">Vitesse</span>
-                                <div className="flex items-center gap-3 flex-1 justify-end max-w-xs">
-                                  <input
-                                    type="range"
-                                    min="5"
-                                    max="60"
-                                    step="5"
-                                    value={fluidScrollSpeed}
-                                    onChange={(e) => {
-                                      setFluidScrollSpeed(Number(e.target.value));
-                                    }}
-                                    className="flex-1 accent-[#c9a84c] bg-[#12100c] border border-[#2e2a1e] rounded-lg appearance-none h-1 cursor-pointer"
-                                  />
-                                  <span className="text-[10px] font-mono text-[#c9a84c] font-bold w-12 text-right shrink-0">
-                                    {fluidScrollSpeed} px/s
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Lecture continue switch */}
-                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
-                              <div className="text-left space-y-0.5">
-                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Lecture en continu (Chapitres)</span>
-                                <p className="text-[10px] text-[#6b6355]">Passe automatiquement au chapitre suivant à la fin</p>
-                              </div>
-                              <button
-                                onClick={() => {
-                                  const nextVal = !autoAdvanceChapterSpeech;
-                                  setAutoAdvanceChapterSpeech(nextVal);
-                                  try {
-                                    localStorage.setItem('bible_auto_advance_speech', String(nextVal));
-                                  } catch (_) {}
-                                }}
-                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                  autoAdvanceChapterSpeech ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                }`}
-                              >
-                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                  autoAdvanceChapterSpeech ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                }`} />
-                              </button>
-                            </div>
-
-                            {/* Mode Zen switch */}
-                            <div className="flex items-center justify-between py-1 border-t border-[#2e2a1e]/20 pt-2.5">
-                              <div className="text-left space-y-0.5">
-                                <span className="text-xs font-sans font-bold text-[#e8e0d0] block">Mode Zen</span>
-                                <p className="text-[10px] text-[#6b6355]">Masque toute la navigation pour une concentration totale</p>
-                              </div>
-                              <button
-                                onClick={() => setIsZenMode(prev => !prev)}
-                                className={`w-9 h-5.5 flex items-center rounded-full p-0.5 cursor-pointer transition-colors duration-200 focus:outline-none ${
-                                  isZenMode ? 'bg-[#c9a84c]' : 'bg-[#1a1712] border border-[#2e2a1e]'
-                                }`}
-                              >
-                                <div className={`w-4.5 h-4.5 rounded-full shadow transition-transform duration-200 ${
-                                  isZenMode ? 'translate-x-3.5 bg-[#0d0b07]' : 'translate-x-0 bg-[#6b6355]'
-                                }`} />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Diagnostic du Flux Vocal (TTS) */}
-                          <div className="bg-[#12100c]/50 rounded-2xl p-5 md:p-6 border border-[#2e2a1e]/30 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs">🛠️</span>
-                                <h5 className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#a0947f]">Diagnostic du Flux Vocal (TTS)</h5>
-                              </div>
-                              <span className="text-[9px] font-mono bg-[#2e2a1e]/40 px-2 py-0.5 rounded-full text-[#6b6355]">Temps réel</span>
-                            </div>
-
-                            {/* Status Indicators Row */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {/* Indicator: Play State */}
-                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
-                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Lecture</span>
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.speaking && !ttsEngineState.paused ? 'bg-green-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
-                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
-                                    {ttsEngineState.speaking && !ttsEngineState.paused ? 'Actif' : 'Inactif'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Indicator: Pause State */}
-                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
-                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Pause</span>
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.paused ? 'bg-amber-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
-                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
-                                    {ttsEngineState.paused ? 'En Pause' : 'Non'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Indicator: Pending State */}
-                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
-                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">En Attente</span>
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.pending ? 'bg-blue-500 animate-pulse' : 'bg-[#6b6355]/40'}`} />
-                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
-                                    {ttsEngineState.pending ? 'Oui' : 'Non'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Indicator: Wake Lock */}
-                              <div className="bg-[#12100c] border border-[#2e2a1e]/40 rounded-xl p-3 flex flex-col gap-1 items-start">
-                                <span className="text-[9px] font-mono text-[#6b6355] uppercase tracking-wider">Wake Lock</span>
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  <span className={`w-2 h-2 rounded-full ${ttsEngineState.wakeLockActive ? 'bg-[#c9a84c] animate-pulse' : 'bg-[#6b6355]/40'}`} />
-                                  <span className="text-xs font-sans font-bold text-[#e8e0d0]">
-                                    {ttsEngineState.wakeLockActive ? 'Maintenu' : 'Inactif'}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Queue progression details */}
-                            <div className="bg-[#12100c]/80 rounded-xl p-4 border border-[#2e2a1e]/30 space-y-3.5">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="text-[#6b6355]">Progression du chapitre :</span>
-                                <span className="font-mono font-bold text-[#e8e0d0]">
-                                  {currentSpeakingVerseIndex !== -1 ? `${currentSpeakingVerseIndex + 1} / ${chapterVerses.length}` : `0 / ${chapterVerses.length}`} versets
-                                </span>
-                              </div>
-
-                              {/* Progress bar */}
-                              <div className="w-full bg-[#1a1712] rounded-full h-1.5 overflow-hidden border border-[#2e2a1e]/30">
-                                <div 
-                                  className="bg-gradient-to-r from-[#a0947f] to-[#c9a84c] h-full transition-all duration-300"
-                                  style={{ 
-                                    width: chapterVerses.length > 0 
-                                      ? `${Math.max(0, Math.min(100, ((currentSpeakingVerseIndex + 1) / chapterVerses.length) * 100))}%` 
-                                      : '0%' 
-                                  }}
-                                />
-                              </div>
-
-                              {/* Cache & Engine internals info */}
-                              <div className="grid grid-cols-2 gap-4 pt-1.5 text-[11px] font-mono text-[#6b6355]">
-                                <div>
-                                  <span className="block">Mémoire Utterances :</span>
-                                  <span className="font-bold text-[#e8e0d0]">{ttsEngineState.activeUtteranceCount} active(s)</span>
-                                </div>
-                                <div className="text-right">
-                                  <span className="block">Statut global :</span>
-                                  <span className={`font-bold uppercase ${isSpeaking ? 'text-[#c9a84c]' : 'text-[#6b6355]'}`}>
-                                    {isSpeaking ? (isPaused ? 'En Pause' : 'Lecture en cours') : 'En attente de démarrage'}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Queue of upcoming verses */}
-                            {isSpeaking && currentSpeakingVerseIndex !== -1 && (
-                              <div className="space-y-2 text-left">
-                                <span className="text-[10px] font-mono text-[#6b6355] uppercase tracking-wider block">Prochaines lectures en file :</span>
-                                <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
-                                  {chapterVerses.slice(currentSpeakingVerseIndex, currentSpeakingVerseIndex + 3).map((v, i) => {
-                                    const realIndex = currentSpeakingVerseIndex + i;
-                                    const isCurrent = realIndex === currentSpeakingVerseIndex;
-                                    return (
-                                      <div 
-                                        key={v.id || realIndex}
-                                        className={`flex items-start gap-2.5 p-2 rounded-lg border text-left transition-all duration-200 ${
-                                          isCurrent 
-                                            ? 'bg-[#c9a84c]/5 border-[#c9a84c]/20 text-[#e8e0d0]' 
-                                            : 'bg-[#12100c]/30 border-transparent text-[#6b6355]'
-                                        }`}
-                                      >
-                                        <div className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-mono font-bold shrink-0 ${
-                                          isCurrent 
-                                            ? 'bg-[#c9a84c] text-[#0d0b07]' 
-                                            : 'bg-[#2e2a1e]/50 text-[#6b6355]'
-                                        }`}>
-                                          {v.verse}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-[11px] font-sans truncate">
-                                            {v.text.replace(/\[[HG]\d+\]/g, '').trim()}
-                                          </p>
-                                          {isCurrent && (
-                                            <span className="text-[9px] font-mono text-[#c9a84c] font-semibold animate-pulse block mt-0.5">
-                                              🔈 En cours de lecture...
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                  {chapterVerses.length - 1 - currentSpeakingVerseIndex > 3 && (
-                                    <div className="text-center py-1">
-                                      <span className="text-[9px] font-mono text-[#6b6355]">
-                                        + {chapterVerses.length - 1 - currentSpeakingVerseIndex - 3} autre(s) verset(s) dans le chapitre
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Journaux en Temps Réel du Déroulement Vocal */}
-                            <div className="bg-[#12100c]/80 rounded-xl p-3 border border-[#2e2a1e]/30 space-y-2 mt-2">
-                              <div className="flex items-center justify-between text-[10px] font-mono">
-                                <span className="text-[#a0947f] font-bold uppercase tracking-wider flex items-center gap-1.5">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] animate-pulse"></span>
-                                  Journaux de Diagnostic
-                                </span>
-                                <button 
-                                  onClick={() => {
-                                    setTtsLogs([]);
-                                    logTts("[TTS Debug] Journaux effacés.");
-                                  }}
-                                  className="text-[9px] text-[#c9a84c] hover:underline cursor-pointer font-bold flex items-center gap-1"
-                                >
-                                  Effacer 🗑️
-                                </button>
-                              </div>
-                              <div className="space-y-1 max-h-[110px] overflow-y-auto text-[9.5px] font-mono text-left pr-1 scrollbar-thin scrollbar-thumb-[#2e2a1e] scrollbar-track-transparent">
-                                {ttsLogs.length === 0 ? (
-                                  <span className="text-[#6b6355] italic block py-1.5 text-center">Aucun événement enregistré. Lancez l'écoute pour générer des diagnostics.</span>
-                                ) : (
-                                  ttsLogs.map((logStr, idx) => {
-                                    const isError = logStr.toLowerCase().includes('error') || logStr.toLowerCase().includes('onerror') || logStr.toLowerCase().includes('failed');
-                                    const isAction = logStr.includes('Action') || logStr.includes('cancel');
-                                    const isEvent = logStr.includes('Event');
-                                    return (
-                                      <div 
-                                        key={idx} 
-                                        className={`py-0.5 border-b border-[#2e2a1e]/15 break-all last:border-0 leading-relaxed ${
-                                          isError ? 'text-red-400 font-bold' : isAction ? 'text-blue-400' : isEvent ? 'text-[#c9a84c]' : 'text-[#a0947f]'
-                                        }`}
-                                      >
-                                        {logStr}
-                                      </div>
-                                    );
-                                  })
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {loadingVerses ? (
-                  <div className="py-20 flex flex-col items-center justify-center space-y-3 select-none">
-                    <div className="w-8 h-8 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
-                    <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Mise au jour du papyrus...</p>
-                  </div>
-                ) : loadingError ? (
-                  <div className="py-16 px-6 rounded-2xl bg-rose-950/10 border border-rose-900/20 text-center space-y-3 select-none animate-fade-in">
-                    <AlertCircle className="w-8 h-8 text-rose-500 mx-auto opacity-80" />
-                    <h4 className="text-sm font-bold text-rose-400 font-sans">Texte indisponible</h4>
-                    <p className="text-xs text-rose-300 max-w-md mx-auto leading-relaxed">{loadingError}</p>
-                  </div>
-                ) : chapterVerses.length === 0 ? (
-                  <div className="py-20 text-center space-y-2 select-none animate-fade-in">
-                    <p className="text-xs font-mono text-[#6b6355] uppercase tracking-wider">Aucun verset disponible</p>
-                  </div>
-                ) : (
-                  <div 
-                    key={`${selectedBook.id}_${selectedChapter}_${selectedTranslation}_${isContinuousScroll}`}
-                    className="space-y-1 animate-fade-in transition-opacity duration-300"
-                    style={{ animation: 'fadeIn 300ms ease-out forwards' }}
-                  >
-                    {chapterVerses.map((item, idx) => {
-                      const noteInfo = getVerseHasNote(item);
-                      const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
-                      const isFirstOfNewChapter = idx > 0 && item.chapter !== chapterVerses[idx - 1].chapter;
-
-                      const isThisVerseTarget = targetResumePosition !== null 
-                        ? (targetResumePosition.book_id === item.book_id && targetResumePosition.chapter === item.chapter && targetResumePosition.verse === item.verse)
-                        : (targetResumeVerseNum !== null && targetResumeVerseNum === item.verse && selectedBook.id === item.book_id && selectedChapter === item.chapter);
-
-                      const isThisVerseLastRead = lastReadVerseId === verseUniqueId;
-                      
-                      return (
-                        <React.Fragment key={verseUniqueId}>
-                          {isFirstOfNewChapter && (
-                            <div 
-                              id={`chapter-section-${item.book_id}-${item.chapter}`}
-                              className="my-10 pt-8 pb-5 border-t-2 border-[#c9a84c]/20 text-center select-none animate-fade-in"
-                            >
-                              <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-[#1a1712] border border-[#c9a84c]/40 shadow-lg">
-                                <BookOpen className="w-4 h-4 text-[#c9a84c]" />
-                                <span className="font-serif font-bold text-sm text-[#e8e0d0] tracking-wide">
-                                  {item.book_name} — Chapitre {item.chapter}
-                                </span>
-                              </div>
-                              <p className="text-[9px] font-mono text-[#8e8574] uppercase tracking-widest mt-2">
-                                Nouveau Chapitre · Verset 1 à {getChapterMaxVerses(item.book_id, item.chapter)}
-                              </p>
-                            </div>
-                          )}
-                          <VerseItem 
-                            verse={item}
-                            isFavorite={getVerseHasBookmark(item)}
-                            onToggleFavorite={handleToggleFavorite}
-                            onExplain={handleExplainVerse}
-                            onStrongClick={handleStrongSelectionCode}
-                            textSize={textSize}
-                            lineHeight={textSize * 1.62}
-                            isSelected={selectedVerseId === verseUniqueId}
-                            onTap={() => {
-                              setSelectedVerseId(selectedVerseId === verseUniqueId ? null : verseUniqueId);
-                            }}
-                            hasNote={noteInfo.hasNote}
-                            noteText={noteInfo.text}
-                            noteAudio={noteInfo.audio}
-                            emotionAnalysis={noteInfo.emotionAnalysis}
-                            onSaveNote={handleSaveSpiritualNote}
-                            onNavigateToVerse={handleNavigateVerseToReader}
-                            isVerseFavorite={(b, c, v) => favorites.some(f => f.book_id === b && f.chapter === c && f.verse === v)}
-                            isCurrentSpoken={currentSpeakingVerseIndex === idx}
-                            isLastReadTarget={isThisVerseTarget}
-                            isLastRead={isThisVerseLastRead}
-                            index={idx}
-                            bookmarkFolders={bookmarkFolders}
-                            favoriteFolderId={favorites.find(f => f.book_id === item.book_id && f.chapter === item.chapter && f.verse === item.verse)?.folder_id}
-                            onAssignFavoriteFolder={(v, fId, fName) => handleAssignVerseToFolder(v, fId, fName)}
-                          />
-                        </React.Fragment>
-                      );
-                    })}
-
-                    {isContinuousScroll && (
-                      <div className="mt-6 p-5 rounded-2xl bg-[#0d0b07] border border-[#2e2a1e] text-center space-y-3 shadow-inner select-none animate-fade-in">
-                        {Math.max(...loadedChapters) < selectedBook.chapters_count ? (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-center gap-2">
-                              <div className="w-3.5 h-3.5 rounded-full border-t-2 border-[#c9a84c] animate-spin"></div>
-                              <span className="text-[10px] font-mono font-medium text-[#c9a84c] uppercase tracking-wider">Défilement continu · Chapitre {Math.max(...loadedChapters) + 1} se prépare...</span>
-                            </div>
-                            <button
-                              onClick={() => {
-                                const maxCh = Math.max(...loadedChapters);
-                                if (maxCh < selectedBook.chapters_count) {
-                                  setLoadedChapters(prev => [...prev, maxCh + 1]);
-                                }
-                              }}
-                              className="px-4 py-2 bg-[#1a1712] hover:bg-[#c9a84c]/10 text-[#c9a84c] border border-[#c9a84c]/20 hover:border-[#c9a84c]/40 rounded-xl text-[10px] font-bold tracking-widest uppercase transition duration-150 cursor-pointer"
-                            >
-                              📖 Charger le Chapitre {Math.max(...loadedChapters) + 1} manuellement
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="py-2">
-                            <Sparkles className="w-5 h-5 text-[#c9a84c]/60 mx-auto mb-1 animate-pulse" />
-                            <p className="font-serif italic text-xs text-[#c9a84c]/80 font-bold">« Fin du Livre Saint de {selectedBook.name} »</p>
-                            <p className="text-[8px] font-mono text-[#6b6355] uppercase mt-1">Tous les {selectedBook.chapters_count} chapitres ont été chargés dans ce défilement continu.</p>
-                          </div>
-                        )}
-                        <div id="continuous-scroll-trigger" className="h-[2px] w-full mt-2"></div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Chapter Meditation Card */}
-                {!loadingVerses && chapterVerses.length > 0 && (
-                  <ChapterMeditationCard
-                    bookId={selectedBook.id}
-                    bookName={selectedBook.name}
-                    chapter={selectedChapter}
-                    savedMeditation={chapterMeditations.find(m => m.book_id === selectedBook.id && m.chapter === selectedChapter)}
-                    chapterAudios={chapterAudios.filter(a => a.book_id === selectedBook.id && a.chapter === selectedChapter)}
-                    onSaveMeditation={handleSaveChapterMeditation}
-                    onSaveAudioMeditation={handleSaveChapterAudioMeditation}
-                    onDeleteAudioMeditation={handleDeleteChapterAudioMeditation}
-                  />
-                )}
-                
-                {/* Chapter study validation */}
-                {!loadingVerses && (
-                  <div className="mt-8 pt-5 border-t border-[#2e2a1e]/55 flex flex-col sm:flex-row items-center justify-between gap-4 select-none">
-                    <div className="text-left">
-                      <p className="text-[10px] font-serif font-bold text-[#c9a84c]">Avez-vous complété cette lecture ?</p>
-                      <p className="text-[9px] font-mono text-[#6b6355] uppercase">Marquer comme lu enregistre votre fidelité et vos streaks</p>
-                    </div>
-                    
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <button
-                        onClick={(e) => markCurrentChapterRead(false, e.currentTarget)}
-                        className={`px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 ${
-                          readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)
-                            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-                            : 'bg-emerald-950/15 hover:bg-emerald-950/35 border-emerald-500/25 text-emerald-400/80 hover:text-emerald-400'
-                        }`}
-                        title={readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? "Lecture déjà complétée et enregistrée. Cliquez pour retirer." : "Marquer ce chapitre comme lu et enregistrer la progression."}
-                      >
-                        <Check className={`w-3.5 h-3.5 transition-transform duration-200 ${readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'scale-110' : ''}`} />
-                        <span>{readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter) ? 'COMPLÉTÉ ET ENREGISTRÉ' : 'MARQUER LECTURE FAITE'}</span>
-                      </button>
-
-                      <button
-                        onClick={handleNextScripture}
-                        className="px-4 py-2 text-[10px] font-mono font-bold tracking-wider uppercase rounded-xl border cursor-pointer transition-all duration-200 flex items-center gap-1.5 bg-[#181510] hover:bg-[#252017] border-[#c9a84c]/35 hover:border-[#c9a84c]/65 text-[#dfba5a] hover:text-[#f3d889] shadow-[0_0_10px_rgba(201,168,76,0.1)] hover:shadow-[0_0_15px_rgba(201,168,76,0.22)] active:scale-95 group"
-                        title={nextTargetTooltip}
-                      >
-                        <span>SUIVANT</span>
-                        <ChevronRight className="w-3.5 h-3.5 text-[#c9a84c] group-hover:text-[#f3d889] transition-transform duration-200 group-hover:translate-x-0.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Interactive Slide-Up panel / bottom tray for Single Verse Exegesis detailed exploration */}
+              <PureBibleReader
+                selectedBook={selectedBook}
+                selectedChapter={selectedChapter}
+                selectedTranslation={selectedTranslation}
+                onSelectTranslation={(trans) => {
+                  setSelectedTranslation(trans);
+                  try {
+                    localStorage.setItem('bible_translation', trans);
+                  } catch (_) {}
+                }}
+                chapterVerses={chapterVerses}
+                loadingVerses={loadingVerses}
+                loadingError={loadingError}
+                onOpenNavigator={() => setIsNavigatorOpen(true)}
+                onOpenSearch={() => setIsSearchModalOpen(true)}
+                onPrevChapter={handlePreviousChapter}
+                onNextChapter={handleNextChapter}
+                isSpeaking={isSpeaking}
+                isPaused={isPaused}
+                onToggleAudio={() => {
+                  if (isSpeaking && !isPaused) {
+                    stopSpeaking();
+                  } else {
+                    speakVerse(0);
+                  }
+                }}
+                onExplainVerse={(v) => {
+                  setActiveExplainVerse(v);
+                }}
+                onSaveNote={async (v, text, audioBase64) => {
+                  await handleSaveSpiritualNote(v, text, audioBase64);
+                }}
+                notes={notes}
+                favorites={favorites}
+                onToggleFavorite={handleToggleFavorite}
+                onNavigateToScripture={(bookId, chapter, verseNum) => {
+                  navigateToScripture({
+                    livre: bookId,
+                    chapitre: chapter,
+                    verset: verseNum || 1
+                  });
+                }}
+                onRandomVerse={() => {
+                  setIsRandomMeditationOpen(true);
+                }}
+                onSummarizeChapter={handleSummarizeChapter}
+                chapterSummaryText={chapterSummary}
+                onClearChapterSummary={() => setChapterSummary(null)}
+                loadingSummary={loadingSummary}
+                isContinuousScroll={isContinuousScroll}
+                onToggleContinuousScroll={() => setIsContinuousScroll(prev => !prev)}
+                onDictate={handleToggleSearchDictation}
+                onOpenConcordance={() => {
+                  setActiveTab('dictionary');
+                }}
+                readingTimeToday={readingTimeToday}
+                dailyTimeGoal={dailyTimeGoal}
+                onAutoValidateChapter={() => {
+                  if (!readingHistory.some(h => h.book_id === selectedBook.id && h.chapter === selectedChapter)) {
+                    markCurrentChapterRead(true);
+                  }
+                }}
+                onGoHome={() => setActiveTab('home')}
+                chapterMeditations={chapterMeditations}
+                chapterAudios={chapterAudios}
+                onSaveChapterMeditation={handleSaveChapterMeditation}
+                onDeleteChapterMeditation={handleDeleteChapterMeditation}
+                onSaveChapterAudio={handleSaveChapterAudioMeditation}
+                onDeleteChapterAudio={handleDeleteChapterAudioMeditation}
+              />
+
+                            {/* Interactive Slide-Up panel / bottom tray for Single Verse Exegesis detailed exploration */}
               <AnimatePresence>
                 {activeExplainVerse && (
                   <div className="fixed inset-0 bg-black/85 flex items-center justify-center px-4 py-8 z-50 select-none animate-fade-in">
@@ -6253,9 +4702,12 @@ export default function App() {
         </div>
       </main>
 
-      {/* GLOBAL FIXED BOTTOM NAVIGATION BAR (Mobile & Tablette uniquement) */}
-      {!isZenMode && (
-        <nav className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex lg:hidden justify-around z-40 select-none shadow-gold-glow">
+      {/* GLOBAL FIXED BOTTOM NAVIGATION BAR (Mobile & Tablette uniquement quand hors Accueil) */}
+      {!isZenMode && activeTab !== 'home' && (
+        <nav 
+          id="global-bottom-nav"
+          className="fixed bottom-0 inset-x-0 bg-[#050403]/95 backdrop-blur-md border-t border-[#2e2a1e] py-1.5 px-2 flex lg:hidden justify-around z-40 select-none shadow-gold-glow pb-[max(0.375rem,env(safe-area-inset-bottom,0px))]"
+        >
           <button
             onClick={() => {
               setActiveTab('home');
@@ -6722,6 +5174,175 @@ export default function App() {
         }}
         onSignOut={handleSignOut}
       />
+
+      {/* MODALE D'AUTHENTIFICATION / CONNEXION */}
+      <AnimatePresence>
+        {isAuthModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="w-full max-w-md bg-[#12100c] border border-[#2e2a1e] p-6 sm:p-8 rounded-3xl shadow-[0_0_50px_rgba(0,0,0,0.9),0_0_25px_rgba(201,168,76,0.2)] relative overflow-hidden text-center"
+            >
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(false)}
+                className="absolute top-4 right-4 p-2 text-[#8c8270] hover:text-[#c9a84c] rounded-xl border border-[#2e2a1e]/40 hover:border-[#c9a84c]/50 transition cursor-pointer"
+                title="Fermer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex flex-col items-center mb-6">
+                <div className="w-12 h-12 bg-[#1a1712] border border-[#c9a84c]/30 text-[#c9a84c] rounded-full flex items-center justify-center shadow-inner mb-3">
+                  <BookOpen className="w-6 h-6 text-[#c9a84c]" />
+                </div>
+                <h3 className="text-xl font-serif tracking-[0.16em] text-[#c9a84c] font-black uppercase">
+                  Bible Profonde
+                </h3>
+                <span className="text-[9px] font-mono uppercase text-[#8c8270] tracking-widest font-bold mt-0.5">
+                  Mode Sacré · Sanctuaire
+                </span>
+              </div>
+
+              {/* In-tab Auth Segment Panel */}
+              <div className="flex bg-[#0d0b07] border border-[#2e2a1e]/85 p-1 rounded-xl mb-5">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('login'); setAuthError(null); }}
+                  className={`flex-1 py-1.5 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
+                    authMode === 'login' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                  }`}
+                >
+                  Connexion
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('signup'); setAuthError(null); }}
+                  className={`flex-1 py-1.5 text-[10px] font-mono tracking-widest uppercase rounded-lg transition-all cursor-pointer ${
+                    authMode === 'signup' ? 'bg-[#c9a84c] text-[#0d0b07] font-bold shadow-soft' : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                  }`}
+                >
+                  Inscription
+                </button>
+              </div>
+
+              {authError && (
+                <div className="bg-red-950/30 border border-red-900/40 text-red-300 p-3 rounded-xl text-xs mb-4 flex items-start gap-2 text-left">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                  <span className="font-sans leading-relaxed">{authError}</span>
+                </div>
+              )}
+
+              <form onSubmit={async (e) => {
+                await handleAuthSubmit(e);
+                setIsAuthModalOpen(false);
+              }} className="space-y-3.5 text-left">
+                {authMode === 'signup' && (
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Nom ou Pseudo</label>
+                    <div className="relative">
+                      <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3" />
+                      <input
+                        type="text"
+                        required
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="Grand Voyageur"
+                        className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/30 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-3.5 py-2.5 rounded-xl transition outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Adresse Email</label>
+                  <div className="relative">
+                    <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3" />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="nom@exemple.com"
+                      className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/30 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-3.5 py-2.5 rounded-xl transition outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-mono uppercase tracking-widest text-[#6b6355]">Mot de passe</label>
+                  <div className="relative">
+                    <UserIcon className="w-4 h-4 text-[#6b6355] absolute left-3.5 top-3" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-[#0d0b07] border border-[#2e2a1e] hover:border-[#c9a84c]/30 focus:border-[#c9a84c] text-[#e8e0d0] text-xs pl-10 pr-9 py-2.5 rounded-xl transition outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="p-1 hover:text-[#c9a84c] text-[#6b6355] absolute right-3 top-2.5 transition cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-3 bg-[#c9a84c] hover:bg-[#ebd092] text-[#0d0b07] font-bold font-serif text-xs uppercase tracking-widest rounded-xl transition shadow-[0_2px_12px_rgba(201,168,76,0.35)] cursor-pointer mt-4 flex items-center justify-center gap-1"
+                >
+                  <span>{authMode === 'login' ? 'Accéder au Sanctuaire' : 'Créer mon compte'}</span>
+                  <ArrowRight className="w-4 h-4 text-[#0d0b07]" />
+                </button>
+              </form>
+
+              <div className="relative flex py-3 items-center select-none">
+                <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
+                <span className="flex-shrink mx-3 text-[9px] font-mono uppercase text-[#6b6355] tracking-wider">Ou</span>
+                <div className="flex-grow border-t border-[#2e2a1e]/40"></div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await handleGoogleSignIn();
+                  setIsAuthModalOpen(false);
+                }}
+                disabled={isGoogleSigningIn}
+                className="w-full py-2.5 bg-[#0d0b07] hover:bg-[#1a1712] text-[#e8e0d0] border border-[#2e2a1e] rounded-xl transition text-[10px] font-mono tracking-widest uppercase flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isGoogleSigningIn ? (
+                  <span>Connexion en cours...</span>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+                    </svg>
+                    <span>Continuer avec Google</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(false)}
+                className="mt-3 text-[10px] font-mono uppercase text-[#8c8270] hover:text-[#c9a84c] transition tracking-wider cursor-pointer"
+              >
+                Continuer sans compte (Mode Invité)
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
