@@ -1,6 +1,6 @@
 import React from 'react';
 import { 
-  ArrowLeft, Sun, Moon, Sunrise, Type
+  ArrowLeft, Sun, Moon, Sunrise, Type, Palette
 } from 'lucide-react';
 import { 
   ThemeSettings, 
@@ -11,6 +11,7 @@ import {
   ThemeMode,
   ReaderFont
 } from '../lib/theme';
+import { ReaderColorThemeCard } from './ReaderColorThemeCard';
 
 interface ThemeSettingsPageProps {
   settings: ThemeSettings;
@@ -196,7 +197,10 @@ export const ThemeSettingsPage: React.FC<ThemeSettingsPageProps> = ({
         </div>
       </div>
 
-      {/* 4. CARTE TYPOGRAPHIE & LECTEUR */}
+      {/* 4. CARTE COULEUR DU LECTEUR (7 Couleurs) */}
+      <ReaderColorThemeCard />
+
+      {/* 5. CARTE TYPOGRAPHIE & LECTEUR */}
       <div className="rounded-2xl bg-surface border border-app p-4 sm:p-5 space-y-4 shadow-sm">
         <div className="flex items-center gap-2 text-muted text-xs font-mono uppercase tracking-widest">
           <Type className="w-3.5 h-3.5" />

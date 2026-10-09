@@ -522,9 +522,9 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
           onClick={(e) => e.stopPropagation()}
           className="w-full sm:max-w-2xl max-h-[85vh] bg-[#14120e] border-t sm:border border-[#2a261c] sm:rounded-3xl rounded-t-3xl shadow-2xl flex flex-col overflow-hidden text-left"
           style={{
-            backgroundColor: 'var(--color-surface, #14120e)',
-            borderColor: 'var(--color-border, #2a261c)',
-            color: 'var(--color-text, #ded7c8)',
+            backgroundColor: 'var(--r-surface, var(--color-surface, #14120e))',
+            borderColor: 'var(--r-border, var(--color-border, #2a261c))',
+            color: 'var(--r-text, var(--color-text, #ded7c8))',
           }}
         >
           {/* Poignée mobile (drag handle) */}

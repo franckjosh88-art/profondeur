@@ -1,9 +1,16 @@
 import React from 'react';
 import { 
   Settings, Type, Volume2, LogOut, 
-  Sparkles, X, Check, ShieldCheck 
+  Sparkles, X, Check, ShieldCheck, Palette 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  ORDERED_READER_COLORS, 
+  getReaderPreset, 
+  normalizeReaderColorId,
+  ReaderColorId 
+} from '../types/readerTheme';
+import { ReaderVersePreview } from './ReaderVersePreview';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +19,8 @@ interface SettingsModalProps {
   speechVolume: number;
   selectedVoiceGender: 'female' | 'male' | 'all';
   userEmail?: string | null;
+  readerColor?: string;
+  onSelectReaderColor?: (color: string) => void;
   onClose: () => void;
   onChangeTextSize: (size: number) => void;
   onChangeSpeechRate: (rate: number) => void;
@@ -27,6 +36,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   speechVolume,
   selectedVoiceGender,
   userEmail,
+  readerColor = 'sanctuary',
+  onSelectReaderColor,
   onClose,
   onChangeTextSize,
   onChangeSpeechRate,
@@ -34,6 +45,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeVoiceGender,
   onSignOut
 }) => {
+  const activeColorPreset = getReaderPreset(readerColor);
   return (
     <AnimatePresence>
       {isOpen && (
@@ -172,7 +184,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
 
-              {/* 3. COMPTE ET CONFIDENTIALITÉ */}
+              {/* 3. COULEUR DU LECTEUR BIBLIQUE */}
+              <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Palette className="w-4 h-4 text-[#c9a84c]" />
+                    <span className="text-xs font-serif font-bold text-[#f4efe2]">Couleur du lecteur</span>
+                  </div>
+                  <span className="text-[11px] font-mono text-[#c9a84c]">
+                    {activeColorPreset.name}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-1" role="radiogroup" aria-label="Palette du lecteur">
+                  {ORDERED_READER_COLORS.map((preset) => {
+                    const isSelected = (readerColor === 'sanctuary' && preset.id === 'sanctuaire') || readerColor === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={isSelected}
+                        onClick={() => onSelectReaderColor && onSelectReaderColor(preset.id)}
+                        className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full border transition-all cursor-pointer relative flex items-center justify-center ${
+                          isSelected 
+                            ? 'ring-2 ring-[#c9a84c] ring-offset-2 ring-offset-[#12100c] scale-110 shadow-md border-black/30' 
+                            : 'border-white/20 hover:scale-105 opacity-80 hover:opacity-100'
+                        }`}
+                        style={{ 
+                          backgroundColor: preset.hex,
+                          borderColor: preset.id === 'blanc' ? '#d4d4d8' : undefined
+                        }}
+                        title={preset.name}
+                        aria-label={preset.name}
+                      >
+                        {isSelected && (
+                          <Check 
+                            className="w-3.5 h-3.5 drop-shadow" 
+                            style={{ 
+                              color: preset.id === 'blanc' || preset.id === 'rose' ? '#1c1c1c' : '#ffffff' 
+                            }} 
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Aperçu dynamique du verset biblique type avec variables CSS --r-* */}
+                <div className="pt-2">
+                  <ReaderVersePreview colorId={readerColor} />
+                </div>
+              </div>
+
+              {/* 4. COMPTE ET CONFIDENTIALITÉ */}
               <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] flex items-center justify-between">
                 <div>
                   <span className="text-[10px] font-mono uppercase text-[#8c8270] block">Compte Actif</span>

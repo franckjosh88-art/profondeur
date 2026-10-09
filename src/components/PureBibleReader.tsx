@@ -3,12 +3,20 @@ import {
   ChevronDown, MoreVertical, ChevronLeft, ChevronRight, Volume2, 
   Pause, Check, Bookmark, Copy, Share2, FileText, 
   Search, Sparkles, X, Dices, ScrollText, Mic, Clock, 
-  BookOpen, Home, Loader2
+  BookOpen, Home, Loader2, Palette
 } from 'lucide-react';
 import { Verse, Book, VerseNote, FavoriteVerse, ChapterMeditation, ChapterAudioMeditation } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
 import { VerseStudyPanel } from './VerseStudyPanel';
 import { ChapterNoteSection } from './ChapterNoteSection';
+import { ThemeSelectionModal } from './ThemeSelectionModal';
+import { 
+  ReaderColorId, 
+  getReaderPreset, 
+  loadSavedReaderColor,
+  normalizeReaderColorId,
+  saveReaderColorLocally
+} from '../types/readerTheme';
 
 export interface PureBibleReaderProps {
   selectedBook: Book;
@@ -62,6 +70,8 @@ export interface PureBibleReaderProps {
     writtenMeditationId?: string
   ) => Promise<boolean>;
   onDeleteChapterAudio?: (audioId: string) => Promise<void> | void;
+  readerColor?: string;
+  onSelectReaderColor?: (color: ReaderColorId | string) => void;
 }
 
 export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
@@ -105,6 +115,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   onDeleteChapterMeditation,
   onSaveChapterAudio,
   onDeleteChapterAudio,
+  readerColor: propReaderColor,
+  onSelectReaderColor,
 }) => {
   // Selected verse unique ID for active study panel (e.g. "1_1_1")
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null);
@@ -113,6 +125,40 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   const [shareModalVerse, setShareModalVerse] = useState<Verse | null>(null);
   const [showGoalToast, setShowGoalToast] = useState<boolean>(false);
   const [showReadingTimeToast, setShowReadingTimeToast] = useState<boolean>(false);
+  const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
+
+  // Thème de couleur du lecteur (7 couleurs personnalisables)
+  const [readerColorId, setReaderColorId] = useState<ReaderColorId>(() => {
+    if (propReaderColor) return normalizeReaderColorId(propReaderColor);
+    return loadSavedReaderColor();
+  });
+  const activePreset = getReaderPreset(readerColorId);
+
+  useEffect(() => {
+    if (propReaderColor) {
+      setReaderColorId(normalizeReaderColorId(propReaderColor));
+    }
+  }, [propReaderColor]);
+
+  useEffect(() => {
+    const handleColorEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<ReaderColorId>;
+      if (customEvent.detail) {
+        setReaderColorId(customEvent.detail);
+      }
+    };
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === 'bible_reader_color' && e.newValue) {
+        setReaderColorId(e.newValue as ReaderColorId);
+      }
+    };
+    window.addEventListener('reader-color-changed', handleColorEvent);
+    window.addEventListener('storage', handleStorageEvent);
+    return () => {
+      window.removeEventListener('reader-color-changed', handleColorEvent);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, []);
   
   // Summary card copy state & appending to note
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
@@ -318,10 +364,32 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
     chapterAudios.some(a => a.book_id === selectedBook.id && a.chapter === selectedChapter);
 
   return (
-    <div className="relative min-h-screen w-full bg-[#0a0907] text-[#ded7c8] select-text">
+    <div 
+      className="reader relative min-h-screen w-full select-text transition-colors duration-300"
+      data-theme={activePreset.id}
+      data-reader-theme={activePreset.id}
+      style={{
+        '--r-bg': activePreset.tokens.bg,
+        '--r-surface': activePreset.tokens.surface,
+        '--r-text': activePreset.tokens.text,
+        '--r-text-secondary': activePreset.tokens.textMuted,
+        '--r-text-muted': activePreset.tokens.textMuted,
+        '--r-accent': activePreset.tokens.accent,
+        '--r-border': activePreset.tokens.border,
+        '--r-verse-num': activePreset.tokens.verseNum,
+        backgroundColor: 'var(--r-bg)',
+        color: 'var(--r-text)',
+      } as React.CSSProperties}
+    >
 
       {/* 1. BARRE DU HAUT TRÈS FINE, FIXE */}
-      <header className="fixed top-0 inset-x-0 h-13 z-40 bg-[#0a0907]/90 backdrop-blur-md border-b border-[#242018] flex items-center justify-between px-4 sm:px-6 select-none">
+      <header 
+        className="fixed top-0 inset-x-0 h-13 z-40 backdrop-blur-md flex items-center justify-between px-4 sm:px-6 select-none transition-colors duration-200 border-b"
+        style={{
+          backgroundColor: `${activePreset.tokens.bg}ee`,
+          borderColor: 'var(--r-border)',
+        }}
+      >
         
         {/* Gauche : Bouton Livre + Chapitre (arrondi, doré) & Bouton Version */}
         <div className="flex items-center gap-2">
@@ -329,14 +397,19 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           <button
             type="button"
             onClick={onOpenNavigator}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#181510] hover:bg-[#221e16] border border-[#c9a84c]/50 text-[#c9a84c] text-xs font-serif font-bold tracking-wide transition cursor-pointer shadow-xs active:scale-95"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-serif font-bold tracking-wide transition cursor-pointer shadow-xs active:scale-95"
+            style={{
+              backgroundColor: 'var(--r-surface)',
+              borderColor: 'var(--r-border)',
+              color: 'var(--r-accent)',
+            }}
             title="Choisir le livre et le chapitre"
           >
             <span>{selectedBook.name} {selectedChapter}</span>
             {hasChapterNote && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[#c9a84c] shrink-0" title="Note enregistrée pour ce chapitre" />
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--r-accent)' }} title="Note enregistrée pour ce chapitre" />
             )}
-            <ChevronDown className="w-3.5 h-3.5 text-[#c9a84c]/80" />
+            <ChevronDown className="w-3.5 h-3.5 opacity-80" />
           </button>
 
           {/* Bouton Version (ex: LSG) */}
@@ -347,17 +420,29 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 setShowVersionDropdown(!showVersionDropdown);
                 setShowMenu(false);
               }}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-[#14120e] hover:bg-[#1c1913] border border-[#2e2a1e] text-[#a0947f] hover:text-[#e8e0d0] text-[11px] font-sans font-medium transition cursor-pointer active:scale-95"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-full border text-[11px] font-sans font-medium transition cursor-pointer active:scale-95"
+              style={{
+                backgroundColor: 'var(--r-surface)',
+                borderColor: 'var(--r-border)',
+                color: 'var(--r-text-secondary)',
+              }}
               title="Choisir la version de Bible"
             >
               <span>{getTranslationCode(selectedTranslation)}</span>
-              <ChevronDown className="w-3 h-3 text-[#736a59]" />
+              <ChevronDown className="w-3 h-3 opacity-70" />
             </button>
 
             {/* Menu déroulant de versions */}
             {showVersionDropdown && (
-              <div className="absolute left-0 mt-2 w-64 bg-[#14120e] border border-[#2e2a1e] rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left">
-                <div className="px-3 py-1.5 text-[10px] uppercase font-sans font-bold tracking-wider text-[#736a59]">
+              <div 
+                className="absolute left-0 mt-2 w-64 border rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left"
+                style={{
+                  backgroundColor: 'var(--r-surface)',
+                  borderColor: 'var(--r-border)',
+                  color: 'var(--r-text)',
+                }}
+              >
+                <div className="px-3 py-1.5 text-[10px] uppercase font-sans font-bold tracking-wider opacity-70">
                   Versions disponibles
                 </div>
                 {TRANSLATIONS.map(t => {
@@ -373,15 +458,19 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-sans text-left transition cursor-pointer ${
                         isCurrent 
-                          ? 'bg-[#c9a84c]/15 text-[#c9a84c] font-bold' 
-                          : 'text-[#ded7c8] hover:bg-[#1f1b14]'
+                          ? 'font-bold' 
+                          : 'hover:opacity-80'
                       }`}
+                      style={{
+                        backgroundColor: isCurrent ? 'var(--r-bg)' : undefined,
+                        color: isCurrent ? 'var(--r-accent)' : 'var(--r-text)',
+                      }}
                     >
                       <div className="flex flex-col">
                         <span className="font-medium">{t.label}</span>
-                        <span className="text-[10px] text-[#736a59] font-mono">{t.code}</span>
+                        <span className="text-[10px] opacity-70 font-mono">{t.code}</span>
                       </div>
-                      {isCurrent && <Check className="w-3.5 h-3.5 text-[#c9a84c]" />}
+                      {isCurrent && <Check className="w-3.5 h-3.5" style={{ color: 'var(--r-accent)' }} />}
                     </button>
                   );
                 })}
@@ -396,7 +485,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           <button
             type="button"
             onClick={onOpenSearch}
-            className="p-2 rounded-full text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#181510] transition cursor-pointer"
+            className="p-2 rounded-full hover:opacity-100 transition cursor-pointer"
+            style={{ color: 'var(--r-text-secondary)' }}
             title="Rechercher dans la Bible"
             aria-label="Recherche"
           >
@@ -411,7 +501,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 setShowMenu(!showMenu);
                 setShowVersionDropdown(false);
               }}
-              className="p-2 rounded-full text-[#8c8270] hover:text-[#e8e0d0] hover:bg-[#181510] transition cursor-pointer"
+              className="p-2 rounded-full hover:opacity-100 transition cursor-pointer"
+              style={{ color: 'var(--r-text-secondary)' }}
               title="Menu Lecteur"
               aria-label="Menu"
             >
@@ -420,7 +511,14 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
 
             {/* Menu contextuel ⋮ */}
             {showMenu && (
-              <div className="absolute right-0 mt-2 w-64 bg-[#14120e] border border-[#2e2a1e] rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left">
+              <div 
+                className="absolute right-0 mt-2 w-64 border rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left"
+                style={{
+                  backgroundColor: 'var(--r-surface)',
+                  borderColor: 'var(--r-border)',
+                  color: 'var(--r-text)',
+                }}
+              >
                 
                 {/* Verset au hasard */}
                 <button
@@ -491,6 +589,24 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 >
                   <BookOpen className="w-4 h-4 text-[#c9a84c]" />
                   <span>Dictionnaire & Concordance</span>
+                </button>
+
+                {/* Couleur du lecteur */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    setShowThemeModal(true);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-sans text-[#ded7c8] hover:bg-[#1f1b14] transition cursor-pointer"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Palette className="w-4 h-4 text-[#c9a84c]" />
+                    <span>Couleur du lecteur</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-[#c9a84c] capitalize font-medium">
+                    {activePreset.name}
+                  </span>
                 </button>
 
                 <div className="my-1 border-t border-[#242018]" />
@@ -568,8 +684,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
         ) : (
           /* Paragraphe continu comme dans un vrai livre */
           <div 
-            className="font-serif text-[#ded7c8] text-lg sm:text-[19px] leading-[1.85] tracking-normal select-text text-justify"
-            style={{ textRendering: 'optimizeLegibility' }}
+            className="font-serif text-lg sm:text-[19px] leading-[1.85] tracking-normal select-text text-justify"
+            style={{ textRendering: 'optimizeLegibility', color: 'var(--r-text)' }}
           >
             {chapterVerses.map((item, idx) => {
               const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
@@ -608,11 +724,14 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                       backgroundColor: highlightColor ? highlightColor : undefined,
                     }}
                   >
-                    {/* Numéros de versets petits, gris, intégrés dans le flux du texte */}
+                    {/* Numéros de versets petits, intégrés dans le flux du texte */}
                     <sup 
-                      className={`text-[11px] font-sans mr-1 select-none font-normal ${
-                        isSelected ? 'text-[#c9a84c] font-bold' : 'text-[#736a59]'
+                      className={`text-[11px] font-sans mr-1 select-none ${
+                        isSelected ? 'font-bold' : 'font-normal'
                       }`}
+                      style={{
+                        color: isSelected ? 'var(--r-accent)' : 'var(--r-verse-num)'
+                      }}
                     >
                       {item.verse}
                     </sup>
@@ -770,11 +889,16 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             type="button"
             onClick={onPrevChapter}
             disabled={isFirstChapter}
-            className={`pointer-events-auto w-12 h-12 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_4px_16px_rgba(0,0,0,0.55)] select-none ${
+            className={`pointer-events-auto w-12 h-12 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_4px_16px_rgba(0,0,0,0.55)] select-none border ${
               isFirstChapter
-                ? 'bg-[#181510]/80 border border-[#2a2419] text-[#635a4a] opacity-35 cursor-not-allowed'
-                : 'bg-[#1c1812]/92 hover:bg-[#252018] border border-[#3e3423] hover:border-[#c9a84c]/60 text-[#f5efe6] active:scale-95 cursor-pointer'
+                ? 'opacity-35 cursor-not-allowed'
+                : 'hover:opacity-90 active:scale-95 cursor-pointer'
             }`}
+            style={{
+              backgroundColor: 'var(--r-surface)',
+              borderColor: 'var(--r-border)',
+              color: isFirstChapter ? 'var(--r-text-muted)' : 'var(--r-text)',
+            }}
             title={isFirstChapter ? 'Premier chapitre' : 'Chapitre précédent'}
             aria-label="Chapitre précédent"
           >
@@ -786,11 +910,12 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             <button
               type="button"
               onClick={onToggleAudio}
-              className={`pointer-events-auto w-14 h-14 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_6px_20px_rgba(0,0,0,0.6)] cursor-pointer select-none active:scale-95 ${
-                isSpeaking && !isPaused
-                  ? 'bg-[#c9a84c] text-[#0c0a07] border border-[#f0dfa8] shadow-[0_0_24px_rgba(201,168,76,0.4)] animate-pulse'
-                  : 'bg-[#1e1a13]/92 hover:bg-[#282218] text-[#c9a84c] border border-[#c9a84c]/60 hover:border-[#c9a84c]'
-              }`}
+              className="pointer-events-auto w-14 h-14 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_6px_20px_rgba(0,0,0,0.6)] cursor-pointer select-none active:scale-95 border"
+              style={{
+                backgroundColor: isSpeaking && !isPaused ? 'var(--r-accent)' : 'var(--r-surface)',
+                borderColor: 'var(--r-border)',
+                color: isSpeaking && !isPaused ? 'var(--r-bg)' : 'var(--r-accent)',
+              }}
               title={isSpeaking && !isPaused ? 'Pause de la lecture audio' : 'Écouter'}
               aria-label={isSpeaking && !isPaused ? 'Pause de la lecture audio' : 'Écouter'}
             >
@@ -807,11 +932,16 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             type="button"
             onClick={onNextChapter}
             disabled={isLastChapter}
-            className={`pointer-events-auto w-12 h-12 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_4px_16px_rgba(0,0,0,0.55)] select-none ${
+            className={`pointer-events-auto w-12 h-12 rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_4px_16px_rgba(0,0,0,0.55)] select-none border ${
               isLastChapter
-                ? 'bg-[#181510]/80 border border-[#2a2419] text-[#635a4a] opacity-35 cursor-not-allowed'
-                : 'bg-[#1c1812]/92 hover:bg-[#252018] border border-[#3e3423] hover:border-[#c9a84c]/60 text-[#f5efe6] active:scale-95 cursor-pointer'
+                ? 'opacity-35 cursor-not-allowed'
+                : 'hover:opacity-90 active:scale-95 cursor-pointer'
             }`}
+            style={{
+              backgroundColor: 'var(--r-surface)',
+              borderColor: 'var(--r-border)',
+              color: isLastChapter ? 'var(--r-text-muted)' : 'var(--r-text)',
+            }}
             title={isLastChapter ? 'Dernier chapitre' : 'Chapitre suivant'}
             aria-label="Chapitre suivant"
           >
@@ -823,13 +953,24 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
       {/* Pastille discrète « Objectif atteint » (affichée 2 secondes) AU-DESSUS des boutons */}
       {showGoalToast && (
         <div 
-          className="fixed left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full bg-[#181510] border border-[#c9a84c]/60 text-[#f5efe6] text-xs font-sans shadow-xl animate-fade-in flex items-center gap-1.5 select-none pointer-events-none"
+          className="fixed left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full border text-xs font-sans shadow-xl animate-fade-in flex items-center gap-1.5 select-none pointer-events-none"
           style={{
-            bottom: `calc(${bottomNavHeight}px + 16px + 56px + 16px + env(safe-area-inset-bottom, 0px))`
+            bottom: `calc(${bottomNavHeight}px + 16px + 56px + 16px + env(safe-area-inset-bottom, 0px))`,
+            backgroundColor: 'var(--r-surface)',
+            borderColor: 'var(--r-border)',
+            color: 'var(--r-text)',
           }}
         >
-          <span className="w-2 h-2 rounded-full bg-[#c9a84c] shrink-0" />
-          <span className="font-medium text-[#c9a84c]">Objectif atteint</span>
+          <span 
+            className="w-2 h-2 rounded-full shrink-0" 
+            style={{ backgroundColor: 'var(--r-accent)' }}
+          />
+          <span 
+            className="font-medium"
+            style={{ color: 'var(--r-accent)' }}
+          >
+            Objectif atteint
+          </span>
         </div>
       )}
 
@@ -840,6 +981,20 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           onClose={() => setShareModalVerse(null)}
         />
       )}
+
+      {/* 5. MODALE DE CHOIX DE COULEUR DU LECTEUR (7 Couleurs avec variables CSS --r-*) */}
+      <ThemeSelectionModal
+        isOpen={showThemeModal}
+        onClose={() => setShowThemeModal(false)}
+        selectedColorId={readerColorId}
+        onSelectColor={(newColor) => {
+          setReaderColorId(newColor);
+          saveReaderColorLocally(newColor);
+          if (onSelectReaderColor) {
+            onSelectReaderColor(newColor);
+          }
+        }}
+      />
 
     </div>
   );

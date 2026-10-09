@@ -146,7 +146,7 @@ export const CleanBibleReader: React.FC<CleanBibleReaderProps> = ({
   };
 
   return (
-    <div className="w-full min-h-screen pb-32 text-left select-text relative">
+    <div className="reader reader-container w-full min-h-screen pb-32 text-left select-text relative">
       
       {/* 1. BARRE DU HAUT TRÈS FINE */}
       {/* Bouton Livre+chapitre, bouton Version, icône menu ⋮ à droite */}

@@ -48,6 +48,11 @@ service cloud.firestore {
       match /chapter_audio_meditations/{audioId} {
         allow read, write: if isOwner(userId);
       }
+
+      // Verse highlights subcollection
+      match /highlights/{highlightId} {
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }

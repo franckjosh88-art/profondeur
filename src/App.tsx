@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { 
   doc, setDoc, getDoc, onSnapshot, collection, deleteDoc, updateDoc, writeBatch
 } from 'firebase/firestore';
@@ -19,6 +19,13 @@ import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
 import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
 import { parseNoteContent, SpiritualNote } from './utils/spiritualNotes';
 import { saveAudioBlob, deleteAudioBlob } from './utils/audioStorage';
+import { 
+  ReaderColorId, 
+  normalizeReaderColorId, 
+  loadSavedReaderColor, 
+  saveReaderColorLocally,
+  applyReaderThemeCssVars 
+} from './types/readerTheme';
 
 import { 
   BookOpen, Search, User as UserIcon, LogOut, Settings, Eye, EyeOff, AlertCircle, ChevronUp, ChevronDown, Check, X, Bookmark, Copy, Sparkles, MessageSquare, Flame, HelpCircle, ArrowRight, Share2, Plus, Play, ChevronLeft, ChevronRight, Award, Bell, Pause, Square, SkipBack, SkipForward, Volume2, VolumeX, Compass, Library, ScrollText, Music, Brain, Home, Database, Moon, Timer, Leaf, Mountain, Download, Folder, FolderPlus, Tag, Mic, MicOff, Trash2, Radio, Dices, Feather
@@ -215,6 +222,98 @@ export default function App() {
   const [textSize, setTextSize] = useState<number>(18);
   const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'sepia'>('light');
   const isNightMode = themeMode === 'dark';
+
+  // =========================================================================
+  // READER COLOR PERSISTENCE & THEME SYNCHRONIZATION
+  // - Mirrored to localStorage for instant startup without flash
+  // - Persisted to Firestore under `users/${uid}/readerColor`
+  // - Reactive window event listener ('reader-color-changed') for no-reload updates
+  // =========================================================================
+  const [readerColor, setReaderColor] = useState<ReaderColorId | string>(() => {
+    try {
+      const saved = localStorage.getItem('readerColor') || localStorage.getItem('bible_reader_color');
+      if (saved) {
+        return saved === 'sanctuary' ? 'sanctuaire' : saved;
+      }
+    } catch (_) {}
+    return 'sanctuaire';
+  });
+
+  // Dedicated handler to update readerColor, mirror to localStorage, and persist to Firestore
+  const handleUpdateReaderColor = useCallback((newColor: ReaderColorId | string, broadcastEvent = true) => {
+    const normalized = (newColor === 'sanctuary' || !newColor) ? 'sanctuaire' : newColor;
+    setReaderColor(normalized);
+
+    // 1. Mirror immediately to localStorage for instant application on startup
+    try {
+      localStorage.setItem('readerColor', normalized);
+      localStorage.setItem('bible_reader_color', normalized);
+    } catch (_) {}
+
+    // 2. Immediately apply CSS variables --r-* on .reader elements without requiring reload
+    applyReaderThemeCssVars(normalized);
+
+    // 3. Broadcast window-level event to update all reader UI components without page reload
+    if (broadcastEvent && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('reader-color-changed', { detail: normalized }));
+    }
+
+    // 4. Persist to Firestore under the user profile if authenticated
+    if (user) {
+      const userDocRef = doc(db, 'users', user.uid);
+      setDoc(userDocRef, { readerColor: normalized }, { merge: true }).catch((err) => {
+        console.warn("Could not persist readerColor to Firestore profile:", err);
+      });
+    }
+  }, [user]);
+
+  // Synchronize CSS variables on mount and whenever readerColor state changes
+  useEffect(() => {
+    applyReaderThemeCssVars(readerColor);
+  }, [readerColor]);
+
+  // Window-level event listener ('reader-color-changed' & 'storage') for instantaneous UI updates
+  useEffect(() => {
+    const handleReaderColorEvent = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      const incomingColor = customEvent.detail;
+      if (incomingColor && incomingColor !== readerColor) {
+        const normalized = incomingColor === 'sanctuary' ? 'sanctuaire' : incomingColor;
+        setReaderColor(normalized);
+        applyReaderThemeCssVars(normalized);
+        try {
+          localStorage.setItem('readerColor', normalized);
+          localStorage.setItem('bible_reader_color', normalized);
+        } catch (_) {}
+        if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          setDoc(userDocRef, { readerColor: normalized }, { merge: true }).catch((err) => {
+            console.warn("Could not sync readerColor to Firestore profile:", err);
+          });
+        }
+      }
+    };
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if ((e.key === 'readerColor' || e.key === 'bible_reader_color') && e.newValue && e.newValue !== readerColor) {
+        const normalized = e.newValue === 'sanctuary' ? 'sanctuaire' : e.newValue;
+        setReaderColor(normalized);
+        applyReaderThemeCssVars(normalized);
+        if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          setDoc(userDocRef, { readerColor: normalized }, { merge: true }).catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('reader-color-changed', handleReaderColorEvent);
+    window.addEventListener('storage', handleStorageEvent);
+    return () => {
+      window.removeEventListener('reader-color-changed', handleReaderColorEvent);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [readerColor, user]);
+
   const [autoTheme, setAutoTheme] = useState<boolean>(() => {
     try {
       return localStorage.getItem('auto_theme_enabled') === 'true';
@@ -758,6 +857,14 @@ export default function App() {
         } catch (e) {
           setReadingHistory([]);
         }
+
+        try {
+          const offlineColor = localStorage.getItem('readerColor') || localStorage.getItem('bible_reader_color');
+          const resolvedOffline = (offlineColor === 'sanctuary' || !offlineColor) ? 'sanctuaire' : offlineColor;
+          setReaderColor(resolvedOffline);
+          localStorage.setItem('readerColor', resolvedOffline);
+          localStorage.setItem('bible_reader_color', resolvedOffline);
+        } catch (_) {}
       }
     });
 
@@ -1030,6 +1137,47 @@ export default function App() {
 
   // Read subcollections reactively from Firestore
   const setupUserSnapshotListeners = (uid: string) => {
+    // 0. User Profile Root Document (Couleur du lecteur synchronisée)
+    const userDocRef = doc(db, 'users', uid);
+    const unsubscribeProfile = onSnapshot(userDocRef, (docSnap) => {
+      let resolvedColor: string = 'sanctuaire';
+      if (docSnap.exists()) {
+        const uData = docSnap.data();
+        if (uData && uData.readerColor) {
+          resolvedColor = uData.readerColor === 'sanctuary' ? 'sanctuaire' : uData.readerColor;
+        } else {
+          // Si aucune valeur 'readerColor' n'est présente dans Firestore, utiliser le défaut 'sanctuaire'
+          resolvedColor = 'sanctuaire';
+          // Persister le champ par défaut dans le profil Firestore de l'utilisateur
+          setDoc(userDocRef, { readerColor: 'sanctuaire' }, { merge: true }).catch((err) => {
+            console.warn("Could not set default readerColor in Firestore:", err);
+          });
+        }
+      } else {
+        // Document inexistant -> défaut 'sanctuaire'
+        resolvedColor = 'sanctuaire';
+      }
+
+      // Mise à jour de l'état réactif et persistance locale
+      try {
+        localStorage.setItem('readerColor', resolvedColor);
+        localStorage.setItem('bible_reader_color', resolvedColor);
+      } catch (_) {}
+      applyReaderThemeCssVars(resolvedColor);
+
+      setReaderColor((prev) => {
+        if (prev !== resolvedColor) {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('reader-color-changed', { detail: resolvedColor }));
+          }
+          return resolvedColor;
+        }
+        return prev;
+      });
+    }, (error) => {
+      console.warn("User profile sync warning:", error);
+    });
+
     // 1. Favorite Bookmarks
     const bookmarksRef = collection(db, 'users', uid, 'bookmarks');
     const unsubscribeBookmarks = onSnapshot(bookmarksRef, (snapshot) => {
@@ -1126,6 +1274,7 @@ export default function App() {
     });
 
     return () => {
+      unsubscribeProfile();
       unsubscribeBookmarks();
       unsubscribeNotes();
       unsubscribeHistory();
@@ -1158,7 +1307,8 @@ export default function App() {
           uid: userCredential.user.uid,
           email: email,
           displayName: displayName || "Pèlerin de Foi",
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          readerColor: readerColor || 'sanctuaire'
         });
       }
     } catch (err: any) {
@@ -1187,8 +1337,23 @@ export default function App() {
             uid: result.user.uid,
             email: result.user.email || '',
             displayName: result.user.displayName || "Pèlerin de Foi",
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            readerColor: readerColor || 'sanctuaire'
           });
+        } else {
+          const uData = docSnap.data();
+          const targetColor = (uData && uData.readerColor)
+            ? (uData.readerColor === 'sanctuary' ? 'sanctuaire' : uData.readerColor)
+            : 'sanctuaire';
+          setReaderColor(targetColor);
+          try {
+            localStorage.setItem('readerColor', targetColor);
+            localStorage.setItem('bible_reader_color', targetColor);
+            window.dispatchEvent(new CustomEvent('reader-color-changed', { detail: targetColor }));
+          } catch (_) {}
+          if (!uData?.readerColor) {
+            setDoc(userDocRef, { readerColor: 'sanctuaire' }, { merge: true }).catch(() => {});
+          }
         }
       }
     } catch (err: any) {
@@ -4239,6 +4404,8 @@ export default function App() {
                 onDeleteChapterMeditation={handleDeleteChapterMeditation}
                 onSaveChapterAudio={handleSaveChapterAudioMeditation}
                 onDeleteChapterAudio={handleDeleteChapterAudioMeditation}
+                readerColor={readerColor}
+                onSelectReaderColor={handleUpdateReaderColor}
               />
 
                             {/* Interactive Slide-Up panel / bottom tray for Single Verse Exegesis detailed exploration */}
@@ -5161,6 +5328,8 @@ export default function App() {
         speechVolume={voiceVolume}
         selectedVoiceGender={voiceGender}
         userEmail={user?.email || undefined}
+        readerColor={readerColor}
+        onSelectReaderColor={handleUpdateReaderColor}
         onClose={() => setIsSettingsModalOpen(false)}
         onChangeTextSize={(size) => setTextSize(size)}
         onChangeSpeechRate={(rate) => setPlaybackRate(rate)}

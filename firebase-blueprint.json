@@ -9,7 +9,8 @@
         "email": { "type": "string" },
         "displayName": { "type": "string" },
         "createdAt": { "type": "string" },
-        "textSize": { "type": "integer" }
+        "textSize": { "type": "integer" },
+        "readerColor": { "type": "string" }
       },
       "required": ["uid", "email"]
     },
@@ -101,6 +102,21 @@
         "written_meditation_id": { "type": "string" }
       },
       "required": ["id", "title", "book_id", "book_name", "chapter", "created_at", "duration_seconds"]
+    },
+    "VerseHighlight": {
+      "title": "VerseHighlight",
+      "description": "User highlighted verses with custom colors",
+      "type": "object",
+      "properties": {
+        "book_id": { "type": "integer" },
+        "book_name": { "type": "string" },
+        "chapter": { "type": "integer" },
+        "verse": { "type": "integer" },
+        "color": { "type": "string" },
+        "color_name": { "type": "string", "enum": ["jaune", "vert", "rose"] },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["book_id", "chapter", "verse", "color", "color_name", "updated_at"]
     }
   },
   "firestore": {
@@ -131,6 +147,10 @@
     "users/{userId}/chapter_audio_meditations/{audioId}": {
       "schema": "ChapterAudioMeditation",
       "description": "User voice meditation recordings for chapters"
+    },
+    "users/{userId}/highlights/{highlightId}": {
+      "schema": "VerseHighlight",
+      "description": "User highlighted verses saved with yellow, green or pink colors"
     }
   }
 }

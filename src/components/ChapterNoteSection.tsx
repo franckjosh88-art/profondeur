@@ -417,14 +417,26 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
   return (
     <div className="mt-12 mb-8 space-y-8">
       {/* 1. SECTION « CE QUE J'AI RETENU DE CE CHAPITRE » */}
-      <div className="bg-[#12100c] border border-[#2e2a1e] rounded-2xl p-5 sm:p-6 text-left space-y-4">
+      <div 
+        className="rounded-2xl p-5 sm:p-6 text-left space-y-4 border transition-colors"
+        style={{
+          backgroundColor: 'var(--r-surface, #12100c)',
+          borderColor: 'var(--r-border, #2e2a1e)'
+        }}
+      >
         
         {/* En-tête : Titre en casse normale, petit + sous-titre gris discret */}
         <div className="space-y-0.5">
-          <h3 className="font-sans text-sm sm:text-base font-semibold text-[#ded7c8]">
+          <h3 
+            className="font-sans text-sm sm:text-base font-semibold"
+            style={{ color: 'var(--r-text, #ded7c8)' }}
+          >
             Ce que j'ai retenu de {bookName} {chapter}
           </h3>
-          <p className="font-sans text-xs text-[#8c8270]">
+          <p 
+            className="font-sans text-xs"
+            style={{ color: 'var(--r-text-secondary, #8c8270)' }}
+          >
             L'idée générale, en vos propres mots
           </p>
         </div>
@@ -437,7 +449,12 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
             onChange={handleTextChange}
             placeholder="Écrire l'idée générale du chapitre…"
             rows={3}
-            className="w-full bg-[#181510] border border-[#2e2a1e] focus:border-[#c9a84c]/60 rounded-xl px-4 py-3 pr-12 text-sm text-[#ded7c8] placeholder-[#736a59] outline-none font-serif leading-relaxed transition resize-none min-h-[92px]"
+            className="w-full rounded-xl px-4 py-3 pr-12 text-sm outline-none font-serif leading-relaxed transition resize-none min-h-[92px] border"
+            style={{
+              backgroundColor: 'var(--r-bg, #181510)',
+              borderColor: 'var(--r-border, #2e2a1e)',
+              color: 'var(--r-text, #ded7c8)',
+            }}
           />
 
           {/* Icône micro à droite du champ */}

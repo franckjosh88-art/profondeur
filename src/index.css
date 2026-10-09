@@ -96,6 +96,138 @@
 .text-accent { color: var(--accent); }
 .border-app { border-color: var(--border); }
 
+/* Conteneur et variables CSS pour le lecteur de la Bible */
+.reader {
+  --r-bg: #0E0B07;
+  --r-surface: #1A1510;
+  --r-text: #F2E9D8;
+  --r-text-secondary: #A89B84;
+  --r-text-muted: #A89B84;
+  --r-accent: #C9A84C;
+  --r-border: #2E251A;
+  --r-verse-num: #8A7B68;
+}
+
+/* Thème Bronze : fond #2A1D12, surface #38281A, texte #F1E2CC, texte secondaire #B79B7A, accent #CD7F32 */
+.reader[data-theme='bronze'],
+[data-theme='bronze'] .reader,
+[data-theme='bronze'].reader,
+[data-reader-theme='bronze'] {
+  --r-bg: #2A1D12;
+  --r-surface: #38281A;
+  --r-text: #F1E2CC;
+  --r-text-secondary: #B79B7A;
+  --r-text-muted: #B79B7A;
+  --r-accent: #CD7F32;
+  --r-border: #463321;
+  --r-verse-num: #B79B7A;
+}
+
+/* Thème Blanc */
+.reader[data-theme='blanc'],
+[data-theme='blanc'] .reader,
+[data-theme='blanc'].reader,
+[data-reader-theme='blanc'] {
+  --r-bg: #FFFFFF;
+  --r-surface: #F4F4F2;
+  --r-text: #1C1C1C;
+  --r-text-secondary: #6B6B6B;
+  --r-text-muted: #6B6B6B;
+  --r-accent: #8A6D1F;
+  --r-border: #E2E2DC;
+  --r-verse-num: #82827D;
+}
+
+/* Thème Rose */
+.reader[data-theme='rose'],
+[data-theme='rose'] .reader,
+[data-theme='rose'].reader,
+[data-reader-theme='rose'] {
+  --r-bg: #FCE9E6;
+  --r-surface: #F7D9D4;
+  --r-text: #3A1F24;
+  --r-text-secondary: #7C5A60;
+  --r-text-muted: #7C5A60;
+  --r-accent: #B03A5B;
+  --r-border: #E8C5BF;
+  --r-verse-num: #8F666D;
+}
+
+/* Thème Rouge */
+.reader[data-theme='rouge'],
+[data-theme='rouge'] .reader,
+[data-theme='rouge'].reader,
+[data-reader-theme='rouge'] {
+  --r-bg: #2B0D10;
+  --r-surface: #3A1418;
+  --r-text: #F8E6E4;
+  --r-text-secondary: #C49A9C;
+  --r-text-muted: #C49A9C;
+  --r-accent: #E0525B;
+  --r-border: #4D1D23;
+  --r-verse-num: #A8797D;
+}
+
+/* Thème Noir */
+.reader[data-theme='noir'],
+[data-theme='noir'] .reader,
+[data-theme='noir'].reader,
+[data-reader-theme='noir'] {
+  --r-bg: #000000;
+  --r-surface: #121212;
+  --r-text: #EDEDED;
+  --r-text-secondary: #9A9A9A;
+  --r-text-muted: #9A9A9A;
+  --r-accent: #C9A84C;
+  --r-border: #262626;
+  --r-verse-num: #787878;
+}
+
+/* Thème Bleu */
+.reader[data-theme='bleu'],
+[data-theme='bleu'] .reader,
+[data-theme='bleu'].reader,
+[data-reader-theme='bleu'] {
+  --r-bg: #0B1A2E;
+  --r-surface: #13273F;
+  --r-text: #E6EEF8;
+  --r-text-secondary: #8FA6C2;
+  --r-text-muted: #8FA6C2;
+  --r-accent: #5B9BFF;
+  --r-border: #1E3654;
+  --r-verse-num: #718EAE;
+}
+
+.reader {
+  background-color: var(--r-bg);
+  color: var(--r-text);
+}
+
+.reader-surface {
+  background-color: var(--r-surface);
+}
+
+.reader-border {
+  border-color: var(--r-border);
+}
+
+.reader-text {
+  color: var(--r-text);
+}
+
+.reader-text-secondary,
+.reader-text-muted {
+  color: var(--r-text-secondary);
+}
+
+.reader-accent {
+  color: var(--r-accent);
+}
+
+.reader-verse-num {
+  color: var(--r-verse-num);
+}
+
 @utility shadow-gold-glow {
   box-shadow: 0 0 20px rgba(217, 178, 106, 0.2);
 }

@@ -151,3 +151,60 @@ export interface ChapterAudioMeditation {
   audio_url?: string; // transient Object URL for playback
 }
 
+export type HighlightColor = 'jaune' | 'vert' | 'rose';
+
+export interface VerseHighlight {
+  id?: string; // `${book_id}_${chapter}_${verse}`
+  book_id: number;
+  book_name?: string;
+  chapter: number;
+  verse: number;
+  color: string; // CSS background color, e.g. "rgba(250, 204, 21, 0.35)"
+  color_name: HighlightColor;
+  updated_at: string;
+}
+
+export interface HighlightColorDef {
+  id: HighlightColor;
+  name: string;
+  hex: string;
+  bgRgba: string;
+  borderHex: string;
+  label: string;
+}
+
+export const HIGHLIGHT_PALETTE: HighlightColorDef[] = [
+  {
+    id: 'jaune',
+    name: 'Jaune',
+    label: 'Jaune lumière',
+    hex: '#FACC15',
+    bgRgba: 'rgba(250, 204, 21, 0.35)',
+    borderHex: '#EAB308'
+  },
+  {
+    id: 'vert',
+    name: 'Vert',
+    label: 'Vert espérance',
+    hex: '#4ADE80',
+    bgRgba: 'rgba(74, 222, 128, 0.32)',
+    borderHex: '#22C55E'
+  },
+  {
+    id: 'rose',
+    name: 'Rose',
+    label: 'Rose grâce',
+    hex: '#F472B6',
+    bgRgba: 'rgba(244, 114, 182, 0.34)',
+    borderHex: '#EC4899'
+  }
+];
+
+export const getHighlightColorDef = (colorNameOrId?: string): HighlightColorDef | undefined => {
+  if (!colorNameOrId) return undefined;
+  const lower = colorNameOrId.toLowerCase();
+  return HIGHLIGHT_PALETTE.find(
+    p => p.id === lower || p.hex.toLowerCase() === lower || p.bgRgba.toLowerCase() === lower
+  );
+};
+
