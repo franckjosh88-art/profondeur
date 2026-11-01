@@ -8,12 +8,14 @@ interface BibleSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectVerse: (book: Book, chapter: number, verseNum: number) => void;
+  onOpenNavigator?: () => void;
 }
 
 export const BibleSearchModal: React.FC<BibleSearchModalProps> = ({
   isOpen,
   onClose,
-  onSelectVerse
+  onSelectVerse,
+  onOpenNavigator
 }) => {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -258,11 +260,26 @@ export const BibleSearchModal: React.FC<BibleSearchModalProps> = ({
 
               {/* Liste des résultats par mot-clé */}
               {debouncedQuery.trim() === '' ? (
-                <div className="py-12 text-center text-[#8c8270] space-y-2">
+                <div className="py-10 text-center text-[#8c8270] space-y-4">
                   <Search className="w-8 h-8 mx-auto stroke-[1.5] text-[#c9a84c]/40" />
-                  <p className="text-xs font-mono">
-                    Tapez des mots ou une référence (ex: "Ps 23:4", "berger", "lumière").
+                  <p className="text-xs font-mono max-w-xs mx-auto leading-relaxed">
+                    Tapez des mots ou une référence (ex: « Romains 8 », « Ps 23:4 », « lumière »).
                   </p>
+                  {onOpenNavigator && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenNavigator();
+                        }}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full border border-[#c9a84c]/35 bg-[#12100c] hover:bg-[#1a1712] hover:border-[#c9a84c] text-xs font-serif text-[#c9a84c] transition cursor-pointer"
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        <span>Parcourir les livres et chapitres</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : searchResults.length === 0 && !directRefMatch ? (
                 <div className="py-12 text-center text-[#8c8270] space-y-2">

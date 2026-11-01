@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanBibleMarkdown } from '../lib/bibleFormatter';
+import { AiTextRenderer } from './AiTextRenderer';
 
 interface ContextSectionProps {
   content: string;
@@ -19,10 +19,10 @@ export const ContextSection: React.FC<ContextSectionProps> = ({
         {label}
       </h5>
       
-      {/* Body text on luxury text primary, size 14px */}
-      <p className="font-sans text-[14px] leading-relaxed text-luxury-text-primary/95 whitespace-pre-line select-text">
-        {cleanBibleMarkdown(content)}
-      </p>
+      {/* Body text with AiTextRenderer */}
+      <div className="font-sans text-[14px] leading-relaxed text-luxury-text-primary/95 select-text">
+        <AiTextRenderer text={content} />
+      </div>
     </div>
   );
 };

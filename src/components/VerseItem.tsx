@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Verse, EmotionAnalysisResult, SimilarVerse, SimilarVersesResponse, BookmarkFolder } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
 import { getEmotionMeta, renderEmotionIcon } from '../utils/emotionHelpers';
+import { authenticatedFetch } from '../lib/apiClient';
+import { appAlert } from '../utils/dialog';
 
 interface VerseItemProps {
   verse: Verse;
@@ -96,7 +98,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
 
     try {
       const verseRef = `${verse.book_name} ${verse.chapter}:${verse.verse}`;
-      const response = await fetch('/api/gemini/analyze-emotion', {
+      const response = await authenticatedFetch('/api/gemini/analyze-emotion', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -186,7 +188,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
     setIsLoadingSimilar(true);
 
     try {
-      const response = await fetch('/api/gemini/similar-verses', {
+      const response = await authenticatedFetch('/api/gemini/similar-verses', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -468,7 +470,7 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
       }
     } catch (err) {
       console.error("Microphone access error:", err);
-      alert("Impossible d'accéder au microphone. Veuillez autoriser l'accès dans les paramètres du navigateur.");
+      await appAlert("Impossible d'accéder au microphone. Veuillez autoriser l'accès dans les paramètres du navigateur.", "Microphone");
     }
   };
 

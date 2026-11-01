@@ -31,7 +31,7 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       textMuted: '#A89B84',
       accent: '#C9A84C',
       border: '#2E251A',
-      verseNum: '#8A7B68'
+      verseNum: '#D4AF37' /* Contraste > 8.5:1 sur fond sombre */
     },
     hasBackgroundArtwork: true
   },
@@ -43,10 +43,10 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       bg: '#FFFFFF',
       surface: '#F4F4F2',
       text: '#1C1C1C',
-      textMuted: '#6B6B6B',
+      textMuted: '#525252',
       accent: '#8A6D1F',
       border: '#E2E2DC',
-      verseNum: '#82827D'
+      verseNum: '#333330' /* Contraste > 9:1 sur fond blanc */
     },
     hasBackgroundArtwork: false
   },
@@ -58,10 +58,10 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       bg: '#FCE9E6',
       surface: '#F7D9D4',
       text: '#3A1F24',
-      textMuted: '#7C5A60',
+      textMuted: '#6B494F',
       accent: '#B03A5B',
       border: '#E8C5BF',
-      verseNum: '#8F666D'
+      verseNum: '#4D262F' /* Contraste > 8:1 sur fond rose */
     },
     hasBackgroundArtwork: false
   },
@@ -76,7 +76,7 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       textMuted: '#B79B7A',
       accent: '#CD7F32',
       border: '#463321',
-      verseNum: '#B79B7A'
+      verseNum: '#E6D2B2' /* Contraste > 7.5:1 sur fond bronze */
     },
     hasBackgroundArtwork: false
   },
@@ -91,7 +91,7 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       textMuted: '#C49A9C',
       accent: '#E0525B',
       border: '#4D1D23',
-      verseNum: '#A8797D'
+      verseNum: '#F2BDC1' /* Contraste > 7:1 sur fond rouge sombre */
     },
     hasBackgroundArtwork: false
   },
@@ -106,7 +106,7 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       textMuted: '#9A9A9A',
       accent: '#C9A84C',
       border: '#262626',
-      verseNum: '#787878'
+      verseNum: '#D4AF37' /* Contraste > 10:1 sur fond noir */
     },
     hasBackgroundArtwork: false
   },
@@ -121,7 +121,7 @@ export const READER_COLORS: Record<ReaderColorId, ReaderColorPreset> = {
       textMuted: '#8FA6C2',
       accent: '#5B9BFF',
       border: '#1E3654',
-      verseNum: '#718EAE'
+      verseNum: '#BAD7F5' /* Contraste > 8:1 sur fond bleu nuit */
     },
     hasBackgroundArtwork: false
   }

@@ -15,7 +15,7 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Users resource
+    // Users resource - private user data only
     match /users/{userId} {
       allow read, write: if isOwner(userId);
 
@@ -44,7 +44,7 @@ service cloud.firestore {
         allow read, write: if isOwner(userId);
       }
 
-      // Chapter audio meditations subcollection
+      // Chapter audio meditations metadata subcollection (URL and metadata only, no base64 chunks)
       match /chapter_audio_meditations/{audioId} {
         allow read, write: if isOwner(userId);
       }

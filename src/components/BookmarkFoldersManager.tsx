@@ -5,6 +5,7 @@ import {
   ChevronRight, Tag, ArrowLeft, Filter, Layers, X
 } from 'lucide-react';
 import { FavoriteVerse, BookmarkFolder } from '../types/bible';
+import { appConfirm } from '../utils/dialog';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface BookmarkFoldersManagerProps {
@@ -214,10 +215,16 @@ export const BookmarkFoldersManager: React.FC<BookmarkFoldersManagerProps> = ({
     if (e) e.stopPropagation();
     const count = folderCounts.counts[folder.id] || 0;
     const msg = count > 0
-      ? `Êtes-vous sûr de vouloir supprimer le dossier « ${folder.name} » ? Les ${count} verset(s) seront conservés et placés dans les « Non classés » sans être supprimés de vos favoris.`
-      : `Voulez-vous supprimer le dossier « ${folder.name} » ?`;
+      ? `Supprimer le dossier « ${folder.name} » ? Les ${count} signet(s) ne seront pas supprimés mais replacés à la racine.`
+      : `Supprimer le dossier « ${folder.name} » ?`;
+    const confirmed = await appConfirm(msg, {
+      title: "Supprimer le dossier",
+      confirmText: "Oui, supprimer",
+      cancelText: "Annuler",
+      variant: "danger"
+    });
 
-    if (window.confirm(msg)) {
+    if (confirmed) {
       await onDeleteFolder(folder.id);
       if (selectedFolderId === folder.id) {
         setSelectedFolderId(null);

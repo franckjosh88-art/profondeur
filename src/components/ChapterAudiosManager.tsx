@@ -2,11 +2,68 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Mic, Play, Pause, Trash2, Download, Edit3, BookOpen, Clock, 
   Calendar, Search, Filter, Volume2, Sparkles, AlertTriangle, 
-  Check, X, ChevronRight, Layers, FileText
+  Check, X, ChevronRight, Layers, FileText, Cloud, CloudUpload, 
+  HardDrive, Loader2, CheckCircle, RefreshCw, AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChapterAudioMeditation, ChapterMeditation } from '../types/bible';
 import { getAudioPlayableUrl, downloadAudioFile } from '../utils/audioStorage';
+
+// Helper format date & time
+export const formatFullDate = (isoStr: string): string => {
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch (_) {
+    return '';
+  }
+};
+
+// Helper to get formatted sync date for tooltip: 'Synchronisé le [date]' or 'En attente de synchronisation'
+export const getSyncTooltip = (item: ChapterAudioMeditation, isMissing = false): string => {
+  if (isMissing) {
+    return "Fichier manquant, ré-importer";
+  }
+  if (item.is_cloud_synced) {
+    const syncDate = item.synced_at || item.created_at;
+    if (syncDate) {
+      try {
+        const d = new Date(syncDate);
+        if (!isNaN(d.getTime())) {
+          const formattedDate = d.toLocaleDateString('fr-FR', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+          });
+          const formattedTime = d.toLocaleTimeString('fr-FR', {
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          return `Synchronisé le ${formattedDate} à ${formattedTime}`;
+        }
+      } catch (_) {}
+      const fallback = formatFullDate(syncDate);
+      if (fallback) return `Synchronisé le ${fallback}`;
+    }
+    return 'Synchronisé';
+  }
+  return 'En attente de synchronisation';
+};
+
+import { SyncStatusIcon as AudioStatusTooltip } from './chapter-audios/SyncStatusIcon';
+import { ChapterAudioItem } from './chapter-audios/ChapterAudioItem';
+import { ChapterAudiosFilterBar } from './chapter-audios/ChapterAudiosFilterBar';
+import { AudioRenameModal } from './chapter-audios/AudioRenameModal';
+import { AudioDeleteModal } from './chapter-audios/AudioDeleteModal';
+import { ChapterAudiosListView } from './chapter-audios/ChapterAudiosListView';
+import { ChapterAudiosHeader } from './chapter-audios/ChapterAudiosHeader';
+import { groupAudiosByBook, groupAudiosByDate } from '../utils/audioGrouping';
 
 interface ChapterAudiosManagerProps {
   audios: ChapterAudioMeditation[];
@@ -15,6 +72,11 @@ interface ChapterAudiosManagerProps {
   onNavigateToWrittenTab?: () => void;
   onDeleteAudio: (audioId: string) => Promise<void> | void;
   onRenameAudio: (audioId: string, newTitle: string) => Promise<void> | void;
+  onSyncAllToCloud?: () => Promise<void>;
+  onSyncSingleAudio?: (audio: ChapterAudioMeditation) => Promise<void>;
+  isSyncingCloud?: boolean;
+  syncProgress?: { current: number; total: number; title: string } | null;
+  userId?: string | null;
 }
 
 export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
@@ -23,19 +85,30 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
   onNavigateToChapter,
   onNavigateToWrittenTab,
   onDeleteAudio,
-  onRenameAudio
+  onRenameAudio,
+  onSyncAllToCloud,
+  onSyncSingleAudio,
+  isSyncingCloud = false,
+  syncProgress = null,
+  userId = null
 }) => {
   // View mode: 'book' (group by book and chapter) or 'date' (chronological with time buckets)
   const [viewMode, setViewMode] = useState<'book' | 'date'>('book');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBookFilter, setSelectedBookFilter] = useState<string>('all');
   const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [selectedSyncFilter, setSelectedSyncFilter] = useState<'all' | 'synced' | 'local' | 'missing'>('all');
 
   // Audio Playback State
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+  const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
+  const [missingAudioIds, setMissingAudioIds] = useState<Set<string>>(new Set());
   const [playbackTime, setPlaybackTime] = useState<number>(0);
   const [playbackDuration, setPlaybackDuration] = useState<number>(0);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
+  const [playbackErrorMessage, setPlaybackErrorMessage] = useState<string | null>(null);
+  const [syncSuccessToast, setSyncSuccessToast] = useState<string | null>(null);
+  const [syncingSingleId, setSyncingSingleId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Modals state
@@ -44,6 +117,18 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
   const [audioToRename, setAudioToRename] = useState<ChapterAudioMeditation | null>(null);
   const [newTitleInput, setNewTitleInput] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
+
+  // Handler for manual migration of all local audios to Cloud Storage
+  const handleTriggerSyncAll = async () => {
+    if (!onSyncAllToCloud || isSyncingCloud) return;
+    try {
+      await onSyncAllToCloud();
+      setSyncSuccessToast("Tous vos fichiers audios ont été synchronisés avec succès dans Cloud Storage !");
+      setTimeout(() => setSyncSuccessToast(null), 4000);
+    } catch (e: any) {
+      setPlaybackErrorMessage(`Erreur lors de la synchronisation : ${e?.message || 'Erreur inconnue'}`);
+    }
+  };
 
   // Stop playback when component unmounts
   useEffect(() => {
@@ -73,6 +158,18 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
     return `${countLabel} · ${mins} min`;
   }, [audios]);
 
+  const syncedCount = useMemo(() => {
+    return audios.filter(a => a.is_cloud_synced && !missingAudioIds.has(a.id)).length;
+  }, [audios, missingAudioIds]);
+
+  const unsyncedCount = useMemo(() => {
+    return audios.filter(a => !a.is_cloud_synced).length;
+  }, [audios]);
+
+  const missingCount = useMemo(() => {
+    return audios.filter(a => missingAudioIds.has(a.id)).length;
+  }, [audios, missingAudioIds]);
+
   // List of unique books present in audios for the filter dropdown
   const availableBooks = useMemo(() => {
     const map = new Map<number, string>();
@@ -80,7 +177,7 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [audios]);
 
-  // Filtered audios based on search query, book filter, and period filter
+  // Filtered audios based on search query, book filter, period filter, and sync status filter
   const filteredAudios = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const now = new Date();
@@ -116,12 +213,23 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
         }
       }
 
+      // 4. Sync status filter
+      if (selectedSyncFilter === 'synced') {
+        if (!audio.is_cloud_synced || missingAudioIds.has(audio.id)) return false;
+      } else if (selectedSyncFilter === 'local') {
+        if (audio.is_cloud_synced) return false;
+      } else if (selectedSyncFilter === 'missing') {
+        if (!missingAudioIds.has(audio.id)) return false;
+      }
+
       return true;
     });
-  }, [audios, searchQuery, selectedBookFilter, selectedPeriodFilter]);
+  }, [audios, searchQuery, selectedBookFilter, selectedPeriodFilter, selectedSyncFilter, missingAudioIds]);
 
   // Playback control
   const handleTogglePlay = async (audioItem: ChapterAudioMeditation) => {
+    setPlaybackErrorMessage(null);
+
     if (playingAudioId === audioItem.id) {
       if (audioRef.current) {
         if (audioRef.current.paused) {
@@ -139,15 +247,22 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
     }
 
     try {
-      const url = await getAudioPlayableUrl(audioItem.id);
+      setLoadingAudioId(audioItem.id);
+      // Fetch playable URL resolving local IndexedDB first, with automatic server streaming & Cloud Firestore chunk download
+      const url = await getAudioPlayableUrl(audioItem.id, audioItem, userId);
       if (!url) {
-        alert("Fichier audio introuvable dans le stockage local.");
+        setLoadingAudioId(null);
+        setMissingAudioIds(prev => new Set(prev).add(audioItem.id));
+        setPlaybackErrorMessage(`Fichier manquant, ré-importer : l'enregistrement « ${audioItem.title} » est introuvable sur le stockage permanent.`);
         return;
       }
 
-      const audio = new Audio(url);
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+      }
+      const audio = audioRef.current;
+      audio.src = url;
       audio.playbackRate = playbackRate;
-      audioRef.current = audio;
       setPlayingAudioId(audioItem.id);
       setPlaybackTime(0);
       setPlaybackDuration(audioItem.duration_seconds || 0);
@@ -170,12 +285,17 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
       audio.onerror = () => {
         console.error("Audio playback error");
         setPlayingAudioId(null);
+        setLoadingAudioId(null);
+        setPlaybackErrorMessage("Erreur lors de la lecture du fichier audio. Format ou connexion incompatible.");
       };
 
       await audio.play();
-    } catch (e) {
+      setLoadingAudioId(null);
+    } catch (e: any) {
       console.error("Error playing audio:", e);
       setPlayingAudioId(null);
+      setLoadingAudioId(null);
+      setPlaybackErrorMessage("Impossible de démarrer la lecture : " + (e?.message || "Erreur de chargement."));
     }
   };
 
@@ -200,22 +320,6 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
-
-  // Helper format date & time
-  const formatFullDate = (isoStr: string) => {
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString('fr-FR', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch (_) {
-      return '';
-    }
   };
 
   // Confirm delete handler
@@ -251,251 +355,73 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
   };
 
   // Grouped by Book and Chapter
-  const groupedByBook = useMemo(() => {
-    const groups: { book_id: number; book_name: string; items: ChapterAudioMeditation[] }[] = [];
-    const map = new Map<number, { book_id: number; book_name: string; items: ChapterAudioMeditation[] }>();
-
-    filteredAudios.forEach(item => {
-      if (!map.has(item.book_id)) {
-        map.set(item.book_id, {
-          book_id: item.book_id,
-          book_name: item.book_name,
-          items: []
-        });
-      }
-      map.get(item.book_id)!.items.push(item);
-    });
-
-    const sortedBookIds = Array.from(map.keys()).sort((a, b) => a - b);
-    sortedBookIds.forEach(id => {
-      const g = map.get(id)!;
-      // Sort items by chapter asc, then date desc
-      g.items.sort((a, b) => {
-        if (a.chapter !== b.chapter) return a.chapter - b.chapter;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-      groups.push(g);
-    });
-
-    return groups;
-  }, [filteredAudios]);
+  const groupedByBook = useMemo(() => groupAudiosByBook(filteredAudios), [filteredAudios]);
 
   // Grouped by Date Buckets ("Aujourd'hui", "Hier", "Cette semaine", "Ce mois-ci", puis par mois)
-  const groupedByDateBuckets = useMemo(() => {
-    // Sort all descending
-    const sorted = [...filteredAudios].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-
-    const buckets: { label: string; items: ChapterAudioMeditation[] }[] = [];
-    const now = new Date();
-    const todayStr = now.toDateString();
-
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toDateString();
-
-    // Start of current week (7 days ago)
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-    const bucketMap = new Map<string, ChapterAudioMeditation[]>();
-
-    sorted.forEach(item => {
-      const itemDate = new Date(item.created_at);
-      const itemDateStr = itemDate.toDateString();
-
-      let key = '';
-      if (itemDateStr === todayStr) {
-        key = "Aujourd'hui";
-      } else if (itemDateStr === yesterdayStr) {
-        key = 'Hier';
-      } else if (itemDate >= sevenDaysAgo) {
-        key = 'Cette semaine';
-      } else if (itemDate.getMonth() === now.getMonth() && itemDate.getFullYear() === now.getFullYear()) {
-        key = 'Ce mois-ci';
-      } else {
-        const monthName = itemDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-        key = monthName.charAt(0).toUpperCase() + monthName.slice(1);
-      }
-
-      if (!bucketMap.has(key)) {
-        bucketMap.set(key, []);
-      }
-      bucketMap.get(key)!.push(item);
-    });
-
-    bucketMap.forEach((items, label) => {
-      buckets.push({ label, items });
-    });
-
-    return buckets;
-  }, [filteredAudios]);
+  const groupedByDateBuckets = useMemo(() => groupAudiosByDate(filteredAudios), [filteredAudios]);
 
   // Helper to find associated written meditation
   const getWrittenMeditation = (bookId: number, chapter: number) => {
     return writtenMeditations.find(m => m.book_id === bookId && m.chapter === chapter);
   };
 
-  // Render an individual Audio Card
+  // Render an individual Audio Card using extracted ChapterAudioItem
   const renderAudioCard = (item: ChapterAudioMeditation) => {
     const isPlaying = playingAudioId === item.id && audioRef.current && !audioRef.current.paused;
     const isCurrent = playingAudioId === item.id;
     const written = getWrittenMeditation(item.book_id, item.chapter);
 
     return (
-      <div
+      <ChapterAudioItem
         key={item.id}
-        className="bg-[#0e0c08] border border-[#2e2a1e] hover:border-[#c9a84c]/50 rounded-2xl p-4 sm:p-5 shadow-soft transition-all duration-200 flex flex-col justify-between group hover:shadow-[0_0_15px_rgba(201,168,76,0.12)] relative space-y-3.5"
-      >
-        {/* Header: Titre, Référence & Actions */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1 min-w-0">
-            <h4 className="font-serif font-black text-sm sm:text-base text-[#f4efe2] truncate leading-tight">
-              {item.title}
-            </h4>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => onNavigateToChapter(item.book_id, item.chapter, 1)}
-                className="font-serif font-bold text-[#c9a84c] hover:text-[#ebd092] flex items-center gap-1 transition cursor-pointer bg-[#14120e] px-2 py-0.5 rounded-md border border-[#c9a84c]/30 hover:border-[#c9a84c]"
-                title="Ouvrir ce chapitre dans le lecteur"
-              >
-                <BookOpen className="w-3 h-3 text-[#c9a84c]" />
-                <span>{item.book_name} {item.chapter}</span>
-              </button>
-
-              <span className="text-[10px] font-mono text-[#8c8270] flex items-center gap-1">
-                <Clock className="w-3 h-3 text-[#6b6355]" />
-                <span>{formatFullDate(item.created_at)}</span>
-              </span>
-            </div>
-          </div>
-
-          {/* Action buttons (Rename, Download, Delete) */}
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setAudioToRename(item);
-                setNewTitleInput(item.title);
-              }}
-              className="p-1.5 rounded-lg text-[#6b6355] hover:text-[#c9a84c] hover:bg-[#1a1712] transition cursor-pointer"
-              title="Renommer l'audio"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => downloadAudioFile(item.id, item.title)}
-              className="p-1.5 rounded-lg text-[#6b6355] hover:text-[#c9a84c] hover:bg-[#1a1712] transition cursor-pointer"
-              title="Télécharger l'enregistrement"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setAudioToDelete(item)}
-              className="p-1.5 rounded-lg text-[#6b6355] hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer"
-              title="Supprimer cet audio"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Audio Player Widget */}
-        <div className="bg-[#050403] border border-[#2e2a1e] rounded-xl p-3 space-y-2.5">
-          <div className="flex items-center gap-3">
-            {/* Play/Pause Button */}
-            <button
-              type="button"
-              onClick={() => handleTogglePlay(item)}
-              className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all cursor-pointer shadow-sm shrink-0 ${
-                isPlaying
-                  ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow scale-105'
-                  : 'bg-[#1a1712] hover:bg-[#252017] text-[#c9a84c] hover:text-[#ebd092] border border-[#c9a84c]/30 hover:border-[#c9a84c]'
-              }`}
-              title={isPlaying ? "Mettre en pause" : "Écouter l'audio"}
-            >
-              {isPlaying ? (
-                <Pause className="w-4 h-4 fill-current" />
-              ) : (
-                <Play className="w-4 h-4 fill-current ml-0.5" />
-              )}
-            </button>
-
-            {/* Slider & Duration */}
-            <div className="flex-1 space-y-1">
-              <input
-                type="range"
-                min={0}
-                max={isCurrent ? playbackDuration || item.duration_seconds || 1 : item.duration_seconds || 1}
-                step={0.1}
-                value={isCurrent ? playbackTime : 0}
-                readOnly={!isCurrent}
-                onChange={(e) => {
-                  if (isCurrent) {
-                    handleSeek(e);
-                  }
-                }}
-                className="w-full accent-[#c9a84c] h-1.5 bg-[#1a1712] rounded-lg cursor-pointer"
-              />
-              <div className="flex items-center justify-between text-[10px] font-mono text-[#8c8270]">
-                <span>{isCurrent ? formatTime(playbackTime) : '00:00'}</span>
-                <span>{formatTime(item.duration_seconds)}</span>
-              </div>
-            </div>
-
-            {/* Speed Selector (1x, 1.5x, 2x) */}
-            <div className="flex items-center gap-1 border border-[#2e2a1e] rounded-lg p-0.5 bg-[#0e0c08]">
-              {[1, 1.5, 2].map(rate => (
-                <button
-                  key={rate}
-                  type="button"
-                  onClick={() => handleChangePlaybackRate(rate)}
-                  className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold transition cursor-pointer ${
-                    playbackRate === rate
-                      ? 'bg-[#c9a84c] text-[#0d0b07]'
-                      : 'text-[#6b6355] hover:text-[#e8e0d0]'
-                  }`}
-                >
-                  {rate}x
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Written Meditation Excerpt (if exists) */}
-        {written && written.text && (
-          <div className="p-2.5 rounded-xl bg-[#14120e] border border-[#2e2a1e]/70 space-y-1 text-left">
-            <div className="flex items-center justify-between text-[10px] font-mono text-[#c9a84c]">
-              <span className="flex items-center gap-1 font-bold">
-                <FileText className="w-3 h-3" />
-                <span>Méditation écrite associée</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (onNavigateToWrittenTab) {
-                    onNavigateToWrittenTab();
-                  } else {
-                    onNavigateToChapter(item.book_id, item.chapter);
-                  }
-                }}
-                className="hover:underline cursor-pointer text-[#ebd092]"
-              >
-                Voir la méditation →
-              </button>
-            </div>
-            <p className="font-serif italic text-xs text-[#c4bdae] line-clamp-2 leading-relaxed">
-              « {written.text} »
-            </p>
-          </div>
-        )}
-      </div>
+        item={item}
+        written={written}
+        isPlaying={!!isPlaying}
+        isCurrent={isCurrent}
+        isLoading={loadingAudioId === item.id}
+        isMissing={missingAudioIds.has(item.id)}
+        playbackTime={playbackTime}
+        playbackDuration={playbackDuration}
+        playbackRate={playbackRate}
+        syncingSingleId={syncingSingleId}
+        isSyncingCloud={isSyncingCloud}
+        userId={userId}
+        onNavigateToChapter={onNavigateToChapter}
+        onNavigateToWrittenTab={onNavigateToWrittenTab}
+        onTogglePlay={handleTogglePlay}
+        onSeek={handleSeek}
+        onChangePlaybackRate={handleChangePlaybackRate}
+        onOpenRename={(it) => {
+          setAudioToRename(it);
+          setNewTitleInput(it.title);
+        }}
+        onDownload={async (it) => {
+          const res = await downloadAudioFile(it.id, it.title, it, userId);
+          if (!res.success) {
+            if (res.missing) {
+              setMissingAudioIds(prev => new Set(prev).add(it.id));
+              setPlaybackErrorMessage(`Fichier manquant, ré-importer : l'enregistrement « ${it.title} » n'est plus présent dans le stockage permanent. Veuillez le ré-enregistrer ou le synchroniser depuis l'appareil d'origine.`);
+            } else {
+              setPlaybackErrorMessage(`Erreur de téléchargement : ${res.error || 'Erreur inconnue'}`);
+            }
+          }
+        }}
+        onOpenDelete={(it) => setAudioToDelete(it)}
+        onSyncSingleAudio={onSyncSingleAudio ? async (it) => {
+          setSyncingSingleId(it.id);
+          try {
+            await onSyncSingleAudio(it);
+            setSyncSuccessToast(`Audio « ${it.title} » sauvegardé en ligne !`);
+            setTimeout(() => setSyncSuccessToast(null), 3000);
+          } catch (e: any) {
+            setPlaybackErrorMessage(`Erreur de synchronisation : ${e?.message || 'Erreur inconnue'}`);
+          } finally {
+            setSyncingSingleId(null);
+          }
+        } : undefined}
+        formatFullDate={formatFullDate}
+        formatTime={formatTime}
+      />
     );
   };
 
@@ -511,94 +437,364 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
             <h2 className="font-serif font-black text-base sm:text-lg text-[#f4efe2]">
               Mes Méditations Audio
             </h2>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-[#c9a84c] font-bold block">
-              {totalStatsString}
-            </span>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => setSelectedSyncFilter('all')}
+                className={`text-xs font-mono uppercase tracking-widest px-2 py-0.5 rounded-md transition cursor-pointer ${
+                  selectedSyncFilter === 'all'
+                    ? 'text-[#ebd092] bg-[#c9a84c]/20 ring-1 ring-[#c9a84c] font-bold'
+                    : 'text-[#c9a84c] hover:bg-[#1a1712] font-semibold'
+                }`}
+                title="Afficher tous les enregistrements"
+                aria-label="Afficher tous les enregistrements"
+              >
+                {totalStatsString}
+              </button>
+              <span className="text-[#3d3727] text-xs hidden sm:inline">•</span>
+              <button
+                type="button"
+                onClick={() => setSelectedSyncFilter(prev => prev === 'synced' ? 'all' : 'synced')}
+                className={`inline-flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded-md border transition cursor-pointer ${
+                  selectedSyncFilter === 'synced'
+                    ? 'text-emerald-300 bg-emerald-500/25 border-emerald-400 ring-2 ring-emerald-500/50 font-bold'
+                    : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20'
+                }`}
+                title="Cliquer pour afficher uniquement les audios synchronisés dans le Cloud"
+                aria-label={`Filtrer par audios synchronisés dans le Cloud (${syncedCount})`}
+                aria-pressed={selectedSyncFilter === 'synced'}
+              >
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{syncedCount} Cloud</span>
+              </button>
+              {unsyncedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedSyncFilter(prev => prev === 'local' ? 'all' : 'local')}
+                  className={`inline-flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded-md border transition cursor-pointer ${
+                    selectedSyncFilter === 'local'
+                      ? 'text-amber-300 bg-amber-500/25 border-amber-400 ring-2 ring-amber-500/50 font-bold'
+                      : 'text-amber-400 bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20'
+                  }`}
+                  title="Cliquer pour afficher uniquement les audios non synchronisés locaux (en attente de migration)"
+                  aria-label={`Filtrer par audios non synchronisés locaux (${unsyncedCount})`}
+                  aria-pressed={selectedSyncFilter === 'local'}
+                >
+                  <CloudUpload className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{unsyncedCount} local{unsyncedCount > 1 ? 's' : ''}</span>
+                </button>
+              )}
+              {missingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedSyncFilter(prev => prev === 'missing' ? 'all' : 'missing')}
+                  className={`inline-flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded-md border transition cursor-pointer ${
+                    selectedSyncFilter === 'missing'
+                      ? 'text-rose-300 bg-rose-500/25 border-rose-400 ring-2 ring-rose-500/50 font-bold'
+                      : 'text-rose-400 bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/20'
+                  }`}
+                  title="Cliquer pour afficher uniquement les fichiers manquants"
+                  aria-label={`Filtrer par fichiers manquants (${missingCount})`}
+                  aria-pressed={selectedSyncFilter === 'missing'}
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>{missingCount} manquant{missingCount > 1 ? 's' : ''}</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* View Mode Toggle: Livre vs Date */}
-        <div className="flex items-center gap-1 bg-[#060503] border border-[#2e2a1e] p-1 rounded-xl w-fit">
-          <button
-            type="button"
-            onClick={() => setViewMode('book')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
-              viewMode === 'book'
-                ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
-                : 'text-[#6b6355] hover:text-[#e8e0d0]'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Par Livre</span>
-          </button>
+        {/* Actions Area: Bouton "Synchroniser tout" & Toggle de mode */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {onSyncAllToCloud && audios.length > 0 && (
+            <button
+              type="button"
+              onClick={handleTriggerSyncAll}
+              disabled={isSyncingCloud}
+              className={`px-3.5 py-2 rounded-xl text-xs font-serif font-bold flex items-center gap-2 transition cursor-pointer shrink-0 disabled:opacity-60 disabled:cursor-not-allowed ${
+                unsyncedCount > 0
+                  ? 'bg-gradient-to-r from-[#c9a84c] to-[#ebd092] text-[#0d0b07] shadow-gold-glow hover:brightness-105 active:scale-95'
+                  : 'bg-[#181510] hover:bg-[#221e16] border border-[#c9a84c]/50 text-[#c9a84c] hover:border-[#c9a84c]'
+              }`}
+              title={
+                isSyncingCloud
+                  ? "Synchronisation vers Cloud Storage en cours..."
+                  : unsyncedCount > 0
+                  ? `Synchroniser ${unsyncedCount} fichier(s) localement vers Cloud Storage`
+                  : "Tous vos audios sont synchronisés (cliquez pour vérifier)"
+              }
+            >
+              {isSyncingCloud ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Synchronisation...</span>
+                </>
+              ) : (
+                <>
+                  <CloudUpload className="w-3.5 h-3.5" />
+                  <span>Synchroniser tout</span>
+                  {unsyncedCount > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-[#0d0b07]/25 text-[#0d0b07]">
+                      {unsyncedCount}
+                    </span>
+                  )}
+                </>
+              )}
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setViewMode('date')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
-              viewMode === 'date'
-                ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
-                : 'text-[#6b6355] hover:text-[#e8e0d0]'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>Par Date</span>
-          </button>
+          {/* Quick Sync Filter Toggle: Tous / Cloud / Locaux */}
+          {audios.length > 0 && (
+            <div className="flex items-center gap-1 bg-[#060503] border border-[#2e2a1e] p-1 rounded-xl w-fit" role="group" aria-label="Filtre rapide de synchronisation">
+              <button
+                type="button"
+                onClick={() => setSelectedSyncFilter('all')}
+                className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                  selectedSyncFilter === 'all'
+                    ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                    : 'text-[#6b6355] hover:text-[#e8e0d0]'
+                }`}
+                title="Afficher tous les enregistrements"
+                aria-label={`Afficher tous les enregistrements (${audios.length})`}
+                aria-pressed={selectedSyncFilter === 'all'}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Tous</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedSyncFilter(prev => prev === 'synced' ? 'all' : 'synced')}
+                className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                  selectedSyncFilter === 'synced'
+                    ? 'bg-emerald-500 text-black font-extrabold shadow-[0_0_12px_rgba(16,185,129,0.35)]'
+                    : 'text-emerald-400/80 hover:text-emerald-300 hover:bg-emerald-500/10'
+                }`}
+                title={`Afficher uniquement les audios synchronisés dans le Cloud (${syncedCount})`}
+                aria-label={`Filtrer par audios synchronisés Cloud (${syncedCount})`}
+                aria-pressed={selectedSyncFilter === 'synced'}
+              >
+                <CheckCircle className="w-3.5 h-3.5 text-current" />
+                <span>Cloud ({syncedCount})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedSyncFilter(prev => prev === 'local' ? 'all' : 'local')}
+                className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                  selectedSyncFilter === 'local'
+                    ? 'bg-amber-500 text-black font-extrabold shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+                    : 'text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10'
+                }`}
+                title={`Afficher uniquement les audios locaux non synchronisés (${unsyncedCount})`}
+                aria-label={`Filtrer par audios locaux non synchronisés (${unsyncedCount})`}
+                aria-pressed={selectedSyncFilter === 'local'}
+              >
+                <CloudUpload className="w-3.5 h-3.5 text-current" />
+                <span>Locaux ({unsyncedCount})</span>
+              </button>
+            </div>
+          )}
+
+          {/* View Mode Toggle: Livre vs Date */}
+          <div className="flex items-center gap-1 bg-[#060503] border border-[#2e2a1e] p-1 rounded-xl w-fit" role="group" aria-label="Mode d'affichage">
+            <button
+              type="button"
+              onClick={() => setViewMode('book')}
+              className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                viewMode === 'book'
+                  ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                  : 'text-[#6b6355] hover:text-[#e8e0d0]'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Par Livre</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('date')}
+              className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer ${
+                viewMode === 'date'
+                  ? 'bg-[#c9a84c] text-[#0d0b07] shadow-gold-glow'
+                  : 'text-[#6b6355] hover:text-[#e8e0d0]'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Par Date</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      {audios.length > 0 && (
-        <div className="bg-[#12100c]/80 border border-[#2e2a1e] rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row items-center gap-3">
-          {/* Search Input */}
-          <div className="relative flex-1 w-full">
-            <Search className="w-3.5 h-3.5 text-[#8c8270] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Rechercher par titre, livre ou chapitre..."
-              className="w-full bg-[#060503] border border-[#2e2a1e] focus:border-[#c9a84c]/60 rounded-xl pl-8 pr-8 py-2 text-xs text-[#f4efe2] placeholder-[#6b6355] outline-none transition"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8c8270] hover:text-[#f4efe2] p-1 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+      {/* Indicateur visuel de progression globale de la synchronisation vers Cloud Storage */}
+      {isSyncingCloud && (
+        <div className="bg-gradient-to-r from-[#211a0d] via-[#1a150a] to-[#14120e] border border-[#c9a84c]/60 rounded-2xl p-4 sm:p-5 shadow-[0_4px_30px_rgba(201,168,76,0.18)] space-y-3 animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-[#c9a84c]/20 border border-[#c9a84c]/40 flex items-center justify-center text-[#c9a84c] shrink-0">
+                <Loader2 className="w-4 h-4 animate-spin text-[#c9a84c]" />
+              </div>
+              <div className="min-w-0">
+                <h4 className="font-serif font-bold text-sm text-[#f4efe2] flex items-center gap-2">
+                  <span>Migration vers Cloud Storage en cours</span>
+                  <span className="inline-block w-2 h-2 rounded-full bg-[#c9a84c] animate-pulse" />
+                </h4>
+                {syncProgress?.title ? (
+                  <p className="text-xs text-[#a89f8c] truncate max-w-sm sm:max-w-lg">
+                    Transfert en cours : <span className="text-[#ebd092] font-medium">{syncProgress.title}</span>
+                  </p>
+                ) : (
+                  <p className="text-xs text-[#a89f8c]">
+                    Préparation du transfert et téléversement des fichiers audio...
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Compteur chiffré et pourcentage */}
+            {syncProgress && syncProgress.total > 0 ? (
+              <div className="text-right sm:shrink-0 font-mono text-xs text-[#c9a84c] font-bold bg-[#0d0b07]/50 px-3 py-1.5 rounded-xl border border-[#c9a84c]/30">
+                <span>{syncProgress.current} / {syncProgress.total}</span>
+                <span className="text-[#ebd092] ml-1.5">
+                  ({Math.round((syncProgress.current / syncProgress.total) * 100)}%)
+                </span>
+              </div>
+            ) : (
+              <div className="text-right sm:shrink-0 font-mono text-xs text-[#c9a84c] font-medium">
+                Initialisation...
+              </div>
             )}
           </div>
 
-          {/* Book Filter Dropdown */}
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <select
-              value={selectedBookFilter}
-              onChange={(e) => setSelectedBookFilter(e.target.value)}
-              className="bg-[#060503] border border-[#2e2a1e] text-xs font-mono text-[#e8e0d0] rounded-xl px-3 py-2 outline-none focus:border-[#c9a84c] cursor-pointer flex-1 sm:flex-initial"
-            >
-              <option value="all">Tous les livres ({audios.length})</option>
-              {availableBooks.map(b => (
-                <option key={b.id} value={b.id.toString()}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-
-            {/* Period Filter Dropdown */}
-            <select
-              value={selectedPeriodFilter}
-              onChange={(e) => setSelectedPeriodFilter(e.target.value as any)}
-              className="bg-[#060503] border border-[#2e2a1e] text-xs font-mono text-[#e8e0d0] rounded-xl px-3 py-2 outline-none focus:border-[#c9a84c] cursor-pointer flex-1 sm:flex-initial"
-            >
-              <option value="all">Toutes périodes</option>
-              <option value="today">Aujourd'hui</option>
-              <option value="week">7 derniers jours</option>
-              <option value="month">Ce mois-ci</option>
-            </select>
+          {/* Barre visuelle de progression */}
+          <div className="w-full bg-[#0a0805] rounded-full h-2.5 overflow-hidden border border-[#2e2a1e] p-0.5">
+            <div
+              className="bg-gradient-to-r from-[#c9a84c] via-[#ebd092] to-[#c9a84c] h-full rounded-full transition-all duration-300 shadow-gold-glow"
+              style={{
+                width: syncProgress && syncProgress.total > 0
+                  ? `${Math.max(6, Math.min(100, Math.round((syncProgress.current / syncProgress.total) * 100)))}%`
+                  : '20%'
+              }}
+            />
           </div>
         </div>
+      )}
+
+      {/* Playback Error Toast */}
+      {playbackErrorMessage && (
+        <div className="bg-red-950/40 border border-red-500/40 rounded-xl p-3 flex items-start justify-between gap-3 text-red-200 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{playbackErrorMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPlaybackErrorMessage(null)}
+            className="text-red-400 hover:text-red-200 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Sync Success Toast */}
+      {syncSuccessToast && (
+        <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-3 flex items-start justify-between gap-3 text-emerald-200 text-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{syncSuccessToast}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncSuccessToast(null)}
+            className="text-emerald-400 hover:text-emerald-200 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Cloud Migration & Sync Banner if unsynced items exist */}
+      {unsyncedCount > 0 && (
+        <div className="bg-gradient-to-r from-[#211a0d] to-[#14120e] border border-[#c9a84c]/40 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3.5 shadow-soft">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-[#c9a84c]/20 border border-[#c9a84c]/40 flex items-center justify-center text-[#c9a84c] shrink-0 mt-0.5 sm:mt-0">
+              <CloudUpload className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-serif font-bold text-sm text-[#f4efe2]">
+                {unsyncedCount} audio{unsyncedCount > 1 ? 's' : ''} à sauvegarder en ligne
+              </h4>
+              <p className="text-xs text-[#a89f8c] leading-relaxed">
+                Sauvegardez vos enregistrements dans le stockage en ligne pour pouvoir les écouter sur votre iPhone, Android ou tout autre appareil.
+              </p>
+              {isSyncingCloud && syncProgress && (
+                <div className="mt-2.5 space-y-1.5 w-full max-w-md">
+                  <div className="text-[11px] font-mono text-[#c9a84c] flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 truncate">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                      <span className="truncate">Envoi : {syncProgress.title}</span>
+                    </span>
+                    <span className="shrink-0 ml-2">
+                      {syncProgress.current}/{syncProgress.total} ({Math.round((syncProgress.current / syncProgress.total) * 100)}%)
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#14120e] rounded-full h-1.5 overflow-hidden border border-[#2e2a1e]">
+                    <div 
+                      className="bg-gradient-to-r from-[#c9a84c] to-[#ebd092] h-full transition-all duration-300"
+                      style={{ width: `${Math.round((syncProgress.current / syncProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {onSyncAllToCloud && (
+            <button
+              type="button"
+              disabled={isSyncingCloud}
+              onClick={handleTriggerSyncAll}
+              className="px-4 py-2.5 rounded-xl text-xs font-serif font-bold bg-[#c9a84c] hover:bg-[#ebd092] text-[#0d0b07] flex items-center gap-2 transition cursor-pointer shadow-gold-glow shrink-0 disabled:opacity-50"
+            >
+              {isSyncingCloud ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Synchronisation...</span>
+                </>
+              ) : (
+                <>
+                  <CloudUpload className="w-4 h-4" />
+                  <span>Synchroniser tout</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Filter and Search Bar using extracted ChapterAudiosFilterBar */}
+      {audios.length > 0 && (
+        <ChapterAudiosFilterBar
+          audios={audios}
+          filteredAudiosCount={filteredAudios.length}
+          selectedSyncFilter={selectedSyncFilter}
+          setSelectedSyncFilter={setSelectedSyncFilter}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          selectedBookFilter={selectedBookFilter}
+          setSelectedBookFilter={setSelectedBookFilter}
+          selectedPeriodFilter={selectedPeriodFilter}
+          setSelectedPeriodFilter={setSelectedPeriodFilter}
+          availableBooks={availableBooks}
+          unsyncedCount={unsyncedCount}
+          syncedCount={syncedCount}
+          missingCount={missingCount}
+          onSyncAllToCloud={handleTriggerSyncAll}
+          isSyncingCloud={isSyncingCloud}
+        />
       )}
 
       {/* Main Content / Lists */}
@@ -617,169 +813,47 @@ export const ChapterAudiosManager: React.FC<ChapterAudiosManagerProps> = ({
             </p>
           </div>
         </div>
-      ) : filteredAudios.length === 0 ? (
-        /* No results for current filter/search */
-        <div className="bg-[#12100c]/70 border border-[#2e2a1e] rounded-2xl p-8 text-center space-y-2 text-[#8c8270]">
-          <Search className="w-8 h-8 mx-auto opacity-40" />
-          <p className="text-xs font-mono">Aucun enregistrement ne correspond à vos critères de recherche.</p>
-        </div>
-      ) : viewMode === 'book' ? (
-        /* 1. Grouped by Book */
-        <div className="space-y-6">
-          {groupedByBook.map((group) => (
-            <div key={group.book_id} className="space-y-3">
-              <div className="flex items-center gap-2 px-1 border-b border-[#2e2a1e]/60 pb-1.5">
-                <BookOpen className="w-4 h-4 text-[#c9a84c]" />
-                <h3 className="font-serif font-extrabold text-sm sm:text-base text-[#c9a84c] tracking-wide">
-                  {group.book_name}
-                </h3>
-                <span className="text-[10px] font-mono text-[#8c8270] bg-[#14120e] px-2 py-0.5 rounded-md border border-[#2e2a1e]/60">
-                  {group.items.length} audio{group.items.length > 1 ? 's' : ''}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {group.items.map(renderAudioCard)}
-              </div>
-            </div>
-          ))}
-        </div>
       ) : (
-        /* 2. Grouped by Date Buckets ("Aujourd'hui", "Hier", "Cette semaine", "Ce mois-ci", puis par mois) */
-        <div className="space-y-6">
-          {groupedByDateBuckets.map((bucket) => (
-            <div key={bucket.label} className="space-y-3">
-              <div className="flex items-center gap-2 px-1 border-b border-[#2e2a1e]/60 pb-1.5">
-                <Calendar className="w-4 h-4 text-[#c9a84c]" />
-                <h3 className="font-serif font-extrabold text-sm sm:text-base text-[#c9a84c] tracking-wide">
-                  {bucket.label}
-                </h3>
-                <span className="text-[10px] font-mono text-[#8c8270] bg-[#14120e] px-2 py-0.5 rounded-md border border-[#2e2a1e]/60">
-                  {bucket.items.length} audio{bucket.items.length > 1 ? 's' : ''}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {bucket.items.map(renderAudioCard)}
-              </div>
-            </div>
-          ))}
-        </div>
+        <ChapterAudiosListView
+          filteredAudios={filteredAudios}
+          viewMode={viewMode}
+          selectedSyncFilter={selectedSyncFilter}
+          unsyncedCount={unsyncedCount}
+          syncedCount={syncedCount}
+          isSyncingCloud={isSyncingCloud}
+          onSyncAllToCloud={onSyncAllToCloud ? handleTriggerSyncAll : undefined}
+          onResetFilters={() => {
+            setSearchQuery('');
+            setSelectedBookFilter('all');
+            setSelectedPeriodFilter('all');
+            setSelectedSyncFilter('all');
+          }}
+          onSelectSyncFilter={setSelectedSyncFilter}
+          groupedByBook={groupedByBook}
+          groupedByDateBuckets={groupedByDateBuckets}
+          renderAudioCard={renderAudioCard}
+        />
       )}
 
       {/* Rename Modal */}
-      <AnimatePresence>
-        {audioToRename && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-[#12100c] border border-[#c9a84c]/40 rounded-2xl p-5 sm:p-6 space-y-4 shadow-2xl text-left"
-            >
-              <div className="flex items-center gap-3 text-[#c9a84c]">
-                <div className="w-9 h-9 rounded-xl bg-[#c9a84c]/15 border border-[#c9a84c]/30 flex items-center justify-center shrink-0">
-                  <Edit3 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-serif font-black text-sm text-[#f4efe2]">
-                    Renommer l'audio
-                  </h4>
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8c8270] block">
-                    {audioToRename.book_name} {audioToRename.chapter}
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono uppercase text-[#8c8270] tracking-wider block">
-                  Nouveau titre
-                </label>
-                <input
-                  type="text"
-                  value={newTitleInput}
-                  onChange={(e) => setNewTitleInput(e.target.value)}
-                  className="w-full bg-[#060503] border border-[#2e2a1e] focus:border-[#c9a84c] rounded-xl p-3 text-xs text-[#f4efe2] outline-none font-serif"
-                  maxLength={100}
-                  autoFocus
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setAudioToRename(null)}
-                  disabled={isRenaming}
-                  className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-[#8c8270] hover:text-[#f4efe2] bg-[#1a1712] border border-[#2e2a1e] cursor-pointer transition"
-                >
-                  Annuler
-                </button>
-
-                <button
-                  type="button"
-                  onClick={confirmRename}
-                  disabled={isRenaming || !newTitleInput.trim()}
-                  className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-[#0d0b07] bg-[#c9a84c] hover:bg-[#ebd092] font-black cursor-pointer transition shadow-md flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isRenaming ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <AudioRenameModal
+        audio={audioToRename}
+        newTitleInput={newTitleInput}
+        setNewTitleInput={setNewTitleInput}
+        isRenaming={isRenaming}
+        onClose={() => setAudioToRename(null)}
+        onConfirm={confirmRename}
+      />
 
       {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {audioToDelete && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-[#12100c] border border-red-500/30 rounded-2xl p-5 sm:p-6 space-y-4 shadow-2xl text-left"
-            >
-              <div className="flex items-center gap-3 text-red-400">
-                <div className="w-9 h-9 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="font-serif font-black text-sm text-[#f4efe2]">
-                    Supprimer cet audio ?
-                  </h4>
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#8c8270] block">
-                    {audioToDelete.title} · {audioToDelete.book_name} {audioToDelete.chapter}
-                  </span>
-                </div>
-              </div>
-
-              <p className="text-xs text-[#8c8270] leading-normal font-sans">
-                Êtes-vous sûr de vouloir supprimer définitivement cet enregistrement audio ({formatTime(audioToDelete.duration_seconds)}) ? Cette action ne pourra pas être annulée.
-              </p>
-
-              <div className="flex items-center justify-end gap-2.5 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setAudioToDelete(null)}
-                  disabled={isDeleting}
-                  className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-[#8c8270] hover:text-[#f4efe2] bg-[#1a1712] border border-[#2e2a1e] cursor-pointer transition"
-                >
-                  Annuler
-                </button>
-
-                <button
-                  type="button"
-                  onClick={confirmDelete}
-                  disabled={isDeleting}
-                  className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-white bg-red-600 hover:bg-red-700 cursor-pointer transition shadow-md flex items-center gap-1.5"
-                >
-                  {isDeleting ? 'Suppression...' : 'Supprimer définitivement'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <AudioDeleteModal
+        audio={audioToDelete}
+        isDeleting={isDeleting}
+        onClose={() => setAudioToDelete(null)}
+        onConfirm={confirmDelete}
+        formatTime={formatTime}
+      />
     </div>
   );
 };
+

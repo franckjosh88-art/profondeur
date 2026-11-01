@@ -18,6 +18,8 @@ import {
   saveSpiritualNotesToStorage,
   parseNoteContent
 } from '../utils/spiritualNotes';
+import { authenticatedFetch } from '../lib/apiClient';
+import { AiDisclaimer } from './AiDisclaimer';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface SpiritualNotesManagerProps {
@@ -204,7 +206,7 @@ export const SpiritualNotesManager: React.FC<SpiritualNotesManagerProps> = ({
     });
 
     try {
-      const response = await fetch('/api/gemini/analyze-emotion', {
+      const response = await authenticatedFetch('/api/gemini/analyze-emotion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -668,6 +670,7 @@ export const SpiritualNotesManager: React.FC<SpiritualNotesManagerProps> = ({
                         « {selectedNote.emotion_analysis.pastoralEncouragement} »
                       </p>
                     )}
+                    <AiDisclaimer />
                   </div>
                 )}
               </div>

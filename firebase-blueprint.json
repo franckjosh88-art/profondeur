@@ -99,9 +99,26 @@
         "created_at": { "type": "string" },
         "duration_seconds": { "type": "number" },
         "audio_mime_type": { "type": "string" },
-        "written_meditation_id": { "type": "string" }
+        "written_meditation_id": { "type": "string" },
+        "audio_url": { "type": "string" },
+        "storage_path": { "type": "string" },
+        "is_cloud_synced": { "type": "boolean" },
+        "audio_base64": { "type": "string" },
+        "chunks_count": { "type": "integer" }
       },
       "required": ["id", "title", "book_id", "book_name", "chapter", "created_at", "duration_seconds"]
+    },
+    "AudioChunk": {
+      "title": "AudioChunk",
+      "description": "Binary audio chunk data stored in Base64 for cross-device cloud audio playback",
+      "type": "object",
+      "properties": {
+        "index": { "type": "integer" },
+        "total": { "type": "integer" },
+        "data": { "type": "string" },
+        "mime_type": { "type": "string" }
+      },
+      "required": ["index", "total", "data"]
     },
     "VerseHighlight": {
       "title": "VerseHighlight",
@@ -148,9 +165,21 @@
       "schema": "ChapterAudioMeditation",
       "description": "User voice meditation recordings for chapters"
     },
+    "users/{userId}/chapter_audio_meditations/{audioId}/chunks/{chunkId}": {
+      "schema": "AudioChunk",
+      "description": "User audio binary chunk files for cross-device cloud streaming and playback"
+    },
     "users/{userId}/highlights/{highlightId}": {
       "schema": "VerseHighlight",
       "description": "User highlighted verses saved with yellow, green or pink colors"
+    },
+    "permanent_audio_storage/{audioId}": {
+      "schema": "ChapterAudioMeditation",
+      "description": "Permanent cloud storage for shared and cross-device audio files"
+    },
+    "permanent_audio_storage/{audioId}/chunks/{chunkId}": {
+      "schema": "AudioChunk",
+      "description": "Permanent binary chunks for audio files allowing universal streaming on any device"
     }
   }
 }

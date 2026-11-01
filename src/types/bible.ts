@@ -148,7 +148,13 @@ export interface ChapterAudioMeditation {
   duration_seconds: number;
   audio_mime_type?: string;
   written_meditation_id?: string;
-  audio_url?: string; // transient Object URL for playback
+  audio_url?: string; // remote URL or transient Object URL for playback
+  storage_path?: string; // path in cloud storage
+  is_cloud_synced?: boolean; // true if stored in cloud
+  synced_at?: string; // ISO date when file was synced to Cloud Storage
+  audio_base64?: string; // inline base64 if audio is short
+  chunks_count?: number; // total chunks stored in cloud subcollection
+  file_size?: number; // size in bytes
 }
 
 export type HighlightColor = 'jaune' | 'vert' | 'rose';

@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { ChapterMeditation, ChapterAudioMeditation } from '../types/bible';
 import { getSupportedAudioMimeType, getAudioPlayableUrl } from '../utils/audioStorage';
+import { cleanMarkdownText } from '../lib/bibleFormatter';
+import { appAlert } from '../utils/dialog';
 
 interface ChapterNoteSectionProps {
   bookId: number;
@@ -103,9 +105,10 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
   // Handle external text append (e.g. from AI summary)
   useEffect(() => {
     if (textToAppend) {
+      const cleanAppend = cleanMarkdownText(textToAppend);
       setText(prev => {
-        if (!prev.trim()) return textToAppend;
-        return `${prev}\n\n${textToAppend}`;
+        if (!prev.trim()) return cleanAppend;
+        return `${prev}\n\n${cleanAppend}`;
       });
       if (onClearTextToAppendRef.current) {
         onClearTextToAppendRef.current();
@@ -134,16 +137,12 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
     const loadUrls = async () => {
       const urls: Record<string, string> = {};
       for (const item of currentChapterAudios) {
-        if (item.audio_url) {
-          urls[item.id] = item.audio_url;
-        } else {
-          try {
-            const url = await getAudioPlayableUrl(item.id);
-            if (url && isMounted) {
-              urls[item.id] = url;
-            }
-          } catch (_) {}
-        }
+        try {
+          const url = await getAudioPlayableUrl(item.id, item);
+          if (url && isMounted) {
+            urls[item.id] = url;
+          }
+        } catch (_) {}
       }
       if (isMounted) {
         setAudioUrls(prev => {
@@ -307,7 +306,7 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
   };
 
   // List audio playback
-  const toggleListAudio = (audioId: string, url: string) => {
+  const toggleListAudio = async (audioId: string, providedUrl?: string) => {
     if (playingAudioId === audioId) {
       listAudioRef.current?.pause();
       setPlayingAudioId(null);
@@ -315,10 +314,20 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
       if (listAudioRef.current) {
         listAudioRef.current.pause();
       }
+      let url = providedUrl || audioUrls[audioId];
+      if (!url) {
+        const item = currentChapterAudios.find(a => a.id === audioId);
+        url = (await getAudioPlayableUrl(audioId, item)) || '';
+      }
+      if (!url) {
+        await appAlert("Fichier audio non disponible.", "Audio indisponible");
+        return;
+      }
       const audio = new Audio(url);
       listAudioRef.current = audio;
       audio.onended = () => setPlayingAudioId(null);
-      audio.play();
+      audio.onerror = () => setPlayingAudioId(null);
+      await audio.play();
       setPlayingAudioId(audioId);
     }
   };
@@ -331,14 +340,15 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
     try {
       // 1. Save written meditation
       if (text.trim() && onSaveMeditation) {
-        await onSaveMeditation(bookId, bookName, chapter, text.trim(), editingNoteId || undefined);
+        const cleanSavedText = cleanMarkdownText(text.trim());
+        await onSaveMeditation(bookId, bookName, chapter, cleanSavedText, editingNoteId || undefined);
       }
 
       // 2. Save audio meditation if recorded
       if (recordedAudioBlob && onSaveAudioMeditation) {
         const mimeType = getSupportedAudioMimeType() || 'audio/webm';
         const title = `${bookName} ${chapter} – Note vocale`;
-        await onSaveAudioMeditation(
+        const saveOk = await onSaveAudioMeditation(
           bookId,
           bookName,
           chapter,
@@ -348,6 +358,9 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
           mimeType,
           editingNoteId || undefined
         );
+        if (saveOk === false) {
+          await appAlert("Erreur lors de l'envoi de la note vocale en ligne. Vérifiez votre connexion.", "Erreur d'envoi");
+        }
       }
 
       // Automatically validate chapter for today's reading progress!
@@ -586,7 +599,7 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
             {isSaving ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Enregistrement...</span>
+                <span>{recordedAudioBlob ? "Sauvegarde & envoi en ligne..." : "Enregistrement..."}</span>
               </>
             ) : (
               <span>{editingNoteId ? 'Mettre à jour' : 'Enregistrer'}</span>
@@ -636,7 +649,7 @@ export const ChapterNoteSection: React.FC<ChapterNoteSectionProps> = ({
                   </div>
 
                   <p className="font-serif text-xs sm:text-sm text-[#ded7c8] leading-relaxed whitespace-pre-line">
-                    {note.text}
+                    {cleanMarkdownText(note.text)}
                   </p>
                 </div>
               ))}

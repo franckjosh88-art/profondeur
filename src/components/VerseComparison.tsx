@@ -3,7 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Check, Copy, Sparkles, BookOpen, AlertCircle, ArrowRightLeft, Info, HelpCircle
 } from 'lucide-react';
+import { authenticatedFetch } from '../lib/apiClient';
 import { Verse } from '../types/bible';
+import { AiDisclaimer } from './AiDisclaimer';
 
 interface Translation {
   code: string;
@@ -36,7 +38,7 @@ export const VerseComparison: React.FC<VerseComparisonProps> = ({ verse }) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/gemini/compare-verse', {
+      const response = await authenticatedFetch('/api/gemini/compare-verse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -316,6 +318,7 @@ export const VerseComparison: React.FC<VerseComparisonProps> = ({ verse }) => {
               })}
             </div>
           </div>
+          <AiDisclaimer />
         </div>
       )}
     </div>

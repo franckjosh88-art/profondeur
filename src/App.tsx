@@ -9,7 +9,8 @@ import {
   auth, db, googleProvider, handleFirestoreError, OperationType, cleanFirestoreData 
 } from './lib/firebase';
 import { 
-  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder, ChapterMeditation, ChapterAudioMeditation 
+  Verse, Book, FavoriteVerse, VerseNote, ReadingHistory, DailyVerse, EmotionAnalysisResult, ReadingPosition, BookmarkFolder, ChapterMeditation, ChapterAudioMeditation,
+  VerseHighlight, HighlightColor, HIGHLIGHT_PALETTE
 } from './types/bible';
 import { 
   BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter,
@@ -18,7 +19,7 @@ import {
 import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
 import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
 import { parseNoteContent, SpiritualNote } from './utils/spiritualNotes';
-import { saveAudioBlob, deleteAudioBlob } from './utils/audioStorage';
+import { saveAudioBlob, deleteAudioBlob, uploadAudioToCloud, syncAllLocalAudiosToCloud, getAudioBlob } from './utils/audioStorage';
 import { 
   ReaderColorId, 
   normalizeReaderColorId, 
@@ -59,7 +60,11 @@ import { AnalysisCard } from './components/AnalysisCard';
 import { ContextSection } from './components/ContextSection';
 import { VerseQuote } from './components/VerseQuote';
 import { RevelationBadge } from './components/RevelationBadge';
-import { cleanBibleMarkdown } from './lib/bibleFormatter';
+import { AiDisclaimer } from './components/AiDisclaimer';
+import { cleanBibleMarkdown, cleanMarkdownText, cleanTextForSpeech } from './lib/bibleFormatter';
+import { authenticatedFetch } from './lib/apiClient';
+import { appAlert, appConfirm } from './utils/dialog';
+import { AppDialogContainer } from './components/AppDialogContainer';
 import { SpiritualNotesManager } from './components/SpiritualNotesManager';
 import { BookmarkFoldersManager } from './components/BookmarkFoldersManager';
 import { VerseComparison } from './components/VerseComparison';
@@ -219,8 +224,23 @@ export default function App() {
   }, [sanctuaryBgImage]);
 
   // User Settings 
-  const [textSize, setTextSize] = useState<number>(18);
-  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'sepia'>('light');
+  const [textSize, setTextSize] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('app_text_size');
+      return saved ? Number(saved) : 17;
+    } catch (_) {
+      return 17;
+    }
+  });
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'sepia'>(() => {
+    try {
+      const saved = localStorage.getItem('app_theme_mode');
+      if (saved === 'sepia' || saved === 'light' || saved === 'dark') return saved;
+      return 'dark';
+    } catch (_) {
+      return 'dark';
+    }
+  });
   const isNightMode = themeMode === 'dark';
 
   // =========================================================================
@@ -345,18 +365,18 @@ export default function App() {
   const [dbInitProgress, setDbInitProgress] = useState<number>(0);
   const [dbInitText, setDbInitText] = useState<string>('Préparation de la base de données...');
 
-  // Reading Passage States (Defaults to last saved position or Psaumes 84)
+  // Reading Passage States (Defaults to last saved position or Romains 1)
   const [lastReadingPosition, setLastReadingPosition] = useState<ReadingPosition | null>(() => loadMigratedLastReadingPosition());
   const [selectedBook, setSelectedBook] = useState<Book>(() => {
     const lastPos = loadMigratedLastReadingPosition();
     if (lastPos) {
-      return BOOKS.find(b => b.id === lastPos.book_id) || BOOKS.find(b => b.id === 19) || BOOKS[0];
+      return BOOKS.find(b => b.id === lastPos.book_id) || BOOKS.find(b => b.id === 45) || BOOKS[0];
     }
-    return BOOKS.find(b => b.id === 19) || BOOKS[0]; // Psaumes by default
+    return BOOKS.find(b => b.id === 45) || BOOKS[0]; // Romains by default
   });
   const [selectedChapter, setSelectedChapter] = useState<number>(() => {
     const lastPos = loadMigratedLastReadingPosition();
-    return lastPos ? lastPos.chapter : 84; // Psaumes 84 by default
+    return lastPos ? lastPos.chapter : 1; // Chapitre 1 by default
   });
   const [chapterVerses, setChapterVerses] = useState<Verse[]>([]);
   const [loadingVerses, setLoadingVerses] = useState<boolean>(false);
@@ -382,7 +402,7 @@ export default function App() {
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [drawerActivePage, setDrawerActivePage] = useState<DrawerPageKey>('read');
-  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState<boolean>(true);
+  const [isDesktopSidebarOpen] = useState<boolean>(false);
   const [isAdvancedMode, setIsAdvancedMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem('bible_advanced_mode') === 'true';
@@ -455,6 +475,14 @@ export default function App() {
     }
   });
   const [readingHistory, setReadingHistory] = useState<ReadingHistory[]>([]);
+  const [verseHighlights, setVerseHighlights] = useState<Record<string, VerseHighlight>>(() => {
+    try {
+      const raw = localStorage.getItem('bible_verse_highlights');
+      return raw ? JSON.parse(raw) : {};
+    } catch (_) {
+      return {};
+    }
+  });
 
   // Daily Verse of the Day
   const dailyVerseForCurrentDay: DailyVerse = getDailyVerseForToday();
@@ -536,7 +564,7 @@ export default function App() {
       }, 4000);
     } catch (err: any) {
       console.error("Erreur téléchargement Bible complète:", err);
-      alert(err.message || "Erreur lors du téléchargement de la Bible.");
+      await appAlert(err.message || "Erreur lors du téléchargement de la Bible.", "Téléchargement");
       setFullBibleProgress(null);
     } finally {
       setIsDownloadingFullBible(false);
@@ -589,7 +617,7 @@ export default function App() {
                 verses = querySqliteChapter(bk.id, bk.name, ch) || [];
               } else {
                 try {
-                  const response = await fetch('/api/gemini/fetch-verses', {
+                  const response = await authenticatedFetch('/api/gemini/fetch-verses', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ bookName: bk.name, chapterNum: ch })
@@ -859,6 +887,13 @@ export default function App() {
         }
 
         try {
+          const offlineHighlights = localStorage.getItem('bible_verse_highlights');
+          setVerseHighlights(offlineHighlights ? JSON.parse(offlineHighlights) : {});
+        } catch (_) {
+          setVerseHighlights({});
+        }
+
+        try {
           const offlineColor = localStorage.getItem('readerColor') || localStorage.getItem('bible_reader_color');
           const resolvedOffline = (offlineColor === 'sanctuary' || !offlineColor) ? 'sanctuaire' : offlineColor;
           setReaderColor(resolvedOffline);
@@ -871,22 +906,56 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Sync state variables with current theme preference
+  // Listen for require-auth events triggered by 401 API responses
   useEffect(() => {
-    if (themeMode === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    const handleRequireAuth = () => {
+      setIsAuthModalOpen(true);
+    };
+    window.addEventListener('require-auth', handleRequireAuth);
+    return () => window.removeEventListener('require-auth', handleRequireAuth);
+  }, []);
+
+  // Sync state variables with current theme preference (dark, sepia, light)
+  useEffect(() => {
+    document.documentElement.classList.remove('dark', 'theme-sepia', 'theme-light');
+    document.body.classList.remove('dark', 'theme-sepia', 'theme-light');
+    document.documentElement.removeAttribute('data-app-theme');
 
     if (themeMode === 'sepia') {
       document.documentElement.classList.add('theme-sepia');
       document.body.classList.add('theme-sepia');
+      document.documentElement.setAttribute('data-app-theme', 'sepia');
+    } else if (themeMode === 'light') {
+      document.documentElement.classList.add('theme-light');
+      document.body.classList.add('theme-light');
+      document.documentElement.setAttribute('data-app-theme', 'light');
     } else {
-      document.documentElement.classList.remove('theme-sepia');
-      document.body.classList.remove('theme-sepia');
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+      document.documentElement.setAttribute('data-app-theme', 'dark');
     }
+
+    try {
+      localStorage.setItem('app_theme_mode', themeMode);
+    } catch (_) {}
   }, [themeMode]);
+
+  // Sync textSize globally to entire application
+  useEffect(() => {
+    document.documentElement.style.setProperty('--app-text-size', `${textSize}px`);
+    document.documentElement.style.setProperty('--text-size', `${textSize}px`);
+
+    let sizeTag = 'moyen';
+    if (textSize <= 15) sizeTag = 'petit';
+    else if (textSize <= 18) sizeTag = 'moyen';
+    else if (textSize <= 22) sizeTag = 'grand';
+    else sizeTag = 'tres_grand';
+
+    document.documentElement.setAttribute('data-text-size', sizeTag);
+    try {
+      localStorage.setItem('app_text_size', String(textSize));
+    } catch (_) {}
+  }, [textSize]);
 
   // Automatic theme switching based on local time
   useEffect(() => {
@@ -945,7 +1014,7 @@ export default function App() {
             verses = res;
           } else {
             try {
-              const response = await fetch('/api/gemini/fetch-verses', {
+              const response = await authenticatedFetch('/api/gemini/fetch-verses', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ bookName: selectedBook.name, chapterNum: chapterNum })
@@ -1273,6 +1342,28 @@ export default function App() {
       console.error("Chapter audios sync error:", error);
     });
 
+    // 7. Verse Highlights
+    const highlightsRef = collection(db, 'users', uid, 'highlights');
+    const unsubscribeHighlights = onSnapshot(highlightsRef, (snapshot) => {
+      const map: Record<string, VerseHighlight> = {};
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as VerseHighlight;
+        const key = data.id || `${data.book_id}_${data.chapter}_${data.verse}`;
+        map[key] = {
+          ...data,
+          id: key
+        };
+      });
+      setVerseHighlights(map);
+      try {
+        localStorage.setItem('bible_verse_highlights', JSON.stringify(map));
+      } catch (e) {
+        console.error("Error backing up verse highlights to localStorage:", e);
+      }
+    }, (error) => {
+      console.error("Verse highlights sync error:", error);
+    });
+
     return () => {
       unsubscribeProfile();
       unsubscribeBookmarks();
@@ -1281,6 +1372,7 @@ export default function App() {
       unsubscribeFolders();
       unsubscribeMeditations();
       unsubscribeAudios();
+      unsubscribeHighlights();
     };
   };
 
@@ -1980,6 +2072,9 @@ export default function App() {
   };
 
   // Chapter Audio Meditation Handlers
+  const [isSyncingAudios, setIsSyncingAudios] = useState<boolean>(false);
+  const [syncAudioProgress, setSyncAudioProgress] = useState<{ current: number; total: number; title: string } | null>(null);
+
   const handleSaveChapterAudioMeditation = async (
     bookId: number,
     bookName: string,
@@ -1996,7 +2091,7 @@ export default function App() {
       await saveAudioBlob(audioId, audioBlob, mimeType, durationSeconds, user?.uid || null);
 
       // 2. Prepare metadata
-      const audioItem: ChapterAudioMeditation = {
+      let audioItem: ChapterAudioMeditation = {
         id: audioId,
         title,
         book_id: bookId,
@@ -2005,20 +2100,39 @@ export default function App() {
         created_at: new Date().toISOString(),
         duration_seconds: durationSeconds,
         audio_mime_type: mimeType,
-        written_meditation_id: writtenMeditationId
+        written_meditation_id: writtenMeditationId,
+        audio_url: `/api/audio/${audioId}`,
+        is_cloud_synced: false
       };
 
-      // 3. Local state & localStorage metadata
-      const nextList = [audioItem, ...chapterAudios];
+      // 3. Upload to Cloud / Server Permanent Storage
+      try {
+        const uploadRes = await uploadAudioToCloud(audioItem, audioBlob, user?.uid || 'guest');
+        if (uploadRes.success) {
+          audioItem.is_cloud_synced = true;
+          audioItem.synced_at = new Date().toISOString();
+          audioItem.audio_url = uploadRes.audioUrl || audioItem.audio_url;
+          audioItem.audio_mime_type = uploadRes.mimeType || audioItem.audio_mime_type;
+        }
+      } catch (cloudErr) {
+        console.warn("Cloud upload warning, keeping local copy:", cloudErr);
+      }
+
+      // 4. Local state & localStorage metadata
+      const nextList = [audioItem, ...chapterAudios.filter(a => a.id !== audioId)];
       setChapterAudios(nextList);
       try {
         localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
       } catch (_) {}
 
-      // 4. Firestore sync if authenticated
+      // 5. Firestore metadata document sync
       if (user) {
-        const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
-        await setDoc(docRef, cleanFirestoreData(audioItem));
+        try {
+          const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
+          await setDoc(docRef, cleanFirestoreData(audioItem), { merge: true });
+        } catch (firestoreErr) {
+          console.warn("Firestore metadata doc warning:", firestoreErr);
+        }
       }
 
       return true;
@@ -2030,7 +2144,7 @@ export default function App() {
 
   const handleDeleteChapterAudioMeditation = async (audioId: string): Promise<void> => {
     try {
-      await deleteAudioBlob(audioId);
+      await deleteAudioBlob(audioId, user?.uid || null);
       const nextList = chapterAudios.filter(a => a.id !== audioId);
       setChapterAudios(nextList);
       try {
@@ -2038,11 +2152,90 @@ export default function App() {
       } catch (_) {}
 
       if (user) {
-        const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
-        await deleteDoc(docRef);
+        try {
+          const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', audioId);
+          await deleteDoc(docRef);
+        } catch (_) {}
       }
     } catch (err) {
       console.error("Could not delete chapter audio meditation:", err);
+    }
+  };
+
+  const handleSyncAllAudiosToCloud = async () => {
+    if (isSyncingAudios) return;
+    setIsSyncingAudios(true);
+    setSyncAudioProgress(null);
+    try {
+      const { syncedCount, syncedIds } = await syncAllLocalAudiosToCloud(
+        chapterAudios,
+        user?.uid || 'guest',
+        (current, total, title) => {
+          setSyncAudioProgress({ current, total, title });
+        }
+      );
+      if (syncedCount > 0 && syncedIds && syncedIds.length > 0) {
+        const syncedSet = new Set(syncedIds);
+        const nowIso = new Date().toISOString();
+        const nextList = chapterAudios.map(a => syncedSet.has(a.id) ? {
+          ...a,
+          is_cloud_synced: true,
+          synced_at: a.synced_at || nowIso
+        } : a);
+        setChapterAudios(nextList);
+        try {
+          localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
+        } catch (_) {}
+
+        if (user) {
+          for (const id of syncedIds) {
+            try {
+              const docRef = doc(db, 'users', user.uid, 'chapter_audio_meditations', id);
+              await updateDoc(docRef, { is_cloud_synced: true, synced_at: nowIso });
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Audio migration sync error:", e);
+    } finally {
+      setIsSyncingAudios(false);
+      setSyncAudioProgress(null);
+    }
+  };
+
+  // Auto-sync unsynced local audios to cloud when unsynced audios exist
+  useEffect(() => {
+    if (isSyncingAudios || chapterAudios.length === 0) return;
+    const hasUnsynced = chapterAudios.some(a => !a.is_cloud_synced);
+    if (!hasUnsynced) return;
+
+    const timer = setTimeout(() => {
+      handleSyncAllAudiosToCloud();
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [chapterAudios.length]);
+
+  const handleSyncSingleAudio = async (audioItem: ChapterAudioMeditation) => {
+    const blob = await getAudioBlob(audioItem.id);
+    if (!blob) throw new Error("Fichier audio non trouvé dans le stockage local de cet appareil.");
+    const res = await uploadAudioToCloud(audioItem, blob, user?.uid || 'guest');
+    if (res.success) {
+      const nowIso = new Date().toISOString();
+      const nextList = chapterAudios.map(a => a.id === audioItem.id ? { 
+        ...a, 
+        is_cloud_synced: true, 
+        synced_at: nowIso,
+        audio_url: res.audioUrl, 
+        audio_mime_type: res.mimeType 
+      } : a);
+      setChapterAudios(nextList);
+      try {
+        localStorage.setItem('offline_chapter_audios_meta', JSON.stringify(nextList));
+      } catch (_) {}
+    } else {
+      throw new Error(res.error || "Échec du téléversement vers le stockage en ligne.");
     }
   };
 
@@ -2064,11 +2257,7 @@ export default function App() {
   };
 
   const handleToggleMenu = () => {
-    if (typeof window !== 'undefined' && window.innerWidth >= 1024) {
-      setIsDesktopSidebarOpen(prev => !prev);
-    } else {
-      setIsDrawerOpen(prev => !prev);
-    }
+    setIsDrawerOpen(prev => !prev);
   };
 
   const handleDrawerSelectPage = (page: DrawerPageKey) => {
@@ -2149,7 +2338,7 @@ export default function App() {
     try {
       const cached = await explainCache.get(cacheKey);
       if (cached) {
-        setVerseExplanation(cached.content);
+        setVerseExplanation(cleanMarkdownText(cached.content));
         setIsExplanationCached(true);
         setLoadingExplanation(false);
         refreshPopularExplanations();
@@ -2160,7 +2349,7 @@ export default function App() {
     }
     
     try {
-      const response = await fetch('/api/gemini/explain', {
+      const response = await authenticatedFetch('/api/gemini/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2173,7 +2362,7 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Impossible de joindre l'interlocuteur d'étude.");
       
-      const explanationResult = data.explanation || "Exégèse non générée par le modèle théologique.";
+      const explanationResult = cleanMarkdownText(data.explanation || "Exégèse non générée par le modèle théologique.");
       setVerseExplanation(explanationResult);
 
       // Save to IndexedDB Cache
@@ -2191,13 +2380,13 @@ export default function App() {
         const altCacheKey = `verse:${verse.book_name}:${verse.chapter}:${verse.verse}:${altTab}`;
         const altCached = await explainCache.get(altCacheKey);
         if (altCached) {
-          setVerseExplanation(altCached.content + "\n\n*(Note : Affiché depuis le cache local car la connexion réseau a échoué)*");
+          setVerseExplanation(cleanMarkdownText(altCached.content) + "\n\n(Note : Affiché depuis le cache local car la connexion réseau a échoué)");
           setIsExplanationCached(true);
           return;
         }
       } catch (_) {}
       
-      setVerseExplanation(`Échec d'exégèse : ${err.message || 'Problème de connexion réseau.'}\n\n*Conseil : l'étude en ligne requiert une connexion internet active.*`);
+      setVerseExplanation(`Échec d'exégèse : ${err.message || 'Problème de connexion réseau.'}\n\nConseil : l'étude en ligne requiert une connexion internet active.`);
     } finally {
       setLoadingExplanation(false);
     }
@@ -2215,7 +2404,7 @@ export default function App() {
     try {
       const cached = await explainCache.get(cacheKey);
       if (cached) {
-        setChapterSummary(cached.content);
+        setChapterSummary(cleanMarkdownText(cached.content));
         setLoadingSummary(false);
         refreshPopularExplanations();
         markCurrentChapterRead();
@@ -2232,7 +2421,7 @@ export default function App() {
         text: v.text
       }));
 
-      const response = await fetch('/api/gemini/summarize', {
+      const response = await authenticatedFetch('/api/gemini/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2245,7 +2434,8 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erreur réseau.");
 
-      const summaryResult = data.summary || "Aucun résumé n'a pu être structuré.";
+      const rawSummary = data.summary || "Aucun résumé n'a pu être structuré.";
+      const summaryResult = cleanMarkdownText(rawSummary);
       setChapterSummary(summaryResult);
 
       // Save to IndexedDB Cache
@@ -2301,7 +2491,7 @@ export default function App() {
 
       setActiveExplainVerse(reconstitutedVerse);
       setExegesisTab(tab);
-      setVerseExplanation(cacheItem.content);
+      setVerseExplanation(cleanMarkdownText(cacheItem.content));
       setIsExplanationCached(true);
       setActiveTab('read'); // assure they are in the reader
     } else {
@@ -2314,7 +2504,7 @@ export default function App() {
         setSelectedBook(foundBook);
         setSelectedChapter(chapterNum);
         setActiveTab('read');
-        setChapterSummary(cacheItem.content);
+        setChapterSummary(cleanMarkdownText(cacheItem.content));
         
         // Open summary section or scroll to summary
         setTimeout(() => {
@@ -2828,8 +3018,8 @@ export default function App() {
     currentVerseToSpeakRef.current = index;
 
     const verseObj = chapterVerses[index];
-    // Remove Strong codes from the spoken reading
-    const cleanText = verseObj.text.replace(/\[[HG]\d+\]/g, '').trim();
+    // Remove Strong codes and any markdown markings from the spoken reading
+    const cleanText = cleanTextForSpeech(verseObj.text);
     const textToSpeak = `Verset ${verseObj.verse}. ${cleanText}`;
 
     logTts(`[TTS Debug] Creating new SpeechSynthesisUtterance for verse ${index}. Text length: ${textToSpeak.length}`);
@@ -3470,7 +3660,7 @@ export default function App() {
         content: m.content
       }));
 
-      const response = await fetch('/api/gemini/chat', {
+      const response = await authenticatedFetch('/api/gemini/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3520,6 +3710,70 @@ export default function App() {
       audio: found ? found.audio : undefined,
       emotionAnalysis: found ? found.emotion_analysis : undefined
     };
+  };
+
+  // Verse Highlighting in Reader (Jaune, Vert, Rose) - Persisted to Firestore & localStorage
+  const handleSaveVerseHighlight = async (verse: Verse, colorName: HighlightColor) => {
+    const paletteDef = HIGHLIGHT_PALETTE.find(p => p.id === colorName);
+    const colorBg = paletteDef ? paletteDef.bgRgba : 'rgba(250, 204, 21, 0.35)';
+    const highlightId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+    const newHighlight: VerseHighlight = {
+      id: highlightId,
+      book_id: verse.book_id,
+      book_name: verse.book_name,
+      chapter: verse.chapter,
+      verse: verse.verse,
+      color: colorBg,
+      color_name: colorName,
+      updated_at: new Date().toISOString()
+    };
+
+    // Optimistic local state and localStorage update
+    setVerseHighlights(prev => {
+      const next = { ...prev, [highlightId]: newHighlight };
+      try {
+        localStorage.setItem('bible_verse_highlights', JSON.stringify(next));
+      } catch (e) {
+        console.warn("Error saving highlight to localStorage:", e);
+      }
+      return next;
+    });
+
+    // Save to Firestore under users/{userId}/highlights
+    if (user) {
+      try {
+        const highlightDocRef = doc(db, 'users', user.uid, 'highlights', highlightId);
+        await setDoc(highlightDocRef, cleanFirestoreData(newHighlight));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}/highlights/${highlightId}`);
+      }
+    }
+  };
+
+  const handleDeleteVerseHighlight = async (verse: Verse) => {
+    const highlightId = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+
+    // Optimistic local state and localStorage update
+    setVerseHighlights(prev => {
+      const next = { ...prev };
+      delete next[highlightId];
+      try {
+        localStorage.setItem('bible_verse_highlights', JSON.stringify(next));
+      } catch (e) {
+        console.warn("Error removing highlight from localStorage:", e);
+      }
+      return next;
+    });
+
+    // Delete from Firestore under users/{userId}/highlights
+    if (user) {
+      try {
+        const highlightDocRef = doc(db, 'users', user.uid, 'highlights', highlightId);
+        await deleteDoc(highlightDocRef);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/highlights/${highlightId}`);
+      }
+    }
   };
 
   // Splash Loading database initialization interface
@@ -3613,8 +3867,8 @@ export default function App() {
           </>
         )}
 
-        {/* 1) BARRE DU HAUT FIXE ET VISIBLE SUR TOUTES LES PAGES (STYLE DORÉ/NOIR) */}
-        {!isZenMode && activeTab !== 'read' && (
+        {/* 1) BARRE DU HAUT FIXE (visible sur les pages secondaires hors Accueil et Lecture) */}
+        {!isZenMode && activeTab !== 'read' && activeTab !== 'home' && (
           <TopBar 
             currentPassage={`${selectedBook.name} ${selectedChapter}`}
             onOpenDrawer={handleToggleMenu}
@@ -3859,12 +4113,16 @@ export default function App() {
                           </button>
                           <button
                             onClick={async () => {
-                              if (confirm("Voulez-vous vider tous les chapitres mis en cache localement ?")) {
+                              const confirmed = await appConfirm(
+                                "Voulez-vous vider tous les chapitres mis en cache localement ?",
+                                { title: "Vider le cache hors-ligne", confirmText: "Oui, vider", cancelText: "Annuler", variant: "warning" }
+                              );
+                              if (confirmed) {
                                 await explainCache.clearAll();
                                 refreshCacheStats();
                               }
                             }}
-                            className="w-full py-0.5 text-[8px] font-mono text-center text-red-400/70 hover:text-red-300 hover:underline transition cursor-pointer"
+                            className="w-full py-2 text-xs font-mono text-center text-red-400/80 hover:text-red-300 hover:underline transition cursor-pointer min-h-[44px] flex items-center justify-center"
                           >
                             Vider les caches hors-ligne
                           </button>
@@ -4198,10 +4456,10 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <main className={`flex-1 w-full mx-auto ${activeTab === 'read' ? 'p-0 max-w-none' : 'max-w-7xl px-4 sm:px-6 md:px-8 pt-4'} ${activeTab === 'home' ? 'pb-10 lg:pb-12' : (activeTab === 'read' ? 'pb-0' : 'pb-28 sm:pb-32')} flex flex-col lg:flex-row ${activeTab === 'read' ? 'gap-0' : 'gap-6 lg:gap-8'}`}>
+      <main className={`flex-1 w-full mx-auto ${activeTab === 'read' || activeTab === 'home' ? 'p-0 max-w-none' : 'max-w-7xl px-4 sm:px-6 md:px-8 pt-4'} ${activeTab === 'home' || activeTab === 'read' ? 'pb-0' : 'pb-28 sm:pb-32'} flex flex-col lg:flex-row ${activeTab === 'read' || activeTab === 'home' ? 'gap-0' : 'gap-6 lg:gap-8'}`}>
         
-        {/* SIDEBAR NAVIGATION TAB COLUMN FOR DESKTOP (>= 1024px) */}
-        <aside className={`w-full lg:w-60 shrink-0 ${isZenMode || !isDesktopSidebarOpen || activeTab === 'read' ? 'hidden' : 'hidden lg:flex'} flex-col gap-1.5 text-left font-serif py-1 select-none`}>
+        {/* SIDEBAR NAVIGATION TAB COLUMN FOR DESKTOP (caché par défaut, remplacé par le tiroir ☰) */}
+        <aside className={`w-full lg:w-60 shrink-0 ${isZenMode || !isDesktopSidebarOpen || activeTab === 'read' || activeTab === 'home' ? 'hidden' : 'hidden lg:flex'} flex-col gap-1.5 text-left font-serif py-1 select-none`}>
           <span className="text-[10px] font-mono font-black uppercase text-[#c9a84c] tracking-[0.24em] px-3 mb-2">
             SANCTUAIRE
           </span>
@@ -4304,23 +4562,69 @@ export default function App() {
         {/* CONTAINER SWITCH FOR THE POWERFUL ACTIVE TABS */}
         <div className="flex-1 flex flex-col min-h-[500px]">
           
-          {/* HOME / DASHBOARD GRAPHICAL HUB - BREATHTAKING CONTEMPLATIVE APP HUB */}
+          {/* HOME / DASHBOARD GRAPHICAL HUB */}
           {activeTab === 'home' && (
             <motion.div
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="w-full max-w-[900px] mx-auto p-1 text-left shrink-0"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.25 }}
+              className="flex-1 w-full flex flex-col"
             >
               <ContemplativeHome 
                 onNavigateToTab={(tab) => setActiveTab(tab)}
+                onOpenDrawer={handleToggleMenu}
+                onOpenSearch={() => setIsSearchModalOpen(true)}
                 onOpenSettings={() => setIsSettingsModalOpen(true)}
                 onOpenNavigator={() => setIsNavigatorOpen(true)}
+                onOpenDailyVerse={() => setIsDailyVerseModalOpen(true)}
+                selectedBook={selectedBook}
+                selectedChapter={selectedChapter}
+                onSelectBookAndChapter={(book, chapterNum) => {
+                  if (isSpeaking) {
+                    stopSpeaking();
+                  }
+                  setSelectedBook(book);
+                  setSelectedChapter(chapterNum);
+                  const newPos: ReadingPosition = {
+                    book_id: book.id,
+                    book_name: book.name,
+                    chapter: chapterNum,
+                    verse: 1,
+                    timestamp: new Date().toISOString()
+                  };
+                  setLastReadingPosition(newPos);
+                  try {
+                    localStorage.setItem('bible_last_reading_position', JSON.stringify({
+                      livre: book.name,
+                      book_id: book.id,
+                      book_name: book.name,
+                      chapitre: chapterNum,
+                      chapter: chapterNum,
+                      verset: 1,
+                      verse: 1,
+                      timestamp: newPos.timestamp
+                    }));
+                  } catch (_) {}
+                }}
+                isSpeaking={isSpeaking}
+                isPaused={isPaused}
+                isZenMode={isZenMode}
                 notesCount={notes.length}
                 goalPercent={goalPercent}
                 currentStreak={currentStreak}
                 readingHistory={readingHistory}
                 onNavigateToChapter={handleNavigateChallengeToReader}
-                onPlayAudioCurrentChapter={() => speakVerse(0)}
+                onPlayAudioCurrentChapter={() => {
+                  if (isSpeaking && !isPaused) {
+                    stopSpeaking();
+                  } else if (isSpeaking && isPaused) {
+                    resumeSpeaking();
+                  } else if (loadingVerses || chapterVerses.length === 0) {
+                    autoPlayNextChapterAudioRef.current = true;
+                  } else {
+                    speakVerse(0);
+                  }
+                }}
                 onSelectSanctuaryBg={(bgUrl) => setSanctuaryBgImage(bgUrl)}
                 currentSanctuaryBg={sanctuaryBgImage}
                 onOpenRandomMeditation={() => setIsRandomMeditationOpen(true)}
@@ -4406,6 +4710,9 @@ export default function App() {
                 onDeleteChapterAudio={handleDeleteChapterAudioMeditation}
                 readerColor={readerColor}
                 onSelectReaderColor={handleUpdateReaderColor}
+                highlights={verseHighlights}
+                onSaveHighlight={handleSaveVerseHighlight}
+                onDeleteHighlight={handleDeleteVerseHighlight}
               />
 
                             {/* Interactive Slide-Up panel / bottom tray for Single Verse Exegesis detailed exploration */}
@@ -4594,14 +4901,19 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={() => {
-                    if (window.confirm("Voulez-vous réinitialiser votre session d'étude chrétienne active ?")) {
+                  type="button"
+                  onClick={async () => {
+                    const confirmed = await appConfirm(
+                      "Voulez-vous réinitialiser votre session d'étude chrétienne active ?",
+                      { title: "Réinitialiser la session", confirmText: "Réinitialiser", cancelText: "Annuler" }
+                    );
+                    if (confirmed) {
                       setChatMessages([
                         { role: 'model', content: "Paix! Une nouvelle halte commence. Comment désirez-vous consolider votre théologie aujourd'hui ?" }
                       ]);
                     }
                   }}
-                  className="px-2.5 py-1 hover:bg-red-500/10 hover:text-red-400 border border-[#2e2a1e] rounded-lg text-[10px] font-mono tracking-wider uppercase transition cursor-pointer text-[#6b6355]"
+                  className="min-h-[44px] px-3 py-2 hover:bg-red-500/10 hover:text-red-400 border border-[#2e2a1e] rounded-xl text-xs font-mono tracking-wider uppercase transition cursor-pointer text-[#8c8270] flex items-center justify-center"
                 >
                   Effacer
                 </button>
@@ -4630,7 +4942,14 @@ export default function App() {
                         ? 'bg-[#1a1712] text-luxury-text-primary border border-[#2e2a1e] font-sans'
                         : 'bg-[#0d0b07] text-luxury-text-primary/95 border border-[#2e2a1e]/45 rounded-tl-none font-reading'
                     }`}>
-                      {msg.role === 'user' ? msg.content : cleanBibleMarkdown(msg.content)}
+                      {msg.role === 'user' ? (
+                        msg.content
+                      ) : (
+                        <>
+                          <div>{cleanBibleMarkdown(msg.content)}</div>
+                          <AiDisclaimer />
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -4861,6 +5180,11 @@ export default function App() {
                   onNavigateToWrittenTab={() => setLibrarySubTab('meditations')}
                   onDeleteAudio={handleDeleteChapterAudioMeditation}
                   onRenameAudio={handleRenameChapterAudioMeditation}
+                  onSyncAllToCloud={handleSyncAllAudiosToCloud}
+                  onSyncSingleAudio={handleSyncSingleAudio}
+                  isSyncingCloud={isSyncingAudios}
+                  syncProgress={syncAudioProgress}
+                  userId={user?.uid || null}
                 />
               )}
             </motion.div>
@@ -5269,6 +5593,7 @@ export default function App() {
       <BibleSearchModal
         isOpen={isSearchModalOpen}
         onClose={() => setIsSearchModalOpen(false)}
+        onOpenNavigator={() => setIsNavigatorOpen(true)}
         onSelectVerse={(book, chapter, verseNum) => {
           navigateToScripture({
             livre: book.id,

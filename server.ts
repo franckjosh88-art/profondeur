@@ -1,15 +1,19 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
+import { spawn } from "child_process";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
+import { initializeApp as initAdminApp, getApps as getAdminApps } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
 
 dotenv.config();
 
 const PORT = 3000;
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Initialize GoogleGenAI client lazily or safely
 let ai: GoogleGenAI | null = null;
@@ -28,11 +32,17 @@ if (apiKey) {
   console.warn("⚠️ Warning: GEMINI_API_KEY is not defined in the environment. AI features will require configuration.");
 }
 
-// Resilient wrapper to handle model rate limits or transient load issues (503)
+// -------------------------------------------------------------
+// Consigne Fondamentale de Fidélité Biblique (Imposée à tous les prompts)
+// -------------------------------------------------------------
+const BIBLICAL_FIDELITY_DIRECTIVE = "Reste strictement fidèle au texte biblique fourni. Distingue clairement ce que dit le texte de ce qui est interprétation. N'ajoute aucun fait qui ne figure pas dans le passage. Cite les versets (références précises) à l'appui de chaque affirmation. Quand plusieurs lectures existent dans la tradition chrétienne, présente-les sans trancher entre confessions. Si tu n'es pas certain, dis-le.";
+
+// Wrapper résilient et vérifié pour l'API Gemini
 async function generateGeminiContent(params: {
   contents: any;
   config?: any;
   model?: string;
+  isShortTask?: boolean;
 }) {
   if (!ai) {
     throw new Error("L'API Gemini n'est pas configurée.");
@@ -40,29 +50,42 @@ async function generateGeminiContent(params: {
   
   const originalConfig = params.config || {};
   let systemInstruction = originalConfig.systemInstruction || "";
-  const isJsonMode = originalConfig.responseMimeType === "application/json";
   
-  if (!isJsonMode) {
+  // Ne plus ajouter automatiquement « Écris de manière très concise ».
+  // Garder cette consigne seulement pour les petites tâches (définitions courtes).
+  if (params.isShortTask) {
     if (systemInstruction) {
-      // Inject conciseness instruction to reduce tokens and speed up generation
-      systemInstruction = `${systemInstruction} Écris de manière très concise, synthétique et directe, sans phrase introductive ni conclusion facultative, pour assurer un temps de réponse ultra-rapide.`;
-    } else {
-      systemInstruction = "Écris de manière claire, concise et structurée en français pour un temps de réponse rapide.";
+      systemInstruction = `${systemInstruction} Écris de manière synthétique et directe, sans préambule superflu.`;
     }
   }
 
+  // Température fixée à 0.3 pour limiter les inventions et garantir la fidélité textuelle
+  const temperature = originalConfig.temperature !== undefined ? originalConfig.temperature : 0.3;
+
   const optimizedConfig = {
     ...originalConfig,
+    temperature,
     ...(systemInstruction ? { systemInstruction } : {})
   };
 
-  const candidateModels = params.model 
-    ? [params.model, "gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.8-flash"]
-    : ["gemini-3.6-flash", "gemini-3-flash-preview", "gemini-3.8-flash", "gemini-flash-latest"];
+  // Liste ordonnée de modèles Gemini officiels, vérifiés et supportés
+  const primaryModel = params.model || "gemini-3.8-flash";
+  const candidateModels = Array.from(new Set([
+    primaryModel,
+    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-pro-preview"
+  ]));
 
   let lastError: any = null;
-  for (const modelName of candidateModels) {
+  for (let i = 0; i < candidateModels.length; i++) {
+    const modelName = candidateModels[i];
     try {
+      if (i > 0) {
+        // Un modèle de secours est utilisé : consigner explicitement dans les logs du serveur
+        console.warn(`[Gemini Fallback] Le modèle initial "${candidateModels[0]}" a échoué (${lastError?.message || lastError}). Basculement vers le modèle de secours : "${modelName}"`);
+      }
+
       return await ai.models.generateContent({
         model: modelName,
         contents: params.contents,
@@ -71,15 +94,17 @@ async function generateGeminiContent(params: {
     } catch (error: any) {
       lastError = error;
       const errorStr = String(error?.message || error || "");
-      const isTransientError = 
+      const isTransientOrAvailable = 
         errorStr.includes("503") || 
         errorStr.includes("UNAVAILABLE") || 
         errorStr.includes("demand") || 
         errorStr.includes("Resource has been exhausted") ||
-        errorStr.includes("429");
+        errorStr.includes("429") ||
+        errorStr.includes("not found") ||
+        errorStr.includes("404");
 
-      if (isTransientError) {
-        console.warn(`⚠️ Model ${modelName} busy or unavailable (503/429), trying next candidate...`);
+      if (isTransientOrAvailable) {
+        console.warn(`[Gemini Retry] Modèle "${modelName}" indisponible (${errorStr}), basculement vers le modèle suivant...`);
         continue;
       }
       throw error;
@@ -102,6 +127,350 @@ app.get("/api/health", (req: Request, res: Response) => {
   });
 });
 
+// -------------------------------------------------------------
+// Firebase Admin SDK & Security Configuration
+// -------------------------------------------------------------
+const FIREBASE_ADMIN_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "auspicious-parity-nlkqp";
+const FIRESTORE_DB_ID = process.env.FIRESTORE_DB_ID || process.env.VITE_FIREBASE_DATABASE_ID || "ai-studio-1f341b39-c896-4f00-8ba3-4f9bbd271637";
+const FIRESTORE_API_KEY = process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "";
+
+if (!getAdminApps().length) {
+  try {
+    initAdminApp({
+      projectId: FIREBASE_ADMIN_PROJECT_ID
+    });
+  } catch (adminInitErr) {
+    console.warn("Firebase Admin SDK init warning:", adminInitErr);
+  }
+}
+const adminAuth = getAdminAuth();
+
+// Per-user Rate Limiting Cache
+interface RateLimitEntry {
+  count: number;
+  resetTime: number;
+}
+const userRateLimits = new Map<string, RateLimitEntry>();
+
+function createPerUserRateLimiter(maxRequests: number, windowSeconds: number) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const user = (req as any).user;
+    const key = user?.uid || req.ip || "unknown";
+    const now = Date.now();
+    const windowMs = windowSeconds * 1000;
+
+    let entry = userRateLimits.get(key);
+    if (!entry || now > entry.resetTime) {
+      entry = { count: 1, resetTime: now + windowMs };
+      userRateLimits.set(key, entry);
+      return next();
+    }
+
+    if (entry.count >= maxRequests) {
+      const waitSeconds = Math.max(1, Math.ceil((entry.resetTime - now) / 1000));
+      res.status(429).json({
+        error: `Limite de requêtes atteinte (${maxRequests} requêtes/${windowSeconds}s). Veuillez patienter ${waitSeconds} seconde(s).`,
+        retryAfter: waitSeconds
+      });
+      return;
+    }
+
+    entry.count++;
+    next();
+  };
+}
+
+// Middleware: Authenticate requests using Firebase ID token (Bearer <token> or query ?token=)
+async function verifyFirebaseTokenMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const authHeader = req.headers.authorization;
+  const token = (authHeader && authHeader.startsWith("Bearer "))
+    ? authHeader.substring(7).trim()
+    : (req.query.token as string || null);
+
+  if (!token) {
+    res.status(401).json({ 
+      error: "Authentification requise. Veuillez vous connecter pour accéder à cette fonctionnalité." 
+    });
+    return;
+  }
+
+  try {
+    const decodedToken = await adminAuth.verifyIdToken(token);
+    (req as any).user = decodedToken;
+    next();
+  } catch (tokenErr: any) {
+    console.warn("Échec de vérification du jeton Firebase:", tokenErr?.message || tokenErr);
+    res.status(401).json({ 
+      error: "Jeton de session invalide ou expiré. Veuillez vous reconnecter." 
+    });
+  }
+}
+
+// Apply authentication & per-user rate limiting to all /api/gemini and /api/audio routes
+app.use("/api/gemini", verifyFirebaseTokenMiddleware, createPerUserRateLimiter(45, 60));
+app.use("/api/audio", verifyFirebaseTokenMiddleware, createPerUserRateLimiter(60, 60));
+
+// Audio validation & transcode helpers
+const AUDIO_ID_REGEX = /^[a-zA-Z0-9_-]{1,100}$/;
+function isValidAudioId(audioId: unknown): audioId is string {
+  return typeof audioId === "string" && AUDIO_ID_REGEX.test(audioId);
+}
+
+const AUDIO_CACHE_DIR = "/tmp/audio_cache";
+if (!fs.existsSync(AUDIO_CACHE_DIR)) {
+  try {
+    fs.mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
+  } catch (_) {}
+}
+
+function findCachedAudioFile(audioId: string): string | null {
+  const possibleFiles = [
+    path.join(AUDIO_CACHE_DIR, `${audioId}.mp3`),
+    path.join(AUDIO_CACHE_DIR, `${audioId}.mp4`),
+    path.join(AUDIO_CACHE_DIR, `${audioId}.webm`),
+    path.join(AUDIO_CACHE_DIR, audioId)
+  ];
+  return possibleFiles.find(f => fs.existsSync(f)) || null;
+}
+
+// -------------------------------------------------------------
+// Audio Transcoding & Streaming Endpoints (Secured & Token-Verified)
+// -------------------------------------------------------------
+// Transcode Audio using spawn with array arguments (never execSync with string)
+app.post("/api/audio/upload", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { audioId, mimeType, base64Data, filename } = req.body;
+    if (!isValidAudioId(audioId)) {
+      res.status(400).json({ error: "audioId invalide (format requis : ^[a-zA-Z0-9_-]{1,100}$)" });
+      return;
+    }
+
+    if (!base64Data) {
+      res.status(400).json({ error: "base64Data requis" });
+      return;
+    }
+
+    const rawBuffer = Buffer.from(base64Data, 'base64');
+    let finalBuffer = rawBuffer;
+    let finalMimeType = mimeType || 'audio/webm';
+    let ext = 'mp3';
+
+    // Transcode using ffmpeg via spawn with argument array to MP3 (48kbps mono, 44.1kHz)
+    const needsTranscode = finalMimeType.includes('webm') || finalMimeType.includes('ogg') || (!finalMimeType.includes('mp4') && !finalMimeType.includes('aac') && !finalMimeType.includes('mpeg') && !finalMimeType.includes('mp3'));
+    if (needsTranscode) {
+      const tempInput = path.join(AUDIO_CACHE_DIR, `${audioId}_temp.webm`);
+      const tempOutput = path.join(AUDIO_CACHE_DIR, `${audioId}.mp3`);
+      try {
+        fs.writeFileSync(tempInput, rawBuffer);
+        await new Promise<void>((resolve, reject) => {
+          const ffmpegProcess = spawn("ffmpeg", [
+            "-y",
+            "-i", tempInput,
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-b:a", "48k",
+            "-ac", "1",
+            "-ar", "44100",
+            tempOutput
+          ], { stdio: "ignore" });
+
+          ffmpegProcess.on("error", (err) => reject(err));
+          ffmpegProcess.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`FFmpeg exited with code ${code}`));
+          });
+        });
+
+        if (fs.existsSync(tempOutput) && fs.statSync(tempOutput).size > 0) {
+          finalBuffer = fs.readFileSync(tempOutput);
+          finalMimeType = 'audio/mpeg';
+          ext = 'mp3';
+        }
+      } catch (transcodeErr) {
+        console.warn("FFmpeg transcode fallback to raw:", transcodeErr);
+      } finally {
+        if (fs.existsSync(tempInput)) {
+          try { fs.unlinkSync(tempInput); } catch (_) {}
+        }
+      }
+    } else if (finalMimeType.includes('mp4') || finalMimeType.includes('aac') || finalMimeType.includes('m4a')) {
+      finalMimeType = 'audio/mp4';
+      ext = 'mp4';
+    } else if (finalMimeType.includes('mpeg') || finalMimeType.includes('mp3')) {
+      finalMimeType = 'audio/mpeg';
+      ext = 'mp3';
+    }
+
+    // Save strictly to ephemeral cache /tmp/audio_cache (never to public/ or data/)
+    const targetFile = path.join(AUDIO_CACHE_DIR, `${audioId}.${ext}`);
+    try { fs.writeFileSync(targetFile, finalBuffer); } catch (_) {}
+
+    const finalBase64 = finalBuffer.toString('base64');
+
+    res.json({
+      success: true,
+      audioId,
+      audioUrl: `/api/audio/${audioId}`,
+      mimeType: finalMimeType,
+      base64Data: finalBase64,
+      sizeBytes: finalBuffer.length
+    });
+  } catch (err: any) {
+    console.error("Audio upload error:", err);
+    res.status(500).json({ error: err.message || "Erreur upload audio" });
+  }
+});
+
+// Check if audio exists in ephemeral cache
+app.get("/api/audio/:audioId/info", (req: Request, res: Response): void => {
+  const { audioId } = req.params;
+  if (!isValidAudioId(audioId)) {
+    res.status(400).json({ error: "audioId invalide (format requis : ^[a-zA-Z0-9_-]{1,100}$)" });
+    return;
+  }
+
+  const targetFile = findCachedAudioFile(audioId);
+  if (!targetFile) {
+    res.status(404).json({ exists: false, error: "Fichier manquant, ré-importer", missing: true, audioId });
+    return;
+  }
+  const stat = fs.statSync(targetFile);
+  res.json({
+    exists: true,
+    audioId,
+    sizeBytes: stat.size,
+    ext: path.extname(targetFile),
+    audioUrl: `/api/audio/${audioId}`
+  });
+});
+
+// Stream Audio from ephemeral cache with HTTP 206 Partial Content Range support
+app.get("/api/audio/:audioId", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { audioId } = req.params;
+    if (!isValidAudioId(audioId)) {
+      res.status(400).json({ error: "audioId invalide (format requis : ^[a-zA-Z0-9_-]{1,100}$)" });
+      return;
+    }
+
+    const targetFile = findCachedAudioFile(audioId);
+    if (!targetFile) {
+      res.status(404).json({ 
+        error: "Fichier manquant dans le cache, lecture directe depuis Cloud Storage requise",
+        missing: true,
+        audioId
+      });
+      return;
+    }
+
+    const stat = fs.statSync(targetFile);
+    const fileSize = stat.size;
+    const ext = path.extname(targetFile).toLowerCase();
+    let mimeType = 'audio/mpeg';
+    if (ext === '.mp4' || ext === '.m4a') mimeType = 'audio/mp4';
+    if (ext === '.webm') mimeType = 'audio/webm';
+
+    const range = req.headers.range;
+    const isDownload = req.query.download === 'true';
+    const dlFilename = (req.query.filename as string) || `${audioId}${ext}`;
+    const cleanFilename = dlFilename.endsWith(ext) ? dlFilename : `${dlFilename}${ext}`;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      let start = parseInt(parts[0], 10);
+      let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+      if (isNaN(start)) {
+        start = Math.max(0, fileSize - end);
+        end = fileSize - 1;
+      }
+
+      if (start >= fileSize || end >= fileSize || start > end) {
+        res.writeHead(416, {
+          'Content-Range': `bytes */${fileSize}`,
+          'Accept-Ranges': 'bytes'
+        });
+        res.end();
+        return;
+      }
+
+      const chunksize = (end - start) + 1;
+      const file = fs.createReadStream(targetFile, { start, end });
+      const headers: Record<string, any> = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': mimeType,
+        'Cache-Control': 'private, max-age=3600',
+      };
+      if (isDownload) {
+        headers['Content-Disposition'] = `attachment; filename="${encodeURIComponent(cleanFilename)}"`;
+      }
+      res.writeHead(206, headers);
+      file.pipe(res);
+    } else {
+      const headers: Record<string, any> = {
+        'Content-Length': fileSize,
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=3600',
+      };
+      if (isDownload) {
+        headers['Content-Disposition'] = `attachment; filename="${encodeURIComponent(cleanFilename)}"`;
+      }
+      res.writeHead(200, headers);
+      fs.createReadStream(targetFile).pipe(res);
+    }
+  } catch (err: any) {
+    console.error("Audio stream error:", err);
+    res.status(500).json({ error: err.message || "Erreur streaming audio" });
+  }
+});
+
+// Delete audio from ephemeral cache
+app.delete("/api/audio/:audioId", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { audioId } = req.params;
+    if (!isValidAudioId(audioId)) {
+      res.status(400).json({ error: "audioId invalide (format requis : ^[a-zA-Z0-9_-]{1,100}$)" });
+      return;
+    }
+
+    const possibleFiles = [
+      path.join(AUDIO_CACHE_DIR, `${audioId}.mp3`),
+      path.join(AUDIO_CACHE_DIR, `${audioId}.mp4`),
+      path.join(AUDIO_CACHE_DIR, `${audioId}.webm`),
+      path.join(AUDIO_CACHE_DIR, audioId)
+    ];
+
+    possibleFiles.forEach(f => {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch (_) {}
+      }
+    });
+
+    res.json({ success: true, audioId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Erreur suppression audio" });
+  }
+});
+
+// Helper server-side markdown cleaner to sanitize AI responses
+function cleanMarkdownServer(text: string | null | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/^[-*_]{3,}\s*$/gm, '')
+    .replace(/^#+\s*(.*?)\s*$/gm, '$1')
+    .replace(/^[\*\-]\s*\*\*(.*?)\*\*/gm, '• $1')
+    .replace(/^[\*\-]\s+/gm, '• ')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/(^|[^\*])\*(?!\*)(.*?)\*(?!\*)/g, '$1$2')
+    .replace(/(^|[^_])_(?!_)(.*?)(?!_)_/g, '$1$2')
+    .replace(/[\*#_]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // Explain a verse
 app.post("/api/gemini/explain", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -116,21 +485,25 @@ app.post("/api/gemini/explain", async (req: Request, res: Response): Promise<voi
     }
 
     const prompt = `Voici le verset "${verseText}" correspondant à la référence "${reference || 'Inconnue'}" dans le livre "${bookName || 'Inconnu'}".
-Explique ce verset en détail avec le plan suivant:
-1. Contexte historique et théologique de ce passage.
-2. Sens et explication théologique des termes clés ou des concepts du texte original (grec/hébreu si approprié).
+Explique ce verset de manière complète, approfondie mais claire selon le plan suivant :
+1. Contexte historique et littéraire du passage.
+2. Sens et explication théologique des termes clés ou des concepts du texte original.
 3. Application concrète et leçon pratique pour notre vie quotidienne aujourd'hui.
 
-Reste toujours constructif, bienveillant et respectueux des différentes perspectives chrétiennes. Réponds en français de manière claire et bien structurée.`;
+CONSIGNES STRICTES :
+- ${BIBLICAL_FIDELITY_DIRECTIVE}
+- N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris les titres de section sur une ligne seule, suivie de phrases ou de lignes simples.
+- Fournis une réponse complète mais claire, sans précipitation ni coupure.`;
 
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
-        systemInstruction: "Tu es un assistant biblique érudit, sage et bienveillant. Tu aides à comprendre la Bible Louis Segond en français.",
+        temperature: 0.3,
+        systemInstruction: `Tu es un assistant biblique érudit, sage et bienveillant. Tu aides à comprendre la Bible Louis Segond en français. ${BIBLICAL_FIDELITY_DIRECTIVE} Fournis une réponse complète mais claire. N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris les titres de section sur une ligne seule, suivie de phrases ou de lignes simples.`,
       }
     });
 
-    res.json({ explanation: response.text });
+    res.json({ explanation: cleanMarkdownServer(response.text) });
   } catch (error: any) {
     console.error("Error in explain endpoint:", error);
     res.status(500).json({ error: error.message || "Erreur de communication avec l'assistant biblique." });
@@ -155,19 +528,25 @@ app.post("/api/gemini/summarize", async (req: Request, res: Response): Promise<v
       : "Aucun texte complet fourni localement.";
 
     const prompt = `Résume le chapitre ${chapterNum} du livre de ${bookName}.
-Voici le texte ou le contexte de ce chapitre:
+Voici le texte ou le contexte de ce chapitre :
 ${versesContent}
 
-Explique les thèmes majeurs abordés dans ce chapitre, les personnages principaux et comment ce chapitre s'insère dans le reste du plan biblique. Rédige en français sous forme de points clés faciles à lire.`;
+Explique de manière complète mais claire les thèmes majeurs abordés dans ce chapitre, les personnages ou événements clés, et comment ce chapitre s'insère fidèlement dans le reste du plan biblique.
+
+CONSIGNES STRICTES :
+- ${BIBLICAL_FIDELITY_DIRECTIVE}
+- N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris les titres de section sur une ligne seule, suivie de phrases ou de lignes simples.
+- Fournis une réponse complète mais claire.`;
 
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
-        systemInstruction: "Tu es un théologien spécialiste de la Bible en français. Tu synthétises des chapitres de manière claire, concise et inspirante.",
+        temperature: 0.3,
+        systemInstruction: `Tu es un théologien spécialiste de la Bible en français. Tu synthétises des chapitres de manière fidèle, complète mais claire. ${BIBLICAL_FIDELITY_DIRECTIVE} N'utilise aucun symbole Markdown.`,
       }
     });
 
-    res.json({ summary: response.text });
+    res.json({ summary: cleanMarkdownServer(response.text) });
   } catch (error: any) {
     console.error("Error in summarize endpoint:", error);
     res.status(500).json({ error: error.message || "Erreur lors du résumé du chapitre." });
@@ -196,21 +575,24 @@ app.post("/api/gemini/analyze-notes", async (req: Request, res: Response): Promi
     
 ${notesSummaryText}
 
-Effectue une analyse spirituelle, théologique et pastorale de ces notes sous la forme d'un magnifique rapport bienveillant (en français) comportant :
-1. **Synthèse et Thèmes Dominants** : Identifie les principaux thèmes spirituels qui émergent de ces notes (p.ex. la grâce, la persévérance, l'écoute, les doutes, etc.).
-2. **Encouragement Floral Pastoral** : Offre une parole d'édification chaleureuse et fraternelle pour encourager l'étudiant dans ses recherches.
-3. **Versets d'Approfondissement Recommandés** : Suggère 2 ou 3 autres passages bibliques Louis Segond pertinents en rapport avec sa réflexion actuelle pour nourrir sa foi.
+Effectue une analyse spirituelle, théologique et pastorale de ces notes sous la forme d'un rapport bienveillant (en français) comportant :
+1. Synthèse et thèmes dominants : Identifie les principaux thèmes spirituels qui émergent de ces notes.
+2. Encouragement pastoral : Offre une parole d'édification fraternelle pour encourager l'étudiant dans ses recherches.
+3. Versets d'approfondissement recommandés : Suggère 2 ou 3 autres passages bibliques Louis Segond pertinents en rapport direct avec sa réflexion.
 
-Sois inspirant, érudit et profondément réconfortant.`;
+CONSIGNES STRICTES :
+- ${BIBLICAL_FIDELITY_DIRECTIVE}
+- N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris les titres de section sur une ligne seule, suivie de phrases ou de lignes simples.`;
 
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
-        systemInstruction: "Tu es un guide spirituel, mentor de théologie et pasteur bienveillant. Tu aides à synthétiser et encourager les croyants dans leur étude approfondie des écritures.",
+        temperature: 0.3,
+        systemInstruction: `Tu es un guide spirituel, mentor de théologie et pasteur bienveillant. ${BIBLICAL_FIDELITY_DIRECTIVE} N'utilise aucun symbole Markdown.`,
       }
     });
 
-    res.json({ analysis: response.text });
+    res.json({ analysis: cleanMarkdownServer(response.text) });
   } catch (error: any) {
     console.error("Error in analyze-notes endpoint:", error);
     res.status(500).json({ error: error.message || "Erreur lors de la génération de la synthèse spirituelle." });
@@ -235,21 +617,24 @@ app.post("/api/gemini/deepen-note", async (req: Request, res: Response): Promise
     
 "${note}"
 
-Fournis un approfondissement théologique et philologique approfondi en français basé sur cette note :
-1. **Éclairage Théologique & Exégèse** : Apporte d'autres vérités bibliques ou doctrinaires qui complètent sa réflexion. Offre des pistes sémantiques ou historiques.
-2. **Étude linguistique (greg/hébreu)** : Si applicable, mentionne une ou deux racines d'origine significatives en hébreu ou en grec qui s'y rapportent.
-3. **Piste de Prière ou de Méditation** : Donne une prière courte d'inspiration ou une question d'introspection spirituelle liée à sa note.
+Fournis un approfondissement théologique et philologique complet en français basé sur cette note :
+1. Éclairage théologique et exégèse : Apporte d'autres vérités bibliques ou doctrinaires qui complètent sa réflexion avec citations précises.
+2. Étude linguistique (grec/hébreu) : Si applicable, mentionne une ou deux racines d'origine significatives en hébreu ou en grec qui s'y rapportent.
+3. Piste de prière ou de méditation : Donne une prière courte d'inspiration ou une question d'introspection spirituelle liée à sa note.
 
-Reste rigoureux, érudit et encourageant.`;
+CONSIGNES STRICTES :
+- ${BIBLICAL_FIDELITY_DIRECTIVE}
+- N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris les titres de section sur une ligne seule, suivie de phrases ou de lignes simples.`;
 
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
-        systemInstruction: "Tu es un assistant universitaire en théologie et langues bibliques. Tu aides à enrichir et approfondir les pensées des étudiants.",
+        temperature: 0.3,
+        systemInstruction: `Tu es un assistant universitaire en théologie et langues bibliques. ${BIBLICAL_FIDELITY_DIRECTIVE} N'utilise aucun symbole Markdown.`,
       }
     });
 
-    res.json({ deepenedContent: response.text });
+    res.json({ deepenedContent: cleanMarkdownServer(response.text) });
   } catch (error: any) {
     console.error("Error in deepen-note endpoint:", error);
     res.status(500).json({ error: error.message || "Erreur lors de l'approfondissement de la note." });
@@ -275,20 +660,21 @@ app.post("/api/gemini/analyze-emotion", async (req: Request, res: Response): Pro
 "${noteText}"
 
 Analyse avec sensibilité, empathie et profondeur spirituelle le ton émotionnel qui s'en dégage.
+${BIBLICAL_FIDELITY_DIRECTIVE}
+
 Tu dois renvoyer STRICTEMENT un objet JSON structuré en français contenant :
 1. "detectedEmotion" : Un titre court décrivant l'ambiance émotionnelle repérée (p.ex. "Frustration & Doute", "Gratitude & Joie pure", "Recherche de paix & Inquiétude", "Sérénité & Contemplation").
 2. "emotionalSummary" : Un résumé de 1 à 2 phrases compatissantes sur ce qui touche l'utilisateur dans sa réflexion.
 3. "pastoralEncouragement" : Un paragraphe d'accompagnement spirituel fraternel, pastoral et inspirant pour fortifier et élever l'esprit de l'utilisateur.
 4. "suggestedVerses" : Un tableau d'exactement 2 ou 3 passages bibliques (de préférence des PSAUMES pour l'expression de l'âme, ou d'autres versets d'encouragement clairs), contenant pour chacun :
-   - reference : la référence biblique (ex : "Psaumes 34:18")
+   - reference : la référence biblique exacte (ex : "Psaumes 34:18")
    - text : le verset ou la citation clé en français Louis Segond
-   - reason : une phrase expliquant pourquoi cette parole guérit, console ou répond précisément à sa situation d'âme.
-
-Assure-toi de l'authenticité des écritures de la Bible Segond sans aucune invention.`;
+   - reason : une phrase expliquant pourquoi cette parole guérit, console ou répond précisément à sa situation d'âme.`;
 
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
+        temperature: 0.3,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -311,7 +697,7 @@ Assure-toi de l'authenticité des écritures de la Bible Segond sans aucune inve
           },
           required: ["detectedEmotion", "emotionalSummary", "pastoralEncouragement", "suggestedVerses"]
         },
-        systemInstruction: "Tu es un directeur d'âme, conseiller pastoral et bibliste doté d'une profonde empathie chrétienne. Tu analyses les écrits intimes pour réconforter par la Parole sainte.",
+        systemInstruction: `Tu es un directeur d'âme, conseiller pastoral et bibliste doté d'une profonde empathie chrétienne. ${BIBLICAL_FIDELITY_DIRECTIVE}`,
       }
     });
 
@@ -336,13 +722,10 @@ app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Adapt chat structure or construct a combined chat prompt
-    // For simplicity and maximum control, we can construct the contents chain:
     const systemInstruction = 
       "Tu es un conseiller biblique bienveillant, érudit et profondément pastoral. " +
-      "Tu aides les utilisateurs de l'application 'Bible Mobile' à comprendre les saintes écritures, à trouver du réconfort, " +
-      "et à explorer la Bible Louis Segond en français. Réponds de manière constructive, " +
-      "cite toujours des passages ou références bibliques précis quand tu affirmes quelque chose, et reste fraternel.";
+      "Tu aides les utilisateurs de l'application 'Bible Mobile' à comprendre les saintes écritures de la Bible Louis Segond en français. " +
+      BIBLICAL_FIDELITY_DIRECTIVE;
 
     // Map history to contents
     const contents: any[] = [];
@@ -364,6 +747,7 @@ app.post("/api/gemini/chat", async (req: Request, res: Response): Promise<void> 
     const response = await generateGeminiContent({
       contents: contents,
       config: {
+        temperature: 0.3,
         systemInstruction: systemInstruction,
       }
     });
@@ -787,44 +1171,8 @@ app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promis
       return;
     }
 
-    // Fallback: If chapter is not present in static local json, generate/retrieve exact Louis Segond 1910 verses via Gemini AI!
-    if (ai) {
-      const response = await generateGeminiContent({
-        contents: `Fournis le texte intégral exact du chapitre ${book.name} ${chapterNum} en français dans la version Louis Segond 1910 (LSG). Tous les versets doivent être inclus avec leur numéro exact et leur texte intégral en français.`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              verses: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    verse: { type: Type.INTEGER },
-                    text: { type: Type.STRING }
-                  },
-                  required: ["verse", "text"]
-                }
-              }
-            },
-            required: ["verses"]
-          }
-        }
-      });
-
-      const parsed = JSON.parse(response.text);
-      if (parsed && Array.isArray(parsed.verses) && parsed.verses.length > 0) {
-        res.json({
-          bookName: book.name,
-          chapter: Number(chapterNum),
-          verses: parsed.verses
-        });
-        return;
-      }
-    }
-
-    res.status(404).json({ error: `Chapitre ${chapterNum} pour le livre "${bookName}" introuvable dans le corpus.` });
+    // If chapter is absent from local static corpus, return a clear error (no AI generation of Scripture)
+    res.status(404).json({ error: `Le chapitre ${chapterNum} du livre "${book.name}" n'est pas disponible dans le fichier local de la Bible.` });
   } catch (error: any) {
     console.error("Error fetching verses from static corpus:", error);
     res.status(500).json({ error: `Impossible de récupérer le chapitre ${req.body.chapterNum} de ${req.body.bookName}: ` + (error.message || "") });
@@ -848,11 +1196,13 @@ app.post("/api/gemini/similar-verses", async (req: Request, res: Response): Prom
     const sourceRef = reference || `${bookName} ${chapter}:${verse}`;
 
     // System prompt and instructions strictly as specified by the user
-    const systemInstruction = "Tu es un assistant d'étude biblique. À partir du verset donné, propose 5 versets bibliques réels qui traitent du même thème, le complètent ou l'éclairent. Réponds uniquement en JSON valide selon le format demandé, en français, sans texte supplémentaire. N'invente jamais de référence.";
+    const systemInstruction = `Tu es un assistant d'étude biblique. À partir du verset donné, propose 5 versets bibliques réels qui traitent du même thème, le complètent ou l'éclairent. ${BIBLICAL_FIDELITY_DIRECTIVE} Réponds uniquement en JSON valide selon le format demandé, en français, sans texte supplémentaire. N'invente jamais de référence.`;
 
     const userPrompt = `Voici le verset source :
 Référence : "${sourceRef}"
 Texte : "${verseText || ''}"
+
+${BIBLICAL_FIDELITY_DIRECTIVE}
 
 Propose 5 versets bibliques réels complémentaires, parallèles, contrastes ou accomplissements.
 Réponds STRICTEMENT sous ce format JSON :
@@ -872,6 +1222,7 @@ Chaque type_lien doit être l'un de : "Parallèle", "Accomplissement", "Éclaira
       contents: userPrompt,
       model: "gemini-3.8-flash",
       config: {
+        temperature: 0.3,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -938,6 +1289,9 @@ app.post("/api/gemini/compare-verse", async (req: Request, res: Response): Promi
     const prompt = `Génère des traductions et versions comparables pour le verset biblique: "${reference}".
 Le texte fourni pour la version Louis Segond 1910 est: "${originalText || ''}".
 
+CONSIGNE STRICTE :
+${BIBLICAL_FIDELITY_DIRECTIVE}
+
 Tu dois renvoyer STRICTEMENT un objet JSON contenant:
 - reference: "${reference}"
 - translations: un tableau d'objets. Chaque objet contient:
@@ -952,6 +1306,7 @@ Génère des traductions très exactes caractéristiques des écritures sacrées
     const response = await generateGeminiContent({
       contents: prompt,
       config: {
+        temperature: 0.3,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -974,7 +1329,7 @@ Génère des traductions très exactes caractéristiques des écritures sacrées
           },
           required: ["reference", "translations"]
         },
-        systemInstruction: "Tu es un serveur théologique fournissant des données de comparaison de textes bibliques d'une fidélité académique absolue sous forme JSON.",
+        systemInstruction: `Tu es un serveur théologique fournissant des données de comparaison de textes bibliques d'une fidélité académique absolue sous forme JSON. ${BIBLICAL_FIDELITY_DIRECTIVE}`,
       }
     });
 
@@ -1003,6 +1358,9 @@ app.post("/api/gemini/dictionary", async (req: Request, res: Response): Promise<
     const prompt = `Génère une définition théologique et une fiche encyclopédique de haute précision pour le terme biblique: "${query}"${bookName ? ` (dans le contexte du livre de ${bookName})` : ""}.
 Il peut s'agir d'un personnage (ex: Moïse, Paul de Tarse), d'un lieu (ex: Jérusalem, Sodome), ou d'un événement / concept théologique (ex: L'Exode, La Pâque, La Transfiguration).
 
+CONSIGNE STRICTE :
+${BIBLICAL_FIDELITY_DIRECTIVE}
+
 Tu dois renvoyer STRICTEMENT un objet JSON structuré contenant:
 - term: le nom propre ou concept recherché (ex: "${query}")
 - category: une chaîne de caractères parmi ["personne", "lieu", "evenement", "notion"]
@@ -1017,7 +1375,9 @@ Sois rigoureux intellectuellement et respectueux de la théologie chrétienne et
 
     const response = await generateGeminiContent({
       contents: prompt,
+      isShortTask: true,
       config: {
+        temperature: 0.3,
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -1042,7 +1402,7 @@ Sois rigoureux intellectuellement et respectueux de la théologie chrétienne et
             "shortDefinition", "detailedDescription", "scriptureReferences", "relatedTerms"
           ]
         },
-        systemInstruction: "Tu es un bibliste expert et directeur de thèse de théologie sacrée fournissant des descriptions encyclopédiques académiques sous forme JSON.",
+        systemInstruction: `Tu es un bibliste expert et directeur de thèse de théologie sacrée fournissant des descriptions encyclopédiques académiques sous forme JSON. ${BIBLICAL_FIDELITY_DIRECTIVE}`,
       }
     });
 

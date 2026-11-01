@@ -11,6 +11,7 @@ import {
 } from '../data/bibleData';
 import { Verse, BookmarkFolder } from '../types/bible';
 import { VerseShareModal } from './VerseShareModal';
+import { cleanTextForSpeech } from '../lib/bibleFormatter';
 import { 
   SpiritualNote, 
   loadSpiritualNotesFromStorage, 
@@ -199,8 +200,8 @@ export const MeditationCard: React.FC<MeditationCardProps> = ({
     }
 
     window.speechSynthesis.cancel();
-    const cleanVerse = currentVerse.text.replace(/\[[HG]\d+\]/g, '');
-    const toSpeak = `${currentVerse.book_name}, chapitre ${currentVerse.chapter}, verset ${currentVerse.verse}. ${cleanVerse}. Méditation : ${meditation.contemplationPrompt}. Prière : ${meditation.guidedPrayer}`;
+    const rawToSpeak = `${currentVerse.book_name}, chapitre ${currentVerse.chapter}, verset ${currentVerse.verse}. ${currentVerse.text}. Méditation : ${meditation.contemplationPrompt}. Prière : ${meditation.guidedPrayer}`;
+    const toSpeak = cleanTextForSpeech(rawToSpeak);
 
     const utterance = new SpeechSynthesisUtterance(toSpeak);
     utterance.lang = 'fr-FR';

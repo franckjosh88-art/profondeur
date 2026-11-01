@@ -33,6 +33,7 @@ import { ReadingPlan, PlanUserProgress, ReadingPlanDay } from '../types/challeng
 import { BOOKS } from '../data/bibleData';
 import { ChallengeShareModal } from './ChallengeShareModal';
 import { AiReadingPlanModal } from './AiReadingPlanModal';
+import { appAlert, appConfirm } from '../utils/dialog';
 
 interface ReadingChallengesProps {
   readingHistory: ReadingHistory[];
@@ -407,16 +408,25 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   };
 
   // Quit/Delete progress of a plan
-  const quitPlan = (planId: string) => {
+  const quitPlan = async (planId: string) => {
     const isCustomOrAi = customPlans.some(p => p.id === planId);
     if (isCustomOrAi) {
-      const option = window.confirm("Souhaitez-vous abandonner ce plan personnalisé ? Ses progrès seront réinitialisés. Voulez-vous également le supprimer définitivement ?");
+      const option = await appConfirm(
+        "Souhaitez-vous abandonner ce plan personnalisé ? Ses progrès seront réinitialisés. Voulez-vous également le supprimer définitivement ?",
+        { title: "Abandonner le plan", confirmText: "Oui, supprimer", cancelText: "Annuler" }
+      );
       if (option) {
         const updatedCustom = customPlans.filter(p => p.id !== planId);
         saveCustomPlans(updatedCustom);
+      } else {
+        return;
       }
     } else {
-      if (!window.confirm("Êtes-vous sûr de vouloir abandonner ce défi ? Vos progrès seront réinitialisés pour ce plan.")) {
+      const confirmed = await appConfirm(
+        "Êtes-vous sûr de vouloir abandonner ce défi ? Vos progrès seront réinitialisés pour ce plan.",
+        { title: "Abandonner le défi", confirmText: "Abandonner", cancelText: "Conserver" }
+      );
+      if (!confirmed) {
         return;
       }
     }
@@ -470,14 +480,14 @@ export const ReadingChallenges: React.FC<ReadingChallengesProps> = ({
   };
 
   // Submit manual custom plan handler
-  const handleCreateCustomPlan = (e: React.FormEvent) => {
+  const handleCreateCustomPlan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customTitle.trim()) {
-      alert("Veuillez saisir un titre pour votre plan.");
+      await appAlert("Veuillez saisir un titre pour votre plan.", "Titre requis");
       return;
     }
     if (selectedCustomBookIds.length === 0) {
-      alert("Veuillez sélectionner au moins un livre à inclure dans votre programme.");
+      await appAlert("Veuillez sélectionner au moins un livre à inclure dans votre programme.", "Sélection de livres requise");
       return;
     }
 

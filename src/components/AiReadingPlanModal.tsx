@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { authenticatedFetch } from '../lib/apiClient';
 import { 
   Sparkles, 
   X, 
@@ -75,7 +76,7 @@ export const AiReadingPlanModal: React.FC<AiReadingPlanModalProps> = ({
     setError(null);
 
     try {
-      const response = await fetch('/api/gemini/generate-reading-plan', {
+      const response = await authenticatedFetch('/api/gemini/generate-reading-plan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

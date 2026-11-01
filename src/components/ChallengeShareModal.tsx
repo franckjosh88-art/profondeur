@@ -5,6 +5,7 @@ import {
   Sparkles, Award, Star, Trophy, RefreshCw, Layers
 } from 'lucide-react';
 import { ReadingPlan } from '../types/challenges';
+import { appAlert } from '../utils/dialog';
 
 interface ChallengeShareModalProps {
   plan: ReadingPlan;
@@ -467,7 +468,7 @@ export const ChallengeShareModal: React.FC<ChallengeShareModalProps> = ({
       link.click();
     } catch (e) {
       console.error("Erreur de téléchargement : ", e);
-      alert("Une erreur s'est produite lors de l'encodage de l'image.");
+      appAlert("Une erreur s'est produite lors de l'encodage de l'image.", "Téléchargement d'image");
     }
   };
 

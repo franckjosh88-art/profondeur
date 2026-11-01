@@ -6,8 +6,10 @@ import {
   X, ChevronDown, Check, Layers
 } from 'lucide-react';
 import { explainCache } from '../utils/indexedDBCache';
+import { authenticatedFetch } from '../lib/apiClient';
 import { BOOKS } from '../data/bibleData';
 import { BOOK_DICTIONARY_ENTITIES } from '../data/bookDictionaryEntities';
+import { AiDisclaimer } from './AiDisclaimer';
 
 interface DictionaryResult {
   term: string;
@@ -105,7 +107,7 @@ export const BibleDictionary: React.FC<BibleDictionaryProps> = ({
         }
       }
 
-      const response = await fetch('/api/gemini/dictionary', {
+      const response = await authenticatedFetch('/api/gemini/dictionary', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -578,6 +580,7 @@ export const BibleDictionary: React.FC<BibleDictionaryProps> = ({
                   <div className="font-sans text-[12.5px] leading-relaxed text-luxury-text-primary space-y-3 whitespace-pre-line text-justify">
                     {result.detailedDescription}
                   </div>
+                  <AiDisclaimer />
                 </div>
               </div>
 

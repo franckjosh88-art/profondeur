@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { FavoriteVerse } from '../types/bible';
 import { resolveStrictFrenchVoice } from '../utils/frenchTts';
+import { cleanTextForSpeech } from '../lib/bibleFormatter';
 
 interface MemorizeModuleProps {
   favorites: FavoriteVerse[];
@@ -330,7 +331,7 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
     // Stop any ongoing speech
     window.speechSynthesis.cancel();
     
-    const textToSpeak = currentVerse.text;
+    const textToSpeak = cleanTextForSpeech(currentVerse.text);
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     
     // Read preferences from localStorage

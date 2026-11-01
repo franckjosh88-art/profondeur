@@ -1,15 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
-  ChevronDown, MoreVertical, ChevronLeft, ChevronRight, Volume2, 
+  ChevronDown, MoreVertical, ChevronLeft, ChevronRight, Volume2, VolumeX,
   Pause, Check, Bookmark, Copy, Share2, FileText, 
   Search, Sparkles, X, Dices, ScrollText, Mic, Clock, 
   BookOpen, Home, Loader2, Palette
 } from 'lucide-react';
-import { Verse, Book, VerseNote, FavoriteVerse, ChapterMeditation, ChapterAudioMeditation } from '../types/bible';
+import { Verse, Book, VerseNote, FavoriteVerse, ChapterMeditation, ChapterAudioMeditation, VerseHighlight, HighlightColor, HIGHLIGHT_PALETTE } from '../types/bible';
+import { cleanMarkdownText, cleanTextForSpeech } from '../lib/bibleFormatter';
+import { AiTextRenderer } from './AiTextRenderer';
 import { VerseShareModal } from './VerseShareModal';
 import { VerseStudyPanel } from './VerseStudyPanel';
 import { ChapterNoteSection } from './ChapterNoteSection';
 import { ThemeSelectionModal } from './ThemeSelectionModal';
+import { VerseHighlightMenu } from './VerseHighlightMenu';
 import { 
   ReaderColorId, 
   getReaderPreset, 
@@ -72,6 +75,9 @@ export interface PureBibleReaderProps {
   onDeleteChapterAudio?: (audioId: string) => Promise<void> | void;
   readerColor?: string;
   onSelectReaderColor?: (color: ReaderColorId | string) => void;
+  highlights?: Record<string, VerseHighlight | string>;
+  onSaveHighlight?: (verse: Verse, color: HighlightColor) => Promise<void> | void;
+  onDeleteHighlight?: (verse: Verse) => Promise<void> | void;
 }
 
 export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
@@ -117,6 +123,9 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   onDeleteChapterAudio,
   readerColor: propReaderColor,
   onSelectReaderColor,
+  highlights: propHighlights,
+  onSaveHighlight,
+  onDeleteHighlight,
 }) => {
   // Selected verse unique ID for active study panel (e.g. "1_1_1")
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null);
@@ -162,7 +171,24 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   
   // Summary card copy state & appending to note
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false);
+  const [isSpeakingSummary, setIsSpeakingSummary] = useState<boolean>(false);
   const [textToAppend, setTextToAppend] = useState<string | null>(null);
+
+  // Stop summary speech on unmount or when chapter / summary changes
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSpeakingSummary && typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      setIsSpeakingSummary(false);
+    }
+  }, [selectedBook.id, selectedChapter, chapterSummaryText]);
 
   // Limites de navigation par chapitre (désactivation des flèches)
   const isFirstChapter = selectedChapter <= 1;
@@ -233,8 +259,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   const endSentinelRef = useRef<HTMLDivElement | null>(null);
   const validatedThisChapterRef = useRef<string | null>(null);
 
-  // Verses highlights persisted in localStorage
-  const [highlights, setHighlights] = useState<Record<string, string>>(() => {
+  // Verses highlights: use prop if supplied, else fallback to localStorage
+  const [localHighlights, setLocalHighlights] = useState<Record<string, VerseHighlight | string>>(() => {
     try {
       const raw = localStorage.getItem('bible_verse_highlights');
       return raw ? JSON.parse(raw) : {};
@@ -242,6 +268,149 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
       return {};
     }
   });
+
+  const activeHighlights = propHighlights || localHighlights;
+
+  // Menu contextuel de surlignage actif (déclenché par pression longue ou clic droit)
+  const [highlightMenuState, setHighlightMenuState] = useState<{
+    verse: Verse;
+    position: { x: number; y: number } | null;
+    anchorRect?: DOMRect | null;
+  } | null>(null);
+
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressTriggeredRef = useRef<boolean>(false);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  // Nettoyage au démontage
+  useEffect(() => {
+    return () => {
+      clearLongPress();
+    };
+  }, [clearLongPress]);
+
+  // Début de l'appui sur un verset (écran tactile ou souris)
+  const handleVersePointerDown = useCallback((verse: Verse, e: React.TouchEvent<HTMLSpanElement> | React.MouseEvent<HTMLSpanElement>) => {
+    // Si c'est un clic souris droit, on laisse onContextMenu gérer
+    if ('button' in e && e.button !== 0) return;
+
+    clearLongPress();
+    isLongPressTriggeredRef.current = false;
+
+    const clientX = 'touches' in e && e.touches[0] ? e.touches[0].clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = 'touches' in e && e.touches[0] ? e.touches[0].clientY : ('clientY' in e ? e.clientY : 0);
+    touchStartPosRef.current = { x: clientX, y: clientY };
+
+    const targetElement = e.currentTarget as HTMLElement;
+
+    // Déclenchement de la pression longue après 450ms
+    longPressTimerRef.current = setTimeout(() => {
+      isLongPressTriggeredRef.current = true;
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate(35);
+        } catch (_) {}
+      }
+      const rect = targetElement ? targetElement.getBoundingClientRect() : null;
+      setHighlightMenuState({
+        verse,
+        position: { x: clientX, y: clientY },
+        anchorRect: rect
+      });
+    }, 450);
+  }, [clearLongPress]);
+
+  // Déplacement pendant l'appui : annuler si l'utilisateur fait défiler l'écran
+  const handleVersePointerMove = useCallback((e: React.TouchEvent<HTMLSpanElement> | React.MouseEvent<HTMLSpanElement>) => {
+    if (!touchStartPosRef.current) return;
+    const clientX = 'touches' in e && e.touches[0] ? e.touches[0].clientX : ('clientX' in e ? e.clientX : 0);
+    const clientY = 'touches' in e && e.touches[0] ? e.touches[0].clientY : ('clientY' in e ? e.clientY : 0);
+    const dist = Math.hypot(clientX - touchStartPosRef.current.x, clientY - touchStartPosRef.current.y);
+    if (dist > 10) {
+      clearLongPress();
+    }
+  }, [clearLongPress]);
+
+  // Relâchement ou annulation de l'appui
+  const handleVersePointerUp = useCallback(() => {
+    clearLongPress();
+    touchStartPosRef.current = null;
+  }, [clearLongPress]);
+
+  // Clic droit sur ordinateur : ouvre également le menu contextuel de surlignage
+  const handleVerseContextMenu = useCallback((verse: Verse, e: React.MouseEvent<HTMLSpanElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearLongPress();
+    isLongPressTriggeredRef.current = true;
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHighlightMenuState({
+      verse,
+      position: { x: e.clientX, y: e.clientY },
+      anchorRect: rect
+    });
+  }, [clearLongPress]);
+
+  // Sélection d'une couleur de surlignage (Jaune, Vert, Rose)
+  const handleSelectHighlightColor = useCallback(async (colorName: HighlightColor) => {
+    if (!highlightMenuState) return;
+    const verse = highlightMenuState.verse;
+    setHighlightMenuState(null);
+
+    const paletteItem = HIGHLIGHT_PALETTE.find(p => p.id === colorName);
+    const verseKey = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+    const newHighlightObj: VerseHighlight = {
+      id: verseKey,
+      book_id: verse.book_id,
+      book_name: verse.book_name,
+      chapter: verse.chapter,
+      verse: verse.verse,
+      color: paletteItem ? paletteItem.bgRgba : 'rgba(250, 204, 21, 0.35)',
+      color_name: colorName,
+      updated_at: new Date().toISOString()
+    };
+
+    setLocalHighlights(prev => {
+      const next = { ...prev, [verseKey]: newHighlightObj };
+      try {
+        localStorage.setItem('bible_verse_highlights', JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+
+    if (onSaveHighlight) {
+      await onSaveHighlight(verse, colorName);
+    }
+  }, [highlightMenuState, onSaveHighlight]);
+
+  // Suppression du surlignage d'un verset
+  const handleRemoveHighlight = useCallback(async () => {
+    if (!highlightMenuState) return;
+    const verse = highlightMenuState.verse;
+    setHighlightMenuState(null);
+
+    const verseKey = `${verse.book_id}_${verse.chapter}_${verse.verse}`;
+
+    setLocalHighlights(prev => {
+      const next = { ...prev };
+      delete next[verseKey];
+      try {
+        localStorage.setItem('bible_verse_highlights', JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+
+    if (onDeleteHighlight) {
+      await onDeleteHighlight(verse);
+    }
+  }, [highlightMenuState, onDeleteHighlight]);
 
   // Selected verse object from ID
   const selectedVerse = React.useMemo(() => {
@@ -307,14 +476,46 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
     setSelectedVerseId(null);
   }, [selectedBook.id, selectedChapter]);
 
-  // Copy summary handler
+  // Copy summary handler with thorough markdown removal
   const handleCopySummary = async () => {
     if (!chapterSummaryText) return;
     try {
-      await navigator.clipboard.writeText(chapterSummaryText);
+      const textToCopy = cleanMarkdownText(chapterSummaryText);
+      await navigator.clipboard.writeText(textToCopy);
       setCopiedSummary(true);
       setTimeout(() => setCopiedSummary(false), 2000);
     } catch (_) {}
+  };
+
+  // Lecture vocale du résumé avec nettoyage strict sans astérisque ni dièse
+  const handleToggleSpeakSummary = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
+    if (isSpeakingSummary) {
+      window.speechSynthesis.cancel();
+      setIsSpeakingSummary(false);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const cleanSpeech = cleanTextForSpeech(chapterSummaryText);
+    if (!cleanSpeech) return;
+
+    const utterance = new SpeechSynthesisUtterance(cleanSpeech);
+    utterance.lang = 'fr-FR';
+    utterance.rate = 0.95;
+
+    const voices = window.speechSynthesis.getVoices();
+    const frVoice = voices.find(v => v.lang.startsWith('fr') && !v.name.includes('espeak')) || voices.find(v => v.lang.startsWith('fr'));
+    if (frVoice) {
+      utterance.voice = frVoice;
+    }
+
+    utterance.onend = () => setIsSpeakingSummary(false);
+    utterance.onerror = () => setIsSpeakingSummary(false);
+
+    window.speechSynthesis.speak(utterance);
+    setIsSpeakingSummary(true);
   };
 
   const handleClearTextToAppend = useCallback(() => {
@@ -690,11 +891,30 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             {chapterVerses.map((item, idx) => {
               const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
               const isSelected = selectedVerseId === verseUniqueId;
-              const highlightColor = highlights[verseUniqueId];
+              const rawHighlight = activeHighlights[verseUniqueId];
               const cleanText = cleanVerseText(item.text);
+
+              let highlightBg: string | undefined = undefined;
+              let highlightBorderBottom: string | undefined = undefined;
+              if (rawHighlight) {
+                if (typeof rawHighlight === 'string') {
+                  highlightBg = rawHighlight;
+                  const matched = HIGHLIGHT_PALETTE.find(p => p.hex.toLowerCase() === rawHighlight.toLowerCase() || p.bgRgba === rawHighlight);
+                  if (matched) {
+                    highlightBorderBottom = `2px solid ${matched.borderHex}`;
+                  }
+                } else if (typeof rawHighlight === 'object' && rawHighlight.color) {
+                  highlightBg = rawHighlight.color;
+                  const matched = HIGHLIGHT_PALETTE.find(p => p.id === rawHighlight.color_name);
+                  if (matched) {
+                    highlightBorderBottom = `2px solid ${matched.borderHex}`;
+                  }
+                }
+              }
 
               const hasNote = hasVerseNote(item.book_id, item.chapter, item.verse);
               const hasFav = isVerseFav(item.book_id, item.chapter, item.verse);
+              const isHighlighted = !!highlightBg;
 
               const isFirstOfNewChapter = idx > 0 && item.chapter !== chapterVerses[idx - 1].chapter;
 
@@ -710,19 +930,36 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
 
                   <span
                     id={`verse-${item.book_id}-${item.chapter}-${item.verse}`}
+                    onTouchStart={(e) => handleVersePointerDown(item, e)}
+                    onTouchMove={handleVersePointerMove}
+                    onTouchEnd={handleVersePointerUp}
+                    onTouchCancel={handleVersePointerUp}
+                    onMouseDown={(e) => handleVersePointerDown(item, e)}
+                    onMouseMove={handleVersePointerMove}
+                    onMouseUp={handleVersePointerUp}
+                    onContextMenu={(e) => handleVerseContextMenu(item, e)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      // Appui sur un verset : bascule la sélection
+                      if (isLongPressTriggeredRef.current) {
+                        isLongPressTriggeredRef.current = false;
+                        return;
+                      }
+                      // Appui court sur un verset : bascule la sélection
                       setSelectedVerseId(isSelected ? null : verseUniqueId);
                     }}
-                    className={`inline cursor-pointer transition-colors duration-150 rounded px-1 py-0.5 ${
+                    className={`inline cursor-pointer transition-colors duration-150 rounded px-1 py-0.5 select-text ${
                       isSelected 
                         ? 'bg-[#c9a84c]/20 ring-1 ring-[#c9a84c]/40 text-[#fff8e7]' 
-                        : 'hover:bg-white/5'
+                        : isHighlighted
+                          ? 'highlight-fade-in hover:brightness-105'
+                          : 'hover:bg-white/5'
                     }`}
                     style={{
-                      backgroundColor: highlightColor ? highlightColor : undefined,
+                      backgroundColor: isSelected ? undefined : highlightBg,
+                      borderBottom: isSelected ? undefined : highlightBorderBottom,
+                      animationDelay: isHighlighted ? `${Math.min(idx * 30, 320)}ms` : undefined,
                     }}
+                    title="Pression longue pour surligner (Jaune, Vert, Rose)"
                   >
                     {/* Numéros de versets petits, intégrés dans le flux du texte */}
                     <sup 
@@ -785,16 +1022,25 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                   <>
                     <button
                       type="button"
+                      onClick={handleToggleSpeakSummary}
+                      className="text-xs text-[#8c8270] hover:text-[#c9a84c] flex items-center gap-1 px-2 py-1 rounded hover:bg-[#181510] transition cursor-pointer"
+                      title={isSpeakingSummary ? "Arrêter la lecture vocale" : "Écouter le résumé (lecture vocale)"}
+                    >
+                      {isSpeakingSummary ? <VolumeX className="w-3.5 h-3.5 text-[#c9a84c] animate-pulse" /> : <Volume2 className="w-3.5 h-3.5" />}
+                      <span>{isSpeakingSummary ? 'Arrêter' : 'Écouter'}</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={handleCopySummary}
                       className="text-xs text-[#8c8270] hover:text-[#ded7c8] flex items-center gap-1 px-2 py-1 rounded hover:bg-[#181510] transition cursor-pointer"
-                      title="Copier le résumé"
+                      title="Copier le résumé propre (sans symboles)"
                     >
                       {copiedSummary ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                       <span>{copiedSummary ? 'Copié' : 'Copier'}</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setTextToAppend(chapterSummaryText)}
+                      onClick={() => setTextToAppend(cleanMarkdownText(chapterSummaryText))}
                       className="text-xs text-[#c9a84c] hover:text-[#e8d89e] flex items-center gap-1 px-2 py-1 rounded hover:bg-[#181510] transition cursor-pointer"
                       title="Ajouter ce résumé à ma note"
                     >
@@ -805,7 +1051,13 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 {onClearChapterSummary && (
                   <button
                     type="button"
-                    onClick={onClearChapterSummary}
+                    onClick={() => {
+                      if (isSpeakingSummary && typeof window !== 'undefined' && window.speechSynthesis) {
+                        window.speechSynthesis.cancel();
+                        setIsSpeakingSummary(false);
+                      }
+                      onClearChapterSummary();
+                    }}
                     className="p-1 rounded text-[#8c8270] hover:text-[#ded7c8] hover:bg-[#181510] transition cursor-pointer"
                     title="Fermer le résumé"
                   >
@@ -821,9 +1073,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 <p className="text-xs text-[#8c8270] font-sans">Génération du résumé par l'IA...</p>
               </div>
             ) : (
-              <div className="text-xs sm:text-sm text-[#ded7c8] font-sans leading-relaxed whitespace-pre-line">
-                {chapterSummaryText}
-              </div>
+              <AiTextRenderer text={chapterSummaryText} />
             )}
           </div>
         )}
@@ -870,6 +1120,45 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           }}
           existingNotes={getNotesForVerse(selectedVerse)}
           onDeleteNote={onDeleteNote}
+          currentHighlightColor={(() => {
+            const vKey = `${selectedVerse.book_id}_${selectedVerse.chapter}_${selectedVerse.verse}`;
+            const currentH = activeHighlights[vKey];
+            if (!currentH) return null;
+            if (typeof currentH === 'string') {
+              const matched = HIGHLIGHT_PALETTE.find(p => p.hex.toLowerCase() === currentH.toLowerCase() || p.bgRgba === currentH);
+              return matched ? matched.id : null;
+            }
+            return currentH.color_name || null;
+          })()}
+          onSelectHighlightColor={(colorName) => {
+            const paletteItem = HIGHLIGHT_PALETTE.find(p => p.id === colorName);
+            const verseKey = `${selectedVerse.book_id}_${selectedVerse.chapter}_${selectedVerse.verse}`;
+            const newHighlightObj: VerseHighlight = {
+              id: verseKey,
+              book_id: selectedVerse.book_id,
+              book_name: selectedVerse.book_name,
+              chapter: selectedVerse.chapter,
+              verse: selectedVerse.verse,
+              color: paletteItem ? paletteItem.bgRgba : 'rgba(250, 204, 21, 0.35)',
+              color_name: colorName,
+              updated_at: new Date().toISOString()
+            };
+            setLocalHighlights(prev => ({ ...prev, [verseKey]: newHighlightObj }));
+            if (onSaveHighlight) {
+              onSaveHighlight(selectedVerse, colorName);
+            }
+          }}
+          onRemoveHighlight={() => {
+            const verseKey = `${selectedVerse.book_id}_${selectedVerse.chapter}_${selectedVerse.verse}`;
+            setLocalHighlights(prev => {
+              const next = { ...prev };
+              delete next[verseKey];
+              return next;
+            });
+            if (onDeleteHighlight) {
+              onDeleteHighlight(selectedVerse);
+            }
+          }}
         />
       )}
 
@@ -995,6 +1284,29 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           }
         }}
       />
+
+      {/* 6. MENU CONTEXTUEL DE SURLIGNAGE DE VERSET (Déclenché lors d'une pression longue) */}
+      {highlightMenuState && (
+        <VerseHighlightMenu
+          isOpen={!!highlightMenuState}
+          verse={highlightMenuState.verse}
+          position={highlightMenuState.position}
+          anchorRect={highlightMenuState.anchorRect}
+          currentColorName={(() => {
+            const vKey = `${highlightMenuState.verse.book_id}_${highlightMenuState.verse.chapter}_${highlightMenuState.verse.verse}`;
+            const currentH = activeHighlights[vKey];
+            if (!currentH) return null;
+            if (typeof currentH === 'string') {
+              const matched = HIGHLIGHT_PALETTE.find(p => p.hex.toLowerCase() === currentH.toLowerCase() || p.bgRgba === currentH);
+              return matched ? matched.id : null;
+            }
+            return currentH.color_name || null;
+          })()}
+          onSelectColor={handleSelectHighlightColor}
+          onRemoveHighlight={handleRemoveHighlight}
+          onClose={() => setHighlightMenuState(null)}
+        />
+      )}
 
     </div>
   );

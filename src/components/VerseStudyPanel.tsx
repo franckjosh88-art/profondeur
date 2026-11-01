@@ -23,7 +23,12 @@ import {
   Plus,
   RotateCcw
 } from 'lucide-react';
-import { Verse, SimilarVerse, SimilarVersesResponse } from '../types/bible';
+import { authenticatedFetch } from '../lib/apiClient';
+import { Verse, SimilarVerse, SimilarVersesResponse, HighlightColor, HIGHLIGHT_PALETTE } from '../types/bible';
+import { cleanMarkdownText } from '../lib/bibleFormatter';
+import { AiTextRenderer } from './AiTextRenderer';
+import { AiDisclaimer } from './AiDisclaimer';
+import { appAlert } from '../utils/dialog';
 
 interface TranslationComparison {
   code: string;
@@ -49,6 +54,9 @@ interface VerseStudyPanelProps {
     updated_at?: string;
   }>;
   onDeleteNote?: (verse: Verse, noteId?: string) => Promise<void> | void;
+  currentHighlightColor?: HighlightColor | string | null;
+  onSelectHighlightColor?: (color: HighlightColor) => void;
+  onRemoveHighlight?: () => void;
 }
 
 type ActivePanelTab = 'none' | 'compare' | 'similar' | 'analyze';
@@ -64,6 +72,9 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
   onSaveNote,
   existingNotes = [],
   onDeleteNote,
+  currentHighlightColor,
+  onSelectHighlightColor,
+  onRemoveHighlight,
 }) => {
   // Action rows active sub-view
   const [activeTab, setActiveTab] = useState<ActivePanelTab>('none');
@@ -178,7 +189,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
     setLoadingCompare(true);
     setCompareError(null);
     try {
-      const resp = await fetch('/api/gemini/compare-verse', {
+      const resp = await authenticatedFetch('/api/gemini/compare-verse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -271,7 +282,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
     setLoadingSimilar(true);
     setSimilarError(null);
     try {
-      const resp = await fetch('/api/gemini/similar-verses', {
+      const resp = await authenticatedFetch('/api/gemini/similar-verses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -303,7 +314,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
     setLoadingMeditation(true);
     setMeditationText(null);
     try {
-      const resp = await fetch('/api/gemini/explain', {
+      const resp = await authenticatedFetch('/api/gemini/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -315,7 +326,8 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
       });
       if (!resp.ok) throw new Error("Erreur de génération");
       const data = await resp.json();
-      setMeditationText(data.explanation || data.text || "Prenez un moment pour méditer sur la fidélité de Dieu à travers ce passage.");
+      const rawMed = data.explanation || data.text || "Prenez un moment pour méditer sur la fidélité de Dieu à travers ce passage.";
+      setMeditationText(cleanMarkdownText(rawMed));
     } catch (e) {
       setMeditationText(`Ce passage (${sv.reference}) fait écho à ${verse.book_name} ${verse.chapter}:${verse.verse}. Méditez sur la manière dont ces vérités se renforcent mutuellement dans votre marche quotidienne.`);
     } finally {
@@ -346,7 +358,7 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
     setAnalysisStrongWords(rawMatches);
 
     try {
-      const resp = await fetch('/api/gemini/explain', {
+      const resp = await authenticatedFetch('/api/gemini/explain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -360,7 +372,8 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
 
       if (!resp.ok) throw new Error("Erreur d'analyse");
       const data = await resp.json();
-      setAnalysisText(data.explanation || "Aucune analyse disponible pour ce verset.");
+      const rawAnalysis = data.explanation || "Aucune analyse disponible pour ce verset.";
+      setAnalysisText(cleanMarkdownText(rawAnalysis));
     } catch (err: any) {
       console.error("Erreur analyse:", err);
       setAnalysisError("Impossible de charger l'analyse. Vérifiez votre connexion.");
@@ -437,7 +450,7 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
       }
     } catch (err) {
       console.error("Microphone error:", err);
-      alert("Accès au microphone refusé ou non supporté.");
+      await appAlert("Accès au microphone refusé ou non supporté par votre navigateur.", "Microphone");
     }
   };
 
@@ -607,6 +620,40 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                 <ImageIcon className="w-4 h-4" />
                 <span>Image</span>
               </button>
+
+              {/* Surlignage (Jaune, Vert, Rose) */}
+              {onSelectHighlightColor && (
+                <div className="flex items-center gap-1.5 bg-[#1b1812] px-2.5 py-1.5 rounded-xl border border-[#2e271c]">
+                  <span className="text-[10px] text-[#8c8270] font-sans mr-0.5 select-none">Surligner :</span>
+                  {HIGHLIGHT_PALETTE.map((pal) => {
+                    const isSelected = currentHighlightColor?.toLowerCase() === pal.id;
+                    return (
+                      <button
+                        key={pal.id}
+                        type="button"
+                        onClick={() => onSelectHighlightColor(pal.id)}
+                        className={`w-6 h-6 rounded-full flex items-center justify-center transition cursor-pointer active:scale-95 ${
+                          isSelected ? 'ring-2 ring-offset-1 ring-offset-[#1b1812] ring-white scale-110 shadow-sm' : 'hover:scale-105 opacity-80 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: pal.hex }}
+                        title={`Surligner en ${pal.name}`}
+                      >
+                        {isSelected && <Check className="w-3.5 h-3.5 text-black stroke-[3]" />}
+                      </button>
+                    );
+                  })}
+                  {currentHighlightColor && onRemoveHighlight && (
+                    <button
+                      type="button"
+                      onClick={onRemoveHighlight}
+                      className="ml-1 p-1 rounded-md text-rose-400 hover:text-rose-300 hover:bg-rose-500/15 transition cursor-pointer"
+                      title="Effacer le surlignage"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Partager */}
               <button
@@ -794,12 +841,13 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                             {loadingMeditation ? (
                               <p className="text-[#8c8270] italic">Génération en cours...</p>
                             ) : (
-                              <p className="leading-relaxed">{meditationText}</p>
+                              <AiTextRenderer text={meditationText} />
                             )}
                           </div>
                         )}
                       </div>
                     ))}
+                    <AiDisclaimer />
                   </div>
                 )}
               </div>
@@ -830,7 +878,7 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                   <p className="text-xs text-rose-400 font-sans">{analysisError}</p>
                 ) : isAnalysisExpanded && (
                   <div className="space-y-3 text-xs font-sans text-[#ded7c8] leading-relaxed">
-                    <p className="whitespace-pre-line">{analysisText}</p>
+                    <AiTextRenderer text={analysisText} />
 
                     {/* Mots clés Strong si disponibles */}
                     {analysisStrongWords.length > 0 && (

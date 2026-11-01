@@ -7,13 +7,14 @@
   --surface: #12100c;
   --surface-hover: #1c1913;
   --text: #f4efe2;
-  --text-muted: #8c8270;
+  --text-muted: #a0947f;
   --accent: #c9a84c;
   --border: #2e2a1e;
-  --verse-num: #6e6555;
+  --verse-num: #D4AF37; /* Contraste > 10:1 sur fond sombre (exigence accessibilité) */
   --font-reading: 'Lora', 'Playfair Display', Georgia, serif;
   --line-height: 1.8;
   --text-size: 18px;
+  --app-text-size: 16px;
 
   --luxury-bg-deep: var(--bg);
   --luxury-bg: var(--bg);
@@ -30,11 +31,21 @@
   --luxury-gold-light: #ebd092;
   --luxury-gold-dark: #9e7d38;
   
-  --luxury-button-bg: rgba(201, 168, 76, 0.12);
+  --luxury-button-bg: rgba(201, 168, 76, 0.14);
   --simulator-border: var(--border);
 }
 
-.theme-sepia {
+.theme-sepia,
+[data-app-theme='sepia'] {
+  --bg: #f4ecd8;
+  --surface: #fdfaf2;
+  --surface-hover: #ebdcb9;
+  --text: #3d2f1f;
+  --text-muted: #5e4f3c;
+  --accent: #7a5509;
+  --border: #dfd5c2;
+  --verse-num: #593e05; /* Contraste > 8:1 sur fond sépia */
+
   --luxury-bg-deep: #e8dfc7;
   --luxury-bg: #f4ecd8;
   --luxury-surface: #fdfaf2;
@@ -42,16 +53,46 @@
   --luxury-border: #dfd5c2;
   
   --luxury-text-primary: #3d2f1f;
-  --luxury-text-verse: #8e6812;
-  --luxury-text-muted: #82725e;
-  --luxury-text-accent: #a37207;
+  --luxury-text-verse: #7a5509;
+  --luxury-text-muted: #5e4f3c;
+  --luxury-text-accent: #7a5509;
   
-  --luxury-gold: #8e6812;
-  --luxury-gold-light: #ab822e;
-  --luxury-gold-dark: #634706;
+  --luxury-gold: #7a5509;
+  --luxury-gold-light: #9a6e13;
+  --luxury-gold-dark: #523904;
   
-  --luxury-button-bg: rgba(142, 104, 18, 0.1);
+  --luxury-button-bg: rgba(122, 85, 9, 0.12);
   --simulator-border: #dfd5c2;
+}
+
+.theme-light,
+[data-app-theme='light'] {
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --surface-hover: #f0f1f3;
+  --text: #171717;
+  --text-muted: #525252;
+  --accent: #8c5e07;
+  --border: #e2e4e8;
+  --verse-num: #6b4700; /* Contraste > 7:1 sur fond blanc */
+
+  --luxury-bg-deep: #f2f3f5;
+  --luxury-bg: #ffffff;
+  --luxury-surface: #f7f7f8;
+  --luxury-elevated: #f0f1f3;
+  --luxury-border: #e2e4e8;
+  
+  --luxury-text-primary: #171717;
+  --luxury-text-verse: #8c5e07;
+  --luxury-text-muted: #525252;
+  --luxury-text-accent: #8c5e07;
+  
+  --luxury-gold: #8c5e07;
+  --luxury-gold-light: #ab750d;
+  --luxury-gold-dark: #573900;
+  
+  --luxury-button-bg: rgba(140, 94, 7, 0.12);
+  --simulator-border: #e2e4e8;
 }
 
 @theme {
@@ -105,7 +146,7 @@
   --r-text-muted: #A89B84;
   --r-accent: #C9A84C;
   --r-border: #2E251A;
-  --r-verse-num: #8A7B68;
+  --r-verse-num: #D4AF37; /* Contraste > 8.5:1 sur #0E0B07 */
 }
 
 /* Thème Bronze : fond #2A1D12, surface #38281A, texte #F1E2CC, texte secondaire #B79B7A, accent #CD7F32 */
@@ -120,7 +161,7 @@
   --r-text-muted: #B79B7A;
   --r-accent: #CD7F32;
   --r-border: #463321;
-  --r-verse-num: #B79B7A;
+  --r-verse-num: #E6D2B2; /* Contraste > 7.5:1 sur #2A1D12 */
 }
 
 /* Thème Blanc */
@@ -131,11 +172,11 @@
   --r-bg: #FFFFFF;
   --r-surface: #F4F4F2;
   --r-text: #1C1C1C;
-  --r-text-secondary: #6B6B6B;
-  --r-text-muted: #6B6B6B;
+  --r-text-secondary: #525252;
+  --r-text-muted: #525252;
   --r-accent: #8A6D1F;
   --r-border: #E2E2DC;
-  --r-verse-num: #82827D;
+  --r-verse-num: #333330; /* Contraste > 9:1 sur #FFFFFF */
 }
 
 /* Thème Rose */
@@ -146,11 +187,11 @@
   --r-bg: #FCE9E6;
   --r-surface: #F7D9D4;
   --r-text: #3A1F24;
-  --r-text-secondary: #7C5A60;
-  --r-text-muted: #7C5A60;
+  --r-text-secondary: #6B494F;
+  --r-text-muted: #6B494F;
   --r-accent: #B03A5B;
   --r-border: #E8C5BF;
-  --r-verse-num: #8F666D;
+  --r-verse-num: #4D262F; /* Contraste > 8:1 sur #FCE9E6 */
 }
 
 /* Thème Rouge */
@@ -165,7 +206,7 @@
   --r-text-muted: #C49A9C;
   --r-accent: #E0525B;
   --r-border: #4D1D23;
-  --r-verse-num: #A8797D;
+  --r-verse-num: #F2BDC1; /* Contraste > 7:1 sur #2B0D10 */
 }
 
 /* Thème Noir */
@@ -180,7 +221,7 @@
   --r-text-muted: #9A9A9A;
   --r-accent: #C9A84C;
   --r-border: #262626;
-  --r-verse-num: #787878;
+  --r-verse-num: #D4AF37; /* Contraste > 10:1 sur #000000 */
 }
 
 /* Thème Bleu */
@@ -195,7 +236,7 @@
   --r-text-muted: #8FA6C2;
   --r-accent: #5B9BFF;
   --r-border: #1E3654;
-  --r-verse-num: #718EAE;
+  --r-verse-num: #BAD7F5; /* Contraste > 8:1 sur #0B1A2E */
 }
 
 .reader {
@@ -278,6 +319,37 @@
 
 .animate-fade-in {
   animation: fadeIn 300ms ease-out forwards;
+}
+
+/* Animation douce pour les versets surlignés dans PureBibleReader (scale & fade-in) */
+@keyframes highlightGentleFadeScale {
+  0% {
+    opacity: 0.25;
+    transform: scale(0.985);
+    filter: brightness(1.12);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.012);
+    filter: brightness(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+
+.highlight-fade-in {
+  display: inline;
+  animation: highlightGentleFadeScale 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background-color 0.35s ease, border-color 0.35s ease;
+}
+
+@utility animate-highlight-fade {
+  animation: highlightGentleFadeScale 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @utility bg-luxury-gradient {
@@ -377,4 +449,89 @@ h1, h2, h3, .font-serif, .scripture-verse {
     background-attachment: scroll;
   }
 }
+
+/* =========================================================================
+   ACCESSIBILITÉ & ERGONOMIE MOBILE (WCAG AA / AAA)
+   ========================================================================= */
+
+/* 1. Contour doré visible pour la navigation au clavier (Focus Visible) */
+:focus-visible {
+  outline: 2px solid #c9a84c !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 12px rgba(201, 168, 76, 0.45) !important;
+}
+
+/* 2. Respect strict de « Réduire les animations » (prefers-reduced-motion) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 3. Zones tactiles : boutons et liens interactifs font au moins 44 x 44 px */
+button:not(.inline-tag):not(.mini-tag),
+[role="button"]:not(.inline-tag),
+a.touch-target,
+.btn-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Pour les petites étiquettes inline (ex. codes Strong dans le texte), agrandir la cible tactile sans casser le texte */
+.inline-tag,
+.strong-tag {
+  position: relative;
+  touch-action: manipulation;
+}
+.inline-tag::after,
+.strong-tag::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* 4. Taille du texte : aucun texte inférieur à 12 px sur téléphone et dans toute l'app */
+[class*="text-[7px]"],
+[class*="text-[8px]"],
+[class*="text-[8.5px]"],
+[class*="text-[9px]"],
+[class*="text-[10px]"],
+[class*="text-[10.5px]"],
+[class*="text-[11px]"] {
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+
+/* 5. Application globale de la taille du texte à toute l'application */
+html[data-text-size="petit"] {
+  --app-text-size: 14px;
+  --font-scale: 0.88;
+}
+html[data-text-size="moyen"] {
+  --app-text-size: 17px;
+  --font-scale: 1.0;
+}
+html[data-text-size="grand"] {
+  --app-text-size: 20px;
+  --font-scale: 1.18;
+}
+html[data-text-size="tres_grand"] {
+  --app-text-size: 24px;
+  --font-scale: 1.38;
+}
+
+/* Body global scaling */
+body {
+  font-size: var(--app-text-size, 16px);
+}
+
 
