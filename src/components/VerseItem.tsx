@@ -6,6 +6,7 @@ import { VerseShareModal } from './VerseShareModal';
 import { getEmotionMeta, renderEmotionIcon } from '../utils/emotionHelpers';
 import { authenticatedFetch } from '../lib/apiClient';
 import { appAlert } from '../utils/dialog';
+import { getFromCache, fetchSimilarVerses } from '../services/similarVersesService';
 
 interface VerseItemProps {
   verse: Verse;
@@ -144,19 +145,14 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
 
   useEffect(() => {
     // When verse changes, load from cache if available
-    try {
-      const cached = localStorage.getItem(`bible_similar_v1_${verse.book_id}_${verse.chapter}_${verse.verse}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setSimilarVerses(parsed);
-          setSimilarError(null);
-          return;
-        }
-      }
-    } catch (e) {}
-    setSimilarVerses(null);
-    setSimilarError(null);
+    const cached = getFromCache(verse);
+    if (cached && cached.length > 0) {
+      setSimilarVerses(cached);
+      setSimilarError(null);
+    } else {
+      setSimilarVerses(null);
+      setSimilarError(null);
+    }
     setIsSimilarExpanded(false);
   }, [verse.book_id, verse.chapter, verse.verse]);
 
@@ -164,64 +160,49 @@ export const VerseItem: React.FC<VerseItemProps> = React.memo(({
     setIsSimilarExpanded(true);
     setSimilarError(null);
 
-    const cacheKey = `bible_similar_v1_${verse.book_id}_${verse.chapter}_${verse.verse}`;
-
     // If already in state and not forcing refresh, nothing to fetch
     if (!forceRefresh && similarVerses && similarVerses.length > 0) {
       return;
     }
 
-    // Check localStorage if not forcing refresh
+    // Check instant cache if not forcing refresh
     if (!forceRefresh) {
-      try {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setSimilarVerses(parsed);
-            return;
-          }
-        }
-      } catch (e) {}
+      const cached = getFromCache(verse);
+      if (cached && cached.length > 0) {
+        setSimilarVerses(cached);
+        return;
+      }
     }
 
     setIsLoadingSimilar(true);
 
     try {
-      const response = await authenticatedFetch('/api/gemini/similar-verses', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          verseText: verse.text,
-          reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
-          bookName: verse.book_name,
-          bookId: verse.book_id,
+      const response = await fetchSimilarVerses({
+        source: {
+          book_id: verse.book_id,
+          book_name: verse.book_name,
           chapter: verse.chapter,
-          verse: verse.verse
-        })
+          verse: verse.verse,
+          text: verse.text
+        },
+        limit: 6,
+        timeoutMs: 10000,
+        onProgressiveResult: (progressive) => {
+          if (progressive && progressive.length > 0) {
+            setSimilarVerses(progressive);
+            setIsLoadingSimilar(false);
+          }
+        }
       });
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || "Impossible de récupérer les versets similaires.");
+      if (response.results && response.results.length > 0) {
+        setSimilarVerses(response.results);
+      } else {
+        setSimilarError("Aucun verset similaire n'a pu être validé pour ce passage.");
       }
-
-      const data: SimilarVersesResponse = await response.json();
-      const results = data.versets_similaires || [];
-
-      if (results.length === 0) {
-        throw new Error("Aucun verset similaire n'a pu être validé pour ce passage.");
-      }
-
-      setSimilarVerses(results);
-      try {
-        localStorage.setItem(cacheKey, JSON.stringify(results));
-      } catch (e) {}
     } catch (err: any) {
       console.error("Erreur similar-verses:", err);
-      setSimilarError(err.message || "Une erreur réseau ou d'IA est survenue. Veuillez réessayer.");
+      setSimilarError("Délai de recherche dépassé (10s). Les correspondances thématiques sont affichées.");
     } finally {
       setIsLoadingSimilar(false);
     }

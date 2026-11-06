@@ -29,6 +29,7 @@ import { cleanMarkdownText } from '../lib/bibleFormatter';
 import { AiTextRenderer } from './AiTextRenderer';
 import { AiDisclaimer } from './AiDisclaimer';
 import { appAlert } from '../utils/dialog';
+import { fetchSimilarVerses, prefetchSimilarVerses, getFromCache } from '../services/similarVersesService';
 
 interface TranslationComparison {
   code: string;
@@ -129,7 +130,6 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
   useEffect(() => {
     setActiveTab('none');
     setCompareData([]);
-    setSimilarVerses([]);
     setAnalysisText(null);
     setMeditationVerseRef(null);
     setMeditationText(null);
@@ -141,6 +141,18 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
       audioPlayerRef.current = null;
     }
     setPlayingAudioIndex(null);
+
+    // Initialisation instantanée depuis le cache si déjà disponible
+    const cached = getFromCache(verse);
+    if (cached && cached.length > 0) {
+      setSimilarVerses(cached);
+      setSimilarError(null);
+    } else {
+      setSimilarVerses([]);
+      setSimilarError(null);
+      // Préchargement (prefetch) en arrière-plan sans bloquer l'UI
+      prefetchSimilarVerses(verse);
+    }
   }, [verse.book_id, verse.chapter, verse.verse]);
 
   // Clean verse text (strip strong codes [H1234] / [G1234])
@@ -277,32 +289,49 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
       return;
     }
     setActiveTab('similar');
+
+    // 1. Si déjà présents en mémoire, affichage instantané en 0 ms
     if (similarVerses.length > 0) return;
+
+    // 2. Vérification immédiate du cache local (0 ms)
+    const cached = getFromCache(verse);
+    if (cached && cached.length > 0) {
+      setSimilarVerses(cached);
+      setLoadingSimilar(false);
+      setSimilarError(null);
+      return;
+    }
 
     setLoadingSimilar(true);
     setSimilarError(null);
+
     try {
-      const resp = await authenticatedFetch('/api/gemini/similar-verses', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          verseText: cleanVerseText(verse.text),
-          reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
-          bookName: verse.book_name,
-          bookId: verse.book_id,
+      const response = await fetchSimilarVerses({
+        source: {
+          book_id: verse.book_id,
+          book_name: verse.book_name,
           chapter: verse.chapter,
           verse: verse.verse,
-        }),
+          text: cleanVerseText(verse.text)
+        },
+        limit: 6,
+        timeoutMs: 10000,
+        onProgressiveResult: (progressive) => {
+          if (progressive && progressive.length > 0) {
+            setSimilarVerses(progressive);
+            setLoadingSimilar(false);
+          }
+        }
       });
 
-      if (!resp.ok) {
-        throw new Error("Impossible de trouver des versets similaires.");
+      if (response.results && response.results.length > 0) {
+        setSimilarVerses(response.results);
+      } else {
+        setSimilarError("Aucun verset similaire n'a été trouvé.");
       }
-      const data: SimilarVersesResponse = await resp.json();
-      setSimilarVerses(data.versets_similaires || []);
     } catch (err: any) {
       console.error("Erreur versets similaires:", err);
-      setSimilarError("Une erreur est survenue lors de la recherche des passages connexes.");
+      setSimilarError("Délai de recherche dépassé (10s). Les correspondances locales sont affichées.");
     } finally {
       setLoadingSimilar(false);
     }
@@ -769,21 +798,37 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
             {activeTab === 'similar' && (
               <div className="space-y-3 bg-[#110f0b] border border-[#242018] rounded-2xl p-4">
                 <div className="flex items-center justify-between pb-2 border-b border-[#242018]">
-                  <h4 className="text-xs font-sans text-[#a0947f]">
-                    Passages proches et correspondances
-                  </h4>
-                  <span className="text-[11px] text-[#736a59] font-sans">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-sans text-[#a0947f]">
+                      Passages proches et correspondances
+                    </h4>
+                    {loadingSimilar && similarVerses.length > 0 && (
+                      <span className="text-[10px] text-[#c9a84c] animate-pulse font-sans">
+                        (mise à jour...)
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[11px] text-[#c9a84c] font-sans font-medium">
                     {similarVerses.length} trouvés
                   </span>
                 </div>
 
-                {loadingSimilar ? (
+                {loadingSimilar && similarVerses.length === 0 ? (
                   <div className="py-8 flex flex-col items-center justify-center space-y-2">
                     <div className="w-5 h-5 rounded-full border-2 border-[#c9a84c] border-t-transparent animate-spin" />
                     <span className="text-xs text-[#8c8270] font-sans">Recherche des passages connexes...</span>
                   </div>
-                ) : similarError ? (
-                  <p className="text-xs text-rose-400 font-sans">{similarError}</p>
+                ) : similarError && similarVerses.length === 0 ? (
+                  <div className="py-4 text-center space-y-1">
+                    <p className="text-xs text-rose-400 font-sans">{similarError}</p>
+                    <button
+                      type="button"
+                      onClick={toggleSimilar}
+                      className="mt-2 text-[11px] text-[#c9a84c] underline cursor-pointer"
+                    >
+                      Réessayer la recherche
+                    </button>
+                  </div>
                 ) : similarVerses.length === 0 ? (
                   <p className="text-xs text-[#8c8270] font-sans italic">Aucun verset similaire trouvé.</p>
                 ) : (

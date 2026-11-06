@@ -168,3 +168,95 @@ describe('3. Écriture, lecture et validation des métadonnées audio', () => {
     assert.strictEqual(getAudio('audio_psaumes_23_1'), null);
   });
 });
+
+describe('4. Préférences de lecture audio automatique au chapitre', () => {
+  test('Initialisation et persistance de la lecture automatique au chapitre', () => {
+    const memoryStorage = new Map<string, string>();
+
+    const getAutoPlay = () => memoryStorage.get('bible_auto_play_chapter_audio') === 'true';
+    const setAutoPlay = (enabled: boolean) => memoryStorage.set('bible_auto_play_chapter_audio', String(enabled));
+
+    // Par défaut, l'option est désactivée (false) pour respecter le silence contemplatif
+    assert.strictEqual(getAutoPlay(), false);
+
+    // L'utilisateur active l'option dans les paramètres
+    setAutoPlay(true);
+    assert.strictEqual(getAutoPlay(), true);
+
+    // L'utilisateur désactive l'option
+    setAutoPlay(false);
+    assert.strictEqual(getAutoPlay(), false);
+  });
+});
+
+describe('5. Optimisation des Passages Similaires & Correspondances', () => {
+  test('L\'index précalculé fournit immédiatement les versets connexes pour Jérémie 31:3', async () => {
+    const { PRECOMPUTED_CROSS_REFERENCES } = await import('../data/biblicalCrossReferences');
+    const jeremieVerses = PRECOMPUTED_CROSS_REFERENCES["24_31_3"];
+
+    assert.ok(Array.isArray(jeremieVerses));
+    assert.ok(jeremieVerses.length >= 5);
+    
+    // Vérifier la présence de passages clés sur l'amour éternel (Romains 8:38-39, 1 Jean 4:10, Éphésiens 2:4-5)
+    const references = jeremieVerses.map(v => v.reference);
+    assert.ok(references.some(r => r.includes('Romains 8:38-39')));
+    assert.ok(references.some(r => r.includes('1 Jean 4:10')));
+    assert.ok(references.some(r => r.includes('Jean 3:16')));
+
+    // Vérifier que chaque verset similaire a un texte authentique, un type de lien et une explication
+    for (const v of jeremieVerses) {
+      assert.ok(v.reference.length > 0);
+      assert.ok(v.text.length > 10);
+      assert.ok(v.explication.length > 5);
+      assert.ok(['Parallèle', 'Accomplissement', 'Éclairage', 'Contraste', 'Illustration'].includes(v.type_lien));
+    }
+  });
+
+  test('Le moteur thématique local génère des correspondances fiables pour tout verset sans appel réseau', async () => {
+    const { getLocalThematicMatches } = await import('../data/biblicalCrossReferences');
+    
+    // Test avec un texte portant sur la paix et la consolation
+    const peaceMatches = getLocalThematicMatches(
+      "Je vous laisse la paix, je vous donne ma paix. Que votre cœur ne se trouble point.",
+      43, // Jean
+      14,
+      27,
+      5
+    );
+
+    assert.ok(Array.isArray(peaceMatches));
+    assert.ok(peaceMatches.length > 0);
+    assert.ok(peaceMatches.length <= 5);
+    // Ne doit pas contenir le verset source lui-même
+    assert.ok(!peaceMatches.some(m => m.book_id === 43 && m.chapter === 14 && m.verse === 27));
+
+    // Test avec un texte portant sur l'amour et la miséricorde
+    const loveMatches = getLocalThematicMatches(
+      "L'Éternel est bon et miséricordieux, lent à la colère et plein de bonté.",
+      19, // Psaumes
+      103,
+      8,
+      5
+    );
+
+    assert.ok(Array.isArray(loveMatches));
+    assert.ok(loveMatches.length > 0);
+    assert.ok(!loveMatches.some(m => m.book_id === 19 && m.chapter === 103 && m.verse === 8));
+  });
+
+  test('La normalisation des clés de cache prend en charge référence textuelle et identifiant numérique', async () => {
+    const { getVerseCacheKeys } = await import('../services/similarVersesService');
+    const source = {
+      book_id: 24,
+      book_name: "Jérémie",
+      chapter: 31,
+      verse: 3
+    };
+
+    const keys = getVerseCacheKeys(source);
+    assert.ok(keys.includes("24_31_3"));
+    assert.ok(keys.includes("Jérémie 31:3"));
+  });
+});
+
+

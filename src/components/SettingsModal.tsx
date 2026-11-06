@@ -19,6 +19,7 @@ interface SettingsModalProps {
   speechRate: number;
   speechVolume: number;
   selectedVoiceGender: 'female' | 'male' | 'all';
+  autoPlayChapterAudio?: boolean;
   userEmail?: string | null;
   readerColor?: string;
   themeMode?: 'dark' | 'sepia' | 'light';
@@ -28,6 +29,7 @@ interface SettingsModalProps {
   onChangeSpeechRate: (rate: number) => void;
   onChangeSpeechVolume: (volume: number) => void;
   onChangeVoiceGender: (gender: 'female' | 'male' | 'all') => void;
+  onChangeAutoPlayChapterAudio?: (enabled: boolean) => void;
   onChangeThemeMode?: (theme: 'dark' | 'sepia' | 'light') => void;
   onSignOut?: () => void;
 }
@@ -38,6 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   speechRate,
   speechVolume,
   selectedVoiceGender,
+  autoPlayChapterAudio = false,
   userEmail,
   readerColor = 'sanctuary',
   themeMode = 'dark',
@@ -47,6 +50,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeSpeechRate,
   onChangeSpeechVolume,
   onChangeVoiceGender,
+  onChangeAutoPlayChapterAudio,
   onChangeThemeMode,
   onSignOut
 }) => {
@@ -359,6 +363,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           </button>
                         ))}
                       </div>
+                    </div>
+
+                    {/* Option : Lecture audio automatique à l'ouverture d'un nouveau chapitre */}
+                    <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
+                      <div className="space-y-0.5 text-left pr-2">
+                        <span className="text-xs font-serif font-bold text-[#f4efe2] block">
+                          Lecture automatique à l'ouverture
+                        </span>
+                        <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                          Lancer la lecture audio dès l'ouverture d'un nouveau chapitre
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={autoPlayChapterAudio}
+                        aria-label="Lecture audio automatique dès l'ouverture d'un nouveau chapitre"
+                        onClick={() => onChangeAutoPlayChapterAudio && onChangeAutoPlayChapterAudio(!autoPlayChapterAudio)}
+                        className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
+                          autoPlayChapterAudio ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-[#0c0a07] shadow-md ring-0 transition duration-200 ease-in-out ${
+                            autoPlayChapterAudio ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
                     </div>
                   </div>
 

@@ -1595,6 +1595,10 @@ export default function App() {
     };
 
     // 5. Mise à jour de l'état
+    const isNewChapter = targetBook.id !== selectedBook.id || validChapter !== selectedChapter;
+    if ((isNewChapter || activeTab !== 'read') && autoPlayChapterAudio) {
+      autoPlayNextChapterAudioRef.current = true;
+    }
     setSelectedBook(targetBook);
     setSelectedChapter(validChapter);
     setSelectedVerseId(`${targetBook.id}_${validChapter}_${validVerse}`);
@@ -2620,6 +2624,13 @@ export default function App() {
       return true;
     }
   });
+  const [autoPlayChapterAudio, setAutoPlayChapterAudio] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_auto_play_chapter_audio') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
   const [announceVerseNumbers, setAnnounceVerseNumbers] = useState<boolean>(() => {
     try {
       // Default to false for a smooth, fluid, audiobook-style spiritual reading
@@ -3606,16 +3617,36 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeTab, selectedBook, selectedChapter, user]);
 
-  // Auto-play the next chapter immediately after its verses are fully fetched
+  // Auto-play chapter audio immediately after its verses are fully fetched
   useEffect(() => {
-    if (!loadingVerses && chapterVerses.length > 0 && autoPlayNextChapterAudioRef.current) {
+    if (!loadingVerses && chapterVerses.length > 0 && autoPlayNextChapterAudioRef.current && activeTab === 'read') {
       autoPlayNextChapterAudioRef.current = false;
       const timer = setTimeout(() => {
         speakVerse(0);
-      }, 120);
+      }, 150);
       return () => clearTimeout(timer);
     }
-  }, [chapterVerses, loadingVerses]);
+  }, [chapterVerses, loadingVerses, activeTab, selectedBook.id, selectedChapter]);
+
+  // Track chapter changes: when a new chapter opens while in reading tab with autoPlayChapterAudio enabled
+  const currentChapterKey = `${selectedBook.id}_${selectedChapter}`;
+  const previousChapterKeyRef = useRef<string>(currentChapterKey);
+  const isInitialMountRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      previousChapterKeyRef.current = currentChapterKey;
+      return;
+    }
+
+    if (previousChapterKeyRef.current !== currentChapterKey) {
+      previousChapterKeyRef.current = currentChapterKey;
+      if (autoPlayChapterAudio && activeTab === 'read') {
+        autoPlayNextChapterAudioRef.current = true;
+      }
+    }
+  }, [currentChapterKey, autoPlayChapterAudio, activeTab]);
 
   // 2. Continuous fluid automatic scrolling loop using high precision delta time
   useEffect(() => {
@@ -4363,6 +4394,30 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Lecture Automatique au Nouveau Chapitre Toggle */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]" title="Lancer la lecture audio dès l'ouverture d'un nouveau chapitre">Audio auto au chapitre</span>
+                    <button
+                      onClick={() => {
+                        const nextVal = !autoPlayChapterAudio;
+                        setAutoPlayChapterAudio(nextVal);
+                        try {
+                          localStorage.setItem('bible_auto_play_chapter_audio', String(nextVal));
+                        } catch (_) {}
+                      }}
+                      className={`px-2 py-0.5 text-[8px] font-semibold uppercase rounded border cursor-pointer transition ${
+                        autoPlayChapterAudio 
+                          ? 'bg-[#c9a84c]/10 text-[#c9a84c] border-[#c9a84c]/30' 
+                          : 'text-[#6b6355] border-[#2e2a1e]/40 hover:text-white'
+                      }`}
+                      role="switch"
+                      aria-checked={autoPlayChapterAudio}
+                      aria-label="Lecture audio automatique dès l'ouverture d'un nouveau chapitre"
+                    >
+                      {autoPlayChapterAudio ? 'Oui' : 'Non'}
+                    </button>
+                  </div>
+
                   {/* Lecture Brute Toggle */}
                   <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
                     <span className="text-[#6b6355]" title="Désactive toute modification de pitch (pitch = 1.0) et contourne le filtrage des voix de synthèse pour résoudre les distorsions sur certains téléphones">Lecture Brute</span>
@@ -4582,6 +4637,9 @@ export default function App() {
                 onSelectBookAndChapter={(book, chapterNum) => {
                   if (isSpeaking) {
                     stopSpeaking();
+                  }
+                  if (autoPlayChapterAudio) {
+                    autoPlayNextChapterAudioRef.current = true;
                   }
                   setSelectedBook(book);
                   setSelectedChapter(chapterNum);
@@ -5652,8 +5710,10 @@ export default function App() {
         speechRate={playbackRate}
         speechVolume={voiceVolume}
         selectedVoiceGender={voiceGender}
+        autoPlayChapterAudio={autoPlayChapterAudio}
         userEmail={user?.email || undefined}
         readerColor={readerColor}
+        themeMode={themeMode}
         onSelectReaderColor={handleUpdateReaderColor}
         onClose={() => setIsSettingsModalOpen(false)}
         onChangeTextSize={(size) => setTextSize(size)}
@@ -5666,6 +5726,11 @@ export default function App() {
           setVoiceGender(gender);
           try { localStorage.setItem('bible_voice_gender', gender); } catch (_) {}
         }}
+        onChangeAutoPlayChapterAudio={(enabled) => {
+          setAutoPlayChapterAudio(enabled);
+          try { localStorage.setItem('bible_auto_play_chapter_audio', String(enabled)); } catch (_) {}
+        }}
+        onChangeThemeMode={(t) => setThemeMode(t)}
         onSignOut={handleSignOut}
       />
 
