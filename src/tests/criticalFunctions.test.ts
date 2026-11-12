@@ -257,6 +257,44 @@ describe('5. Optimisation des Passages Similaires & Correspondances', () => {
     assert.ok(keys.includes("24_31_3"));
     assert.ok(keys.includes("Jérémie 31:3"));
   });
+
+  test('getAnalysisCacheKey génère des clés incluant référence et type d\'analyse (similaires, analyser, comparer, mediter)', async () => {
+    const { getAnalysisCacheKey } = await import('../services/similarVersesService');
+    const source = {
+      book_id: 40,
+      book_name: "Matthieu",
+      chapter: 25,
+      verse: 9
+    };
+
+    const simKeys = getAnalysisCacheKey('similaires', source);
+    assert.ok(simKeys.some(k => k.includes('bible_analysis_cache_similaires_40_25_9')));
+    assert.ok(simKeys.some(k => k.includes('matthieu_25_9')));
+
+    const anaKeys = getAnalysisCacheKey('analyser', source);
+    assert.ok(anaKeys.some(k => k.includes('bible_analysis_cache_analyser_40_25_9')));
+
+    const compKeys = getAnalysisCacheKey('comparer', source);
+    assert.ok(compKeys.some(k => k.includes('bible_analysis_cache_comparer_40_25_9')));
+
+    const medKeys = getAnalysisCacheKey('mediter', source, 'Luc 12:35');
+    assert.ok(medKeys.some(k => k.includes('bible_analysis_cache_mediter_40_25_9_luc_12:35') || k.includes('mediter')));
+  });
+
+  test('Aucun fallback générique codé en dur n\'est retourné pour un verset hors-sujet', async () => {
+    const { getLocalThematicMatches } = await import('../data/biblicalCrossReferences');
+    // Texte sans rapport avec les mots-clés prédéfinis
+    const unrelatedMatches = getLocalThematicMatches(
+      "Mais les sages répondirent: Non; il n'y en aurait pas assez pour nous et pour vous.",
+      40,
+      25,
+      9,
+      5
+    );
+
+    // Ne doit pas retourner le cluster générique d'amour inconditionnel
+    assert.strictEqual(unrelatedMatches.length, 0);
+  });
 });
 
 

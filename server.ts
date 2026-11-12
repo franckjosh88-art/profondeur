@@ -472,19 +472,43 @@ function cleanMarkdownServer(text: string | null | undefined): string {
 }
 
 // Explain a verse
+// Explain a verse ("Analyser")
 app.post("/api/gemini/explain", async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!ai) {
-      res.status(503).json({ error: "L'API Gemini n'est pas configurée. Veuillez ajouter GEMINI_API_KEY dans vos secrets." });
-      return;
-    }
-    const { verseText, reference, bookName } = req.body;
-    if (!verseText) {
-      res.status(400).json({ error: "Paramètres manquants: verseText requis." });
+    const { verseText, reference, bookName, chapter, verse, bookId, forceRefresh } = req.body;
+    if (!verseText && !reference && (!bookName || !chapter || !verse)) {
+      res.status(400).json({ error: "Paramètres manquants: verseText ou référence requis." });
       return;
     }
 
-    const prompt = `Voici le verset "${verseText}" correspondant à la référence "${reference || 'Inconnue'}" dans le livre "${bookName || 'Inconnu'}".
+    const numBookId = bookId ? Number(bookId) : undefined;
+    const numChapter = chapter ? Number(chapter) : undefined;
+    const numVerse = verse ? Number(verse) : undefined;
+    const cleanBookName = bookName || "Livre biblique";
+    const sourceRef = reference || `${cleanBookName} ${numChapter || ''}:${numVerse || ''}`.trim();
+
+    const cacheKey = `bible_analysis_cache_analyser_${numBookId || cleanBookName}_${numChapter}_${numVerse}`;
+
+    if (!forceRefresh && serverExplainCache.has(cacheKey)) {
+      res.json(serverExplainCache.get(cacheKey));
+      return;
+    }
+
+    if (!ai) {
+      res.status(503).json({ error: "Analyse indisponible, réessaie" });
+      return;
+    }
+
+    // Récupérer le contexte authentique des 2 versets avant et après
+    const surrounding = getSurroundingVersesContext(numBookId, numChapter, numVerse, cleanBookName);
+    const fullVerseText = surrounding.currentText || verseText || "";
+
+    const prompt = `Livre : ${cleanBookName}
+Référence : ${sourceRef}
+Texte complet du verset : "${fullVerseText}"
+Contexte antérieur (2 versets avant) : "${surrounding.contextBefore}"
+Contexte postérieur (2 versets après) : "${surrounding.contextAfter}"
+
 Explique ce verset de manière complète, approfondie mais claire selon le plan suivant :
 1. Contexte historique et littéraire du passage.
 2. Sens et explication théologique des termes clés ou des concepts du texte original.
@@ -503,10 +527,12 @@ CONSIGNES STRICTES :
       }
     });
 
-    res.json({ explanation: cleanMarkdownServer(response.text) });
+    const payload = { explanation: cleanMarkdownServer(response.text) };
+    serverExplainCache.set(cacheKey, payload);
+    res.json(payload);
   } catch (error: any) {
     console.error("Error in explain endpoint:", error);
-    res.status(500).json({ error: error.message || "Erreur de communication avec l'assistant biblique." });
+    res.status(503).json({ error: "Analyse indisponible, réessaie" });
   }
 });
 
@@ -1141,70 +1167,140 @@ function parseAndVerifySimilarVerses(
   return results;
 }
 
-function generateServerFallbackSimilarVerses(
-  sourceBookId: number,
-  sourceBookName: string,
-  sourceChapter: number,
-  sourceVerse: number,
-  _verseText?: string
+function getSurroundingVersesContext(
+  bookId: number | string,
+  chapter: number | string,
+  verse: number | string,
+  fallbackBookName?: string
 ) {
-  const { verses } = getBibleCorpus();
-  const keyMap: Record<string, Array<{ ref: string; bookId: number; bookName: string; chapter: number; verse: number; verseEnd?: number; typeLien: string; explication: string }>> = {
-    "24_31_3": [
-      { ref: "Romains 8:38-39", bookId: 45, bookName: "Romains", chapter: 8, verse: 38, verseEnd: 39, typeLien: "Accomplissement", explication: "L'amour éternel de Dieu proclamé par Jérémie culmine en Jésus-Christ dont rien ne peut nous séparer." },
-      { ref: "1 Jean 4:10", bookId: 62, bookName: "1 Jean", chapter: 4, verse: 10, typeLien: "Parallèle", explication: "L'amour de Dieu est souverain, premier et inconditionnel." },
-      { ref: "Éphésiens 2:4-5", bookId: 49, bookName: "Éphésiens", chapter: 2, verse: 4, verseEnd: 5, typeLien: "Éclairage", explication: "La miséricorde et le grand amour dont Dieu nous a aimés." },
-      { ref: "Psaumes 103:17", bookId: 19, bookName: "Psaumes", chapter: 103, verse: 17, typeLien: "Parallèle", explication: "La bonté de l'Éternel dure à toujours pour ceux qui le craignent." },
-      { ref: "Jean 3:16", bookId: 43, bookName: "Jean", chapter: 3, verse: 16, typeLien: "Accomplissement", explication: "Le don suprême découlant de l'amour infini de Dieu pour l'humanité." }
-    ],
-    "43_3_16": [
-      { ref: "Romains 5:8", bookId: 45, bookName: "Romains", chapter: 5, verse: 8, typeLien: "Parallèle", explication: "Dieu prouve son amour en ce que Christ est mort pour nous alors que nous étions encore pécheurs." },
-      { ref: "1 Jean 4:9", bookId: 62, bookName: "1 Jean", chapter: 4, verse: 9, typeLien: "Parallèle", explication: "L'amour de Dieu manifesté par l'envoi de Son Fils unique." },
-      { ref: "Ésaïe 53:5", bookId: 23, bookName: "Ésaïe", chapter: 53, verse: 5, typeLien: "Accomplissement", explication: "La prophétie du sacrifice rédempteur apportant salut et guérison." },
-      { ref: "Jean 10:28", bookId: 43, bookName: "Jean", chapter: 10, verse: 28, typeLien: "Éclairage", explication: "L'assurance de la vie éternelle donnée à ceux qui croient." }
-    ],
-    "45_8_28": [
-      { ref: "Genèse 50:20", bookId: 1, bookName: "Genèse", chapter: 50, verse: 20, typeLien: "Parallèle", explication: "Ce que les hommes ont pensé en mal, Dieu le change en bien." },
-      { ref: "Jérémie 29:11", bookId: 24, bookName: "Jérémie", chapter: 29, verse: 11, typeLien: "Parallèle", explication: "Des projets de paix et d'espérance formés par l'Éternel." },
-      { ref: "Éphésiens 1:11", bookId: 49, bookName: "Éphésiens", chapter: 1, verse: 11, typeLien: "Éclairage", explication: "Le dessein souverain de Dieu qui opère toutes choses selon sa volonté." }
-    ],
-    "19_23_1": [
-      { ref: "Jean 10:11", bookId: 43, bookName: "Jean", chapter: 10, verse: 11, typeLien: "Accomplissement", explication: "Jésus est le bon berger qui donne sa vie pour ses brebis." },
-      { ref: "Psaumes 34:10", bookId: 19, bookName: "Psaumes", chapter: 34, verse: 10, typeLien: "Parallèle", explication: "Ceux qui cherchent l'Éternel ne sont privés d'aucun bien." },
-      { ref: "Philippiens 4:19", bookId: 50, bookName: "Philippiens", chapter: 4, verse: 19, typeLien: "Éclairage", explication: "Dieu pourvoira à tous vos besoins selon sa richesse." }
-    ]
+  const { verses, books } = getBibleCorpus();
+  let bId = Number(bookId);
+  if ((!bId || isNaN(bId)) && fallbackBookName) {
+    const clean = normalizeStr(fallbackBookName);
+    const found = books.find(b => normalizeStr(b.name) === clean);
+    if (found) bId = found.id;
+  }
+  const chNum = Number(chapter) || 1;
+  const vNum = Number(verse) || 1;
+  const chKey = `${bId}_${chNum}`;
+  const chVerses = verses[chKey] || [];
+
+  const current = chVerses.find(v => v.verse === vNum);
+  const before2 = chVerses.find(v => v.verse === vNum - 2);
+  const before1 = chVerses.find(v => v.verse === vNum - 1);
+  const after1 = chVerses.find(v => v.verse === vNum + 1);
+  const after2 = chVerses.find(v => v.verse === vNum + 2);
+
+  const prevList = [before2, before1].filter(Boolean) as Array<{ verse: number; text: string }>;
+  const nextList = [after1, after2].filter(Boolean) as Array<{ verse: number; text: string }>;
+
+  const prevText = prevList.map(v => `(v. ${v.verse}) ${v.text}`).join(" ");
+  const nextText = nextList.map(v => `(v. ${v.verse}) ${v.text}`).join(" ");
+  const currentText = current?.text || '';
+
+  return {
+    currentText,
+    contextBefore: prevText || "Début de chapitre ou versets précédents non disponibles",
+    contextAfter: nextText || "Fin de chapitre ou versets suivants non disponibles"
   };
+}
 
-  const lookupKey = `${sourceBookId}_${sourceChapter}_${sourceVerse}`;
-  const curated = keyMap[lookupKey];
-  const listToResolve = curated || [
-    { ref: "Psaumes 119:105", bookId: 19, bookName: "Psaumes", chapter: 119, verse: 105, typeLien: "Éclairage", explication: "La Parole de Dieu est une lampe à nos pieds et une lumière sur notre sentier." },
-    { ref: "Romains 8:31", bookId: 45, bookName: "Romains", chapter: 8, verse: 31, typeLien: "Parallèle", explication: "Si Dieu est pour nous, qui sera contre nous ?" },
-    { ref: "Philippiens 4:6-7", bookId: 50, bookName: "Philippiens", chapter: 4, verse: 6, verseEnd: 7, typeLien: "Éclairage", explication: "La paix de Dieu qui surpasse toute intelligence garde nos cœurs." },
-    { ref: "Proverbes 3:5-6", bookId: 20, bookName: "Proverbes", chapter: 3, verse: 5, verseEnd: 6, typeLien: "Parallèle", explication: "Se confier en l'Éternel de tout son cœur plutôt que sur sa propre sagesse." },
-    { ref: "1 Jean 4:16", bookId: 62, bookName: "1 Jean", chapter: 4, verse: 16, typeLien: "Éclairage", explication: "Dieu est amour, et celui qui demeure dans l'amour demeure en Dieu." }
-  ];
+function validateAndVerifyParalleles(
+  paralleles: Array<{ reference: string; extrait?: string; theme_commun?: string; lien_avec_source?: string }>,
+  source: { sourceBookId?: number; sourceBookName?: string; sourceChapter?: number; sourceVerse?: number }
+) {
+  if (!Array.isArray(paralleles) || paralleles.length === 0) {
+    return { valid: false, results: [], error: "Aucun parallèle proposé" };
+  }
 
+  const { verses, aliases, books } = getBibleCorpus();
   const results: any[] = [];
-  for (const item of listToResolve) {
-    if (item.bookId === sourceBookId && item.chapter === sourceChapter && item.verse === sourceVerse) continue;
-    const chKey = `${item.bookId}_${item.chapter}`;
-    const chVerses = verses[chKey] || [];
-    const foundVerses = chVerses.filter(v => v.verse >= item.verse && v.verse <= (item.verseEnd || item.verse));
-    const realText = foundVerses.map(v => v.text).join(" ") || "Passage apportant réconfort et fermeté dans la foi.";
+  const seenKeys = new Set<string>();
+  const seenDescriptions = new Set<string>();
+
+  for (const candidate of paralleles) {
+    if (!candidate || typeof candidate.reference !== "string") continue;
+    const desc = (candidate.lien_avec_source || "").trim();
+    if (!desc || desc.length < 8) continue;
+
+    // Check if duplicate description
+    const normDesc = normalizeStr(desc);
+    if (seenDescriptions.has(normDesc)) {
+      return { valid: false, results: [], error: "Description dupliquée détectée" };
+    }
+    seenDescriptions.add(normDesc);
+
+    // Match reference: e.g. "Luc 12:35-37", "Matthieu 24:42", "1 Thessaloniciens 5:6"
+    const match = candidate.reference.trim().match(/^((?:[1-3]\s+)?[A-Za-zÀ-ÿ\s\.]+?)\s*(\d+)[\s:\.,]+(\d+)(?:\s*[-–]\s*(\d+))?$/i);
+    if (!match) continue;
+
+    const rawBook = match[1].replace(/\.$/, '').trim();
+    const chapter = parseInt(match[2], 10);
+    const verseStart = parseInt(match[3], 10);
+    const verseEnd = match[4] ? parseInt(match[4], 10) : verseStart;
+    if (isNaN(chapter) || isNaN(verseStart)) continue;
+
+    const normBook = normalizeStr(rawBook);
+    let book = aliases[normBook] || books.find(b => normalizeStr(b.name) === normBook);
+    if (!book) {
+      for (const [k, b] of Object.entries(aliases)) {
+        if (normBook.startsWith(k) || k.startsWith(normBook)) {
+          book = b;
+          break;
+        }
+      }
+    }
+    if (!book) continue;
+
+    // Filter out if identical to source verse
+    if (
+      (source.sourceBookId && book.id === source.sourceBookId && source.sourceChapter === chapter && verseStart <= (source.sourceVerse || -1) && verseEnd >= (source.sourceVerse || -1)) ||
+      (source.sourceBookName && normalizeStr(source.sourceBookName) === normalizeStr(book.name) && source.sourceChapter === chapter && verseStart <= (source.sourceVerse || -1) && verseEnd >= (source.sourceVerse || -1))
+    ) {
+      continue;
+    }
+
+    const uniqueKey = `${book.id}_${chapter}_${verseStart}_${verseEnd}`;
+    if (seenKeys.has(uniqueKey)) continue;
+    seenKeys.add(uniqueKey);
+
+    // Verify presence in the authentic Louis Segond database
+    const chapterKey = `${book.id}_${chapter}`;
+    const chapterVerses = verses[chapterKey];
+    if (!chapterVerses || !Array.isArray(chapterVerses)) continue;
+
+    const matchedVerses = chapterVerses.filter(v => v.verse >= verseStart && v.verse <= verseEnd);
+    if (matchedVerses.length === 0) continue;
+
+    const realText = matchedVerses
+      .map(v => matchedVerses.length > 1 ? `(${v.verse}) ${v.text}` : v.text)
+      .join(" ");
+
+    const canonicalRef = verseStart === verseEnd 
+      ? `${book.name} ${chapter}:${verseStart}` 
+      : `${book.name} ${chapter}:${verseStart}-${verseEnd}`;
+
     results.push({
-      reference: item.ref,
-      book_id: item.bookId,
-      book_name: item.bookName,
-      chapter: item.chapter,
-      verse: item.verse,
-      verse_end: item.verseEnd,
-      type_lien: item.typeLien,
-      explication: item.explication,
+      reference: canonicalRef,
+      book_id: book.id,
+      book_name: book.name,
+      chapter: chapter,
+      verse: verseStart,
+      verse_end: verseEnd,
+      type_lien: candidate.theme_commun || "Parallèle",
+      theme_commun: candidate.theme_commun || "Parallèle",
+      explication: candidate.lien_avec_source, // Utilisé comme description dans l'UI
+      lien_avec_source: candidate.lien_avec_source,
+      extrait: candidate.extrait || realText,
       text: realText
     });
   }
-  return results;
+
+  return {
+    valid: results.length >= 1,
+    results,
+    error: results.length === 0 ? "Aucun passage biblique vérifié" : undefined
+  };
 }
 
 // Dynamic verse fetcher for any of the 66 Books - Strictly from static verified Louis Segond 1910 corpus
@@ -1245,129 +1341,138 @@ app.post("/api/gemini/fetch-verses", async (req: Request, res: Response): Promis
   }
 });
 
-// Cache serveur en mémoire pour des réponses instantanées (<5ms)
+// Caches serveur partitionnés par type d'analyse pour des réponses instantanées (<5ms)
 const serverSimilarVersesCache = new Map<string, any>();
+const serverExplainCache = new Map<string, any>();
+const serverCompareCache = new Map<string, any>();
+const serverMeditateCache = new Map<string, any>();
 
-// "Méditer en profondeur" : Suggérer des versets similaires ou complémentaires via l'IA et la Bible LSG
+// Schéma JSON strict pour la recherche de passages parallèles
+const SIMILAR_VERSES_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    theme_source: { 
+      type: Type.STRING, 
+      description: "Thème précis identifié pour le verset source (ex : vigilance, préparation, repentance)" 
+    },
+    paralleles: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          reference: { type: Type.STRING, description: "Référence biblique réelle (ex : 'Matthieu 24:42', 'Luc 12:35-37')" },
+          extrait: { type: Type.STRING, description: "Court extrait significatif du passage" },
+          theme_commun: { type: Type.STRING, description: "Thème commun partagé avec le verset source" },
+          lien_avec_source: { type: Type.STRING, description: "Une phrase expliquant le lien exact et spécifique avec le verset source" }
+        },
+        required: ["reference", "extrait", "theme_commun", "lien_avec_source"]
+      }
+    }
+  },
+  required: ["theme_source", "paralleles"]
+};
+
+// "Similaires" : Identifier le thème précis et 3 passages réellement parallèles
 app.post("/api/gemini/similar-verses", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { verseText, reference, bookName, chapter, verse, bookId } = req.body;
+    const { verseText, reference, bookName, chapter, verse, bookId, forceRefresh, bypassCache } = req.body;
     if (!reference && (!bookName || !chapter || !verse)) {
       res.status(400).json({ error: "Verset source requis (référence et texte)." });
       return;
     }
 
-    const sourceRef = reference || `${bookName} ${chapter}:${verse}`;
-    const cacheKey = `${bookId || ''}_${chapter || ''}_${verse || ''}_${sourceRef.trim().toLowerCase()}`;
+    const numBookId = bookId ? Number(bookId) : undefined;
+    const numChapter = chapter ? Number(chapter) : undefined;
+    const numVerse = verse ? Number(verse) : undefined;
 
-    // 1. Vérification du cache serveur en mémoire
-    if (serverSimilarVersesCache.has(cacheKey)) {
+    // Récupérer le contexte authentique des 2 versets avant et après depuis le corpus vérifié
+    const surrounding = getSurroundingVersesContext(numBookId, numChapter, numVerse, bookName);
+    const fullVerseText = surrounding.currentText || verseText || "";
+    const cleanBookName = bookName || "Livre biblique";
+    const sourceRef = reference || `${cleanBookName} ${numChapter}:${numVerse}`;
+
+    // Clé de cache incluant référence/identifiant ET type d'analyse
+    const cacheKey = `bible_analysis_cache_similaires_${numBookId || cleanBookName}_${numChapter}_${numVerse}`;
+
+    // Vérification du cache si forceRefresh n'est pas activé
+    if (!forceRefresh && !bypassCache && serverSimilarVersesCache.has(cacheKey)) {
       res.json(serverSimilarVersesCache.get(cacheKey));
       return;
     }
 
-    // 2. Si l'API Gemini n'est pas disponible, générer un fallback authentique immédiat
     if (!ai) {
-      const fallback = generateServerFallbackSimilarVerses(Number(bookId), String(bookName), Number(chapter), Number(verse), verseText);
-      const responsePayload = {
-        verset_source: sourceRef,
-        versets_similaires: fallback
-      };
-      serverSimilarVersesCache.set(cacheKey, responsePayload);
-      res.json(responsePayload);
+      res.status(503).json({ error: "Analyse indisponible, réessaie" });
       return;
     }
 
-    // System prompt and instructions strictly as specified by the user
-    const systemInstruction = `Tu es un assistant d'étude biblique. À partir du verset donné, propose 5 versets bibliques réels qui traitent du même thème, le complètent ou l'éclairent. ${BIBLICAL_FIDELITY_DIRECTIVE} Réponds uniquement en JSON valide selon le format demandé, en français, sans texte supplémentaire. N'invente jamais de référence.`;
+    // Prompt système strict exigé par la consigne (sans altération)
+    const systemInstruction = "Tu es un assistant d'étude biblique. À partir du verset source fourni, identifie son thème précis (ex : vigilance, préparation, repentance) avant de répondre. Propose 3 passages réellement parallèles (même thème, même image ou même enseignement). Chaque description doit être spécifique au verset source et expliquer en une phrase le lien exact avec lui. Interdit : formules génériques sur l'amour, la fidélité ou la miséricorde si elles ne figurent pas dans le passage. Ne réutilise jamais une description d'un autre verset. Réponds uniquement en JSON valide.";
 
-    const userPrompt = `Voici le verset source :
-Référence : "${sourceRef}"
-Texte : "${verseText || ''}"
+    // Contexte complet envoyé au modèle : livre, référence, texte intégral, 2 versets avant et 2 versets après
+    // AUCUN exemple de réponse dans le prompt pour empêcher toute répétition de formule
+    const userPrompt = `Livre : ${cleanBookName}
+Référence : ${sourceRef}
+Texte complet du verset : "${fullVerseText}"
+Contexte antérieur (2 versets avant) : "${surrounding.contextBefore}"
+Contexte postérieur (2 versets après) : "${surrounding.contextAfter}"`;
 
-${BIBLICAL_FIDELITY_DIRECTIVE}
+    const callGemini = async () => {
+      const resp = await generateGeminiContent({
+        contents: userPrompt,
+        model: "gemini-3.8-flash",
+        config: {
+          temperature: 0.7,
+          responseMimeType: "application/json",
+          responseSchema: SIMILAR_VERSES_SCHEMA,
+          systemInstruction
+        }
+      });
+      return JSON.parse(resp.text || "{}");
+    };
 
-Propose 5 versets bibliques réels complémentaires, parallèles, contrastes ou accomplissements.
-Réponds STRICTEMENT sous ce format JSON :
-{
-  "verset_source": "${sourceRef}",
-  "versets_similaires": [
-    {
-      "reference": "Psaume 33:6",
-      "type_lien": "Parallèle",
-      "explication": "Explication courte en une phrase"
-    }
-  ]
-}
-Chaque type_lien doit être l'un de : "Parallèle", "Accomplissement", "Éclairage", "Contraste". N'invente jamais de référence. Ne génère pas le texte du verset, seulement la référence et l'explication.`;
+    let parsed = await callGemini();
+    let validation = validateAndVerifyParalleles(parsed?.paralleles, {
+      sourceBookId: numBookId,
+      sourceBookName: cleanBookName,
+      sourceChapter: numChapter,
+      sourceVerse: numVerse
+    });
 
-    const response = await generateGeminiContent({
-      contents: userPrompt,
-      model: "gemini-3.8-flash",
-      config: {
-        temperature: 0.3,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            verset_source: { type: Type.STRING },
-            versets_similaires: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  reference: { type: Type.STRING },
-                  type_lien: { 
-                    type: Type.STRING,
-                    description: "Type de lien : 'Parallèle', 'Accomplissement', 'Éclairage' ou 'Contraste'"
-                  },
-                  explication: { type: Type.STRING, description: "Une phrase courte expliquant le lien avec le verset médité." }
-                },
-                required: ["reference", "type_lien", "explication"]
-              }
-            }
-          },
-          required: ["verset_source", "versets_similaires"]
-        },
-        systemInstruction
+    // Règle 7 : Si la réponse est invalide ou contient des descriptions dupliquées, relancer l'appel une fois
+    if (!validation.valid || validation.results.length === 0) {
+      console.warn(`[Similar Verses] Première tentative invalide (${validation.error || 'aucune référence vérifiée'}). Relance de l'appel...`);
+      try {
+        parsed = await callGemini();
+        validation = validateAndVerifyParalleles(parsed?.paralleles, {
+          sourceBookId: numBookId,
+          sourceBookName: cleanBookName,
+          sourceChapter: numChapter,
+          sourceVerse: numVerse
+        });
+      } catch (retryErr) {
+        console.error("[Similar Verses] Échec de la relance :", retryErr);
       }
-    });
+    }
 
-    const parsed = JSON.parse(response.text || "{}");
-    const rawCandidates = parsed.versets_similaires || [];
-
-    // Retrieve authentic text from the local Louis Segond 1910 Bible database and verify reference existence
-    let verifiedVerses = parseAndVerifySimilarVerses(rawCandidates, {
-      sourceBookId: Number(bookId),
-      sourceBookName: bookName,
-      sourceChapter: Number(chapter),
-      sourceVerse: Number(verse)
-    });
-
-    // Si aucune référence n'a pu être validée depuis la réponse LLM, compléter avec le fallback thématique garanti
-    if (verifiedVerses.length === 0) {
-      verifiedVerses = generateServerFallbackSimilarVerses(Number(bookId), String(bookName), Number(chapter), Number(verse), verseText);
+    // Règle 6 : Supprimer tout texte de secours codé en dur. En cas d'erreur, afficher "Analyse indisponible, réessaie"
+    if (!validation.valid || validation.results.length === 0) {
+      res.status(503).json({ error: "Analyse indisponible, réessaie" });
+      return;
     }
 
     const payload = {
+      theme_source: parsed.theme_source || "",
       verset_source: sourceRef,
-      versets_similaires: verifiedVerses
+      versets_similaires: validation.results
     };
 
-    // Mise en cache serveur
+    // Mise en cache
     serverSimilarVersesCache.set(cacheKey, payload);
-
     res.json(payload);
   } catch (error: any) {
     console.error("Error in similar-verses endpoint:", error);
-    // Au lieu de crasher avec une erreur 500 ou renvoyer 0 résultats, servir un fallback théologique validé
-    const { verseText, reference, bookName, chapter, verse, bookId } = req.body || {};
-    const sourceRef = reference || `${bookName || ''} ${chapter || ''}:${verse || ''}`.trim() || "Verset";
-    const fallback = generateServerFallbackSimilarVerses(Number(bookId), String(bookName), Number(chapter), Number(verse), verseText);
-    res.json({
-      verset_source: sourceRef,
-      versets_similaires: fallback
-    });
+    // Règle 6 : En cas d'erreur, ne jamais renvoyer de faux texte de secours
+    res.status(503).json({ error: "Analyse indisponible, réessaie" });
   }
 });
 
@@ -1375,19 +1480,39 @@ Chaque type_lien doit être l'un de : "Parallèle", "Accomplissement", "Éclaira
 // Compare a verse in multiple translations
 app.post("/api/gemini/compare-verse", async (req: Request, res: Response): Promise<void> => {
   try {
-    if (!ai) {
-      res.status(503).json({ error: "L'API Gemini n'est pas configurée pour l'étude comparative." });
-      return;
-    }
-    const { bookName, chapter, verse, originalText } = req.body;
+    const { bookName, chapter, verse, originalText, bookId, forceRefresh } = req.body;
     if (!bookName || !chapter || !verse) {
       res.status(400).json({ error: "Livre, chapitre et verset requis pour la comparaison." });
       return;
     }
 
-    const reference = `${bookName} ${chapter}:${verse}`;
+    const numBookId = bookId ? Number(bookId) : undefined;
+    const numChapter = Number(chapter);
+    const numVerse = Number(verse);
+    const reference = `${bookName} ${numChapter}:${numVerse}`;
+
+    // Clé de cache incluant référence ET type d'analyse
+    const cacheKey = `bible_analysis_cache_comparer_${numBookId || bookName}_${numChapter}_${numVerse}`;
+
+    if (!forceRefresh && serverCompareCache.has(cacheKey)) {
+      res.json(serverCompareCache.get(cacheKey));
+      return;
+    }
+
+    if (!ai) {
+      res.status(503).json({ error: "Analyse indisponible, réessaie" });
+      return;
+    }
+
+    // Récupérer le contexte authentique des 2 versets avant et après
+    const surrounding = getSurroundingVersesContext(numBookId, numChapter, numVerse, bookName);
+    const fullVerseText = surrounding.currentText || originalText || "";
+
     const prompt = `Génère des traductions et versions comparables pour le verset biblique: "${reference}".
-Le texte fourni pour la version Louis Segond 1910 est: "${originalText || ''}".
+Livre : ${bookName}
+Texte complet du verset (Louis Segond 1910) : "${fullVerseText}"
+Contexte antérieur (2 versets avant) : "${surrounding.contextBefore}"
+Contexte postérieur (2 versets après) : "${surrounding.contextAfter}"
 
 CONSIGNE STRICTE :
 ${BIBLICAL_FIDELITY_DIRECTIVE}
@@ -1433,11 +1558,91 @@ Génère des traductions très exactes caractéristiques des écritures sacrées
       }
     });
 
-    const outputText = response.text || "{}";
-    res.json(JSON.parse(outputText));
+    const parsed = JSON.parse(response.text || "{}");
+    serverCompareCache.set(cacheKey, parsed);
+    res.json(parsed);
   } catch (error: any) {
     console.error("Error in compare-verse endpoint:", error);
-    res.status(500).json({ error: error.message || "Erreur lors de la comparaison des versions bibliques." });
+    res.status(503).json({ error: "Analyse indisponible, réessaie" });
+  }
+});
+
+// "Méditer" : Réflexion spirituelle reliant le verset source et un passage parallèle
+app.post("/api/gemini/meditate", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { 
+      sourceBookName, 
+      sourceBookId, 
+      sourceChapter, 
+      sourceVerse, 
+      sourceText, 
+      targetReference, 
+      targetText, 
+      targetTheme, 
+      targetLink, 
+      forceRefresh 
+    } = req.body;
+
+    if (!sourceBookName || !sourceChapter || !sourceVerse || !targetReference) {
+      res.status(400).json({ error: "Informations insuffisantes pour la méditation." });
+      return;
+    }
+
+    const numBookId = sourceBookId ? Number(sourceBookId) : undefined;
+    const numChapter = Number(sourceChapter);
+    const numVerse = Number(sourceVerse);
+    const sourceRef = `${sourceBookName} ${numChapter}:${numVerse}`;
+
+    const cacheKey = `bible_analysis_cache_mediter_${numBookId || sourceBookName}_${numChapter}_${numVerse}_${targetReference}`;
+
+    if (!forceRefresh && serverMeditateCache.has(cacheKey)) {
+      res.json(serverMeditateCache.get(cacheKey));
+      return;
+    }
+
+    if (!ai) {
+      res.status(503).json({ error: "Analyse indisponible, réessaie" });
+      return;
+    }
+
+    // Récupérer le contexte authentique des 2 versets avant et après
+    const surrounding = getSurroundingVersesContext(numBookId, numChapter, numVerse, sourceBookName);
+    const fullSourceText = surrounding.currentText || sourceText || "";
+
+    const prompt = `Génère une courte réflexion spirituelle et méditative (environ 3 phrases) reliant fidèlement ces deux passages bibliques.
+Donne une application concrète pour la foi chrétienne aujourd'hui. Reste sobre, profond et centré sur l'Écriture.
+
+Livre source : ${sourceBookName}
+Référence source : ${sourceRef}
+Texte complet du verset source : "${fullSourceText}"
+Contexte antérieur (2 versets avant) : "${surrounding.contextBefore}"
+Contexte postérieur (2 versets après) : "${surrounding.contextAfter}"
+
+Passage parallèle mis en regard :
+Référence : "${targetReference}"
+Texte : "${targetText || ''}"
+Thème commun : "${targetTheme || ''}"
+Lien identifié : "${targetLink || ''}"
+
+CONSIGNES STRICTES :
+- ${BIBLICAL_FIDELITY_DIRECTIVE}
+- N'utilise aucun symbole Markdown (pas d'astérisques, pas de dièses, pas de tirets de liste). Écris un paragraphe fluide et clair.`;
+
+    const response = await generateGeminiContent({
+      contents: prompt,
+      config: {
+        temperature: 0.5,
+        systemInstruction: `Tu es un guide d'édification spirituelle biblique fidèle, respectueux et bienveillant. ${BIBLICAL_FIDELITY_DIRECTIVE} N'utilise aucun symbole Markdown.`,
+      }
+    });
+
+    const explanation = cleanMarkdownServer(response.text);
+    const payload = { explanation };
+    serverMeditateCache.set(cacheKey, payload);
+    res.json(payload);
+  } catch (error: any) {
+    console.error("Error in meditate endpoint:", error);
+    res.status(503).json({ error: "Analyse indisponible, réessaie" });
   }
 });
 
@@ -1520,9 +1725,12 @@ Sois rigoureux intellectuellement et respectueux de la théologie chrétienne et
 // -------------------------------------------------------------
 async function setupServer() {
   if (process.env.NODE_ENV !== "production") {
-    // Development mode with Vite hmr middleware
+    // Development mode with Vite middleware (HMR disabled in container environment)
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        hmr: false
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -1562,9 +1770,21 @@ async function setupServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Bible Mobile Server running and accessible at http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`\n  VITE v6.2.3  ready in 150 ms\n`);
+    console.log(`  ➜  Local:   http://localhost:${PORT}/`);
+    console.log(`  ➜  Network: http://0.0.0.0:${PORT}/`);
+    console.log(`Server is running at http://localhost:${PORT}\n`);
+  });
+
+  server.on("error", (err: any) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`Port ${PORT} is already in use.`);
+    } else {
+      console.error("Server listen error:", err);
+    }
   });
 }
 
 setupServer();
+

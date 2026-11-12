@@ -117,13 +117,17 @@ export interface SimilarVerse {
   chapter: number;
   verse: number;
   verse_end?: number;
-  type_lien: LinkType;
+  type_lien: LinkType | string;
   explication: string;
+  lien_avec_source?: string;
+  theme_commun?: string;
+  extrait?: string;
   text: string;
 }
 
 export interface SimilarVersesResponse {
   verset_source: string;
+  theme_source?: string;
   versets_similaires: SimilarVerse[];
 }
 

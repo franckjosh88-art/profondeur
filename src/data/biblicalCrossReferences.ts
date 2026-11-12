@@ -872,8 +872,11 @@ export function getLocalThematicMatches(
     }
   }
 
-  // Si aucun mot-clé spécifique ne ressort, utiliser le cluster de réconfort et foi par défaut
-  const activeCluster = bestCluster || THEMATIC_CLUSTERS[0];
+  // Si aucun mot-clé spécifique ne ressort avec un score significatif, ne pas renvoyer de cluster générique par défaut
+  if (!bestCluster || maxScore < 2) {
+    return [];
+  }
+  const activeCluster = bestCluster;
   const candidates: SimilarVerse[] = [];
 
   for (const item of activeCluster.targetVerses) {

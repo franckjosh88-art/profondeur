@@ -21,7 +21,8 @@ import {
   BookOpen,
   Volume2,
   Plus,
-  RotateCcw
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
 import { authenticatedFetch } from '../lib/apiClient';
 import { Verse, SimilarVerse, SimilarVersesResponse, HighlightColor, HIGHLIGHT_PALETTE } from '../types/bible';
@@ -93,6 +94,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
 
   // 2. SIMILAIRES STATE
   const [similarVerses, setSimilarVerses] = useState<SimilarVerse[]>([]);
+  const [themeSource, setThemeSource] = useState<string | null>(null);
   const [loadingSimilar, setLoadingSimilar] = useState<boolean>(false);
   const [similarError, setSimilarError] = useState<string | null>(null);
   // Méditer state for similar verses
@@ -131,6 +133,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
     setActiveTab('none');
     setCompareData([]);
     setAnalysisText(null);
+    setThemeSource(null);
     setMeditationVerseRef(null);
     setMeditationText(null);
     setNoteText('');
@@ -143,7 +146,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
     setPlayingAudioIndex(null);
 
     // Initialisation instantanée depuis le cache si déjà disponible
-    const cached = getFromCache(verse);
+    const cached = getFromCache(verse, 'similaires');
     if (cached && cached.length > 0) {
       setSimilarVerses(cached);
       setSimilarError(null);
@@ -190,13 +193,13 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
   };
 
   // ===================== 1. COMPARER =====================
-  const toggleCompare = async () => {
-    if (activeTab === 'compare') {
+  const toggleCompare = async (forceRefresh = false) => {
+    if (!forceRefresh && activeTab === 'compare') {
       setActiveTab('none');
       return;
     }
     setActiveTab('compare');
-    if (compareData.length > 0) return;
+    if (!forceRefresh && compareData.length > 0) return;
 
     setLoadingCompare(true);
     setCompareError(null);
@@ -206,9 +209,11 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           bookName: verse.book_name,
+          bookId: verse.book_id,
           chapter: verse.chapter,
           verse: verse.verse,
           originalText: cleanVerseText(verse.text),
+          forceRefresh
         }),
       });
 
@@ -244,29 +249,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
       setSelectedVersions(codes.slice(0, 3));
     } catch (err: any) {
       console.error("Erreur comparaison:", err);
-      // Fallback local comparison with LSG + Darby approximation
-      const fallback: TranslationComparison[] = [
-        {
-          code: 'LSG',
-          name: 'Louis Segond 1910',
-          text: cleanVerseText(verse.text),
-          language: 'fr',
-        },
-        {
-          code: 'DRB',
-          name: 'Darby (Français)',
-          text: cleanVerseText(verse.text),
-          language: 'fr',
-        },
-        {
-          code: 'KJV',
-          name: 'King James Version',
-          text: cleanVerseText(verse.text),
-          language: 'en',
-        },
-      ];
-      setCompareData(fallback);
-      setSelectedVersions(['LSG', 'DRB', 'KJV']);
+      setCompareError("Analyse indisponible, réessaie");
     } finally {
       setLoadingCompare(false);
     }
@@ -283,23 +266,25 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
   };
 
   // ===================== 2. VERSETS SIMILAIRES =====================
-  const toggleSimilar = async () => {
-    if (activeTab === 'similar') {
+  const toggleSimilar = async (forceRefresh = false) => {
+    if (!forceRefresh && activeTab === 'similar') {
       setActiveTab('none');
       return;
     }
     setActiveTab('similar');
 
-    // 1. Si déjà présents en mémoire, affichage instantané en 0 ms
-    if (similarVerses.length > 0) return;
+    // 1. Si déjà présents en mémoire et sans rafraîchissement forcé, affichage instantané
+    if (!forceRefresh && similarVerses.length > 0) return;
 
-    // 2. Vérification immédiate du cache local (0 ms)
-    const cached = getFromCache(verse);
-    if (cached && cached.length > 0) {
-      setSimilarVerses(cached);
-      setLoadingSimilar(false);
-      setSimilarError(null);
-      return;
+    // 2. Vérification immédiate du cache local typé
+    if (!forceRefresh) {
+      const cached = getFromCache(verse, 'similaires');
+      if (cached && cached.length > 0) {
+        setSimilarVerses(cached);
+        setLoadingSimilar(false);
+        setSimilarError(null);
+        return;
+      }
     }
 
     setLoadingSimilar(true);
@@ -316,6 +301,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
         },
         limit: 6,
         timeoutMs: 10000,
+        forceRefresh,
         onProgressiveResult: (progressive) => {
           if (progressive && progressive.length > 0) {
             setSimilarVerses(progressive);
@@ -326,52 +312,62 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
 
       if (response.results && response.results.length > 0) {
         setSimilarVerses(response.results);
+        if (response.themeSource) {
+          setThemeSource(response.themeSource);
+        }
+        setSimilarError(null);
       } else {
-        setSimilarError("Aucun verset similaire n'a été trouvé.");
+        setSimilarError("Analyse indisponible, réessaie");
       }
     } catch (err: any) {
       console.error("Erreur versets similaires:", err);
-      setSimilarError("Délai de recherche dépassé (10s). Les correspondances locales sont affichées.");
+      setSimilarError("Analyse indisponible, réessaie");
     } finally {
       setLoadingSimilar(false);
     }
   };
 
-  // Bouton « Méditer » (IA)
-  const handleGenerateMeditation = async (sv: SimilarVerse) => {
+  // Bouton « Méditer » (IA) : Envoi du contexte complet et du passage parallèle
+  const handleGenerateMeditation = async (sv: SimilarVerse, forceRefresh = false) => {
     setMeditationVerseRef(sv.reference);
     setLoadingMeditation(true);
     setMeditationText(null);
     try {
-      const resp = await authenticatedFetch('/api/gemini/explain', {
+      const resp = await authenticatedFetch('/api/gemini/meditate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: `Génère une courte réflexion spirituelle et méditative (environ 3 phrases) reliant ces deux versets bibliques : 
-1) ${verse.book_name} ${verse.chapter}:${verse.verse} : "${cleanVerseText(verse.text)}"
-2) ${sv.reference} : "${sv.text}" (${sv.type_lien} : ${sv.explication}).
-Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis, sobre et chaleureux.`,
+          sourceBookName: verse.book_name,
+          sourceBookId: verse.book_id,
+          sourceChapter: verse.chapter,
+          sourceVerse: verse.verse,
+          sourceText: cleanVerseText(verse.text),
+          targetReference: sv.reference,
+          targetText: sv.text || '',
+          targetTheme: sv.theme_commun || sv.type_lien || '',
+          targetLink: sv.lien_avec_source || sv.explication || '',
+          forceRefresh
         }),
       });
-      if (!resp.ok) throw new Error("Erreur de génération");
+      if (!resp.ok) throw new Error("Analyse indisponible, réessaie");
       const data = await resp.json();
-      const rawMed = data.explanation || data.text || "Prenez un moment pour méditer sur la fidélité de Dieu à travers ce passage.";
+      const rawMed = data.explanation || "Analyse indisponible, réessaie";
       setMeditationText(cleanMarkdownText(rawMed));
     } catch (e) {
-      setMeditationText(`Ce passage (${sv.reference}) fait écho à ${verse.book_name} ${verse.chapter}:${verse.verse}. Méditez sur la manière dont ces vérités se renforcent mutuellement dans votre marche quotidienne.`);
+      setMeditationText("Analyse indisponible, réessaie");
     } finally {
       setLoadingMeditation(false);
     }
   };
 
   // ===================== 3. ANALYSER =====================
-  const toggleAnalyze = async () => {
-    if (activeTab === 'analyze') {
+  const toggleAnalyze = async (forceRefresh = false) => {
+    if (!forceRefresh && activeTab === 'analyze') {
       setActiveTab('none');
       return;
     }
     setActiveTab('analyze');
-    if (analysisText) return;
+    if (!forceRefresh && analysisText) return;
 
     setLoadingAnalysis(true);
     setAnalysisError(null);
@@ -392,20 +388,22 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           verseText: cleanVerseText(verse.text),
+          reference: `${verse.book_name} ${verse.chapter}:${verse.verse}`,
           bookName: verse.book_name,
+          bookId: verse.book_id,
           chapter: verse.chapter,
           verse: verse.verse,
-          fullContext: `Livre de ${verse.book_name}, chapitre ${verse.chapter}, verset ${verse.verse}`,
+          forceRefresh
         }),
       });
 
-      if (!resp.ok) throw new Error("Erreur d'analyse");
+      if (!resp.ok) throw new Error("Analyse indisponible, réessaie");
       const data = await resp.json();
-      const rawAnalysis = data.explanation || "Aucune analyse disponible pour ce verset.";
+      const rawAnalysis = data.explanation || "Analyse indisponible, réessaie";
       setAnalysisText(cleanMarkdownText(rawAnalysis));
     } catch (err: any) {
       console.error("Erreur analyse:", err);
-      setAnalysisError("Impossible de charger l'analyse. Vérifiez votre connexion.");
+      setAnalysisError("Analyse indisponible, réessaie");
     } finally {
       setLoadingAnalysis(false);
     }
@@ -744,12 +742,22 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
             {/* 2) COMPARER (Vue 2 ou 3 versions l'une sous l'autre) */}
             {activeTab === 'compare' && (
               <div className="space-y-3 bg-[#110f0b] border border-[#242018] rounded-2xl p-4">
-                <div className="flex items-center justify-between pb-2 border-b border-[#242018]">
+                <div className="flex items-center justify-between pb-2 border-b border-[#242018] flex-wrap gap-2">
                   <h4 className="text-xs font-sans text-[#a0947f]">
                     Comparaison de traductions
                   </h4>
-                  {/* Sélecteur de versions */}
-                  <div className="flex items-center gap-1.5">
+                  {/* Sélecteur de versions & Régénérer */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => toggleCompare(true)}
+                      disabled={loadingCompare}
+                      className="px-2 py-1 rounded-lg text-[11px] font-sans font-medium text-[#c9a84c] hover:bg-[#c9a84c]/15 border border-[#c9a84c]/30 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                      title="Régénérer les traductions comparées"
+                    >
+                      <RotateCw className={`w-3 h-3 ${loadingCompare ? 'animate-spin' : ''}`} />
+                      <span>Régénérer</span>
+                    </button>
                     {availableVersions.map(code => (
                       <button
                         key={code}
@@ -797,20 +805,37 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
             {/* 3) VERSETS SIMILAIRES */}
             {activeTab === 'similar' && (
               <div className="space-y-3 bg-[#110f0b] border border-[#242018] rounded-2xl p-4">
-                <div className="flex items-center justify-between pb-2 border-b border-[#242018]">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between pb-2 border-b border-[#242018] flex-wrap gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h4 className="text-xs font-sans text-[#a0947f]">
                       Passages proches et correspondances
                     </h4>
+                    {themeSource && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#c9a84c]/15 text-[#c9a84c] border border-[#c9a84c]/30 font-sans font-medium">
+                        Thème : {themeSource}
+                      </span>
+                    )}
                     {loadingSimilar && similarVerses.length > 0 && (
                       <span className="text-[10px] text-[#c9a84c] animate-pulse font-sans">
                         (mise à jour...)
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] text-[#c9a84c] font-sans font-medium">
-                    {similarVerses.length} trouvés
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleSimilar(true)}
+                      disabled={loadingSimilar}
+                      className="px-2 py-1 rounded-lg text-[11px] font-sans font-medium text-[#c9a84c] hover:bg-[#c9a84c]/15 border border-[#c9a84c]/30 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                      title="Régénérer les correspondances en ignorant le cache"
+                    >
+                      <RotateCw className={`w-3 h-3 ${loadingSimilar ? 'animate-spin' : ''}`} />
+                      <span>Régénérer</span>
+                    </button>
+                    <span className="text-[11px] text-[#c9a84c] font-sans font-medium">
+                      {similarVerses.length} trouvés
+                    </span>
+                  </div>
                 </div>
 
                 {loadingSimilar && similarVerses.length === 0 ? (
@@ -820,10 +845,10 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                   </div>
                 ) : similarError && similarVerses.length === 0 ? (
                   <div className="py-4 text-center space-y-1">
-                    <p className="text-xs text-rose-400 font-sans">{similarError}</p>
+                    <p className="text-xs text-rose-400 font-sans">{similarError || "Analyse indisponible, réessaie"}</p>
                     <button
                       type="button"
-                      onClick={toggleSimilar}
+                      onClick={() => toggleSimilar(true)}
                       className="mt-2 text-[11px] text-[#c9a84c] underline cursor-pointer"
                     >
                       Réessayer la recherche
@@ -854,15 +879,16 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                             <ExternalLink className="w-3 h-3 text-[#8c8270]" />
                           </button>
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#242018] text-[#8c8270] font-sans">
-                            {sv.type_lien}
+                            {sv.theme_commun || sv.type_lien}
                           </span>
                         </div>
 
                         <p className="font-serif text-xs text-[#d0c6b4] leading-relaxed italic">
                           « {cleanVerseText(sv.text)} »
                         </p>
+                        {/* Règle 3 : Affiche "lien_avec_source" comme description dans l'interface */}
                         <p className="text-[11px] text-[#8c8270] font-sans">
-                          {sv.explication}
+                          {sv.lien_avec_source || sv.explication}
                         </p>
 
                         {/* Bouton « Méditer » (IA) */}
@@ -905,13 +931,25 @@ Donne une application pratique pour la foi chrétienne aujourd'hui. Reste concis
                   <h4 className="text-xs font-sans text-[#a0947f]">
                     Explication et contexte du verset
                   </h4>
-                  <button
-                    type="button"
-                    onClick={() => setIsAnalysisExpanded(!isAnalysisExpanded)}
-                    className="text-[#8c8270] hover:text-[#e8e0d0] p-1 cursor-pointer"
-                  >
-                    {isAnalysisExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleAnalyze(true)}
+                      disabled={loadingAnalysis}
+                      className="px-2 py-1 rounded-lg text-[11px] font-sans font-medium text-[#c9a84c] hover:bg-[#c9a84c]/15 border border-[#c9a84c]/30 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                      title="Régénérer l'analyse théologique en ignorant le cache"
+                    >
+                      <RotateCw className={`w-3 h-3 ${loadingAnalysis ? 'animate-spin' : ''}`} />
+                      <span>Régénérer</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsAnalysisExpanded(!isAnalysisExpanded)}
+                      className="text-[#8c8270] hover:text-[#e8e0d0] p-1 cursor-pointer"
+                    >
+                      {isAnalysisExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 {loadingAnalysis ? (
