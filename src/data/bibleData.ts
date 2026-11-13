@@ -117,37 +117,315 @@ export const BOOK_MAPPING_TO_ENGLISH: Record<number, string> = {
   66: "Revelation"
 };
 
+export const USFM_BOOK_CODES: Record<number, string> = {
+  1: "GEN", 2: "EXO", 3: "LEV", 4: "NUM", 5: "DEU",
+  6: "JOS", 7: "JDG", 8: "RUT", 9: "1SA", 10: "2SA",
+  11: "1KI", 12: "2KI", 13: "1CH", 14: "2CH", 15: "EZR",
+  16: "NEH", 17: "EST", 18: "JOB", 19: "PSA", 20: "PRO",
+  21: "ECC", 22: "SNG", 23: "ISA", 24: "JER", 25: "LAM",
+  26: "EZK", 27: "DAN", 28: "HOS", 29: "JOL", 30: "AMO",
+  31: "OBA", 32: "JON", 33: "MIC", 34: "NAM", 35: "HAB",
+  36: "ZEP", 37: "HAG", 38: "ZEC", 39: "MAL",
+  40: "MAT", 41: "MRK", 42: "LUK", 43: "JHN", 44: "ACT",
+  45: "ROM", 46: "1CO", 47: "2CO", 48: "GAL", 49: "EPH",
+  50: "PHP", 51: "COL", 52: "1TH", 53: "2TH", 54: "1TI",
+  55: "2TI", 56: "TIT", 57: "PHM", 58: "HEB", 59: "JAS",
+  60: "1PE", 61: "2PE", 62: "1JN", 63: "2JN", 64: "3JN",
+  65: "JUD", 66: "REV"
+};
+
+export type BibleTranslationId = 'lsg' | 'darby' | 'martin' | 'ostervald' | 'local' | 'kjv';
+
+export interface BibleTranslationMeta {
+  id: BibleTranslationId;
+  code: string;
+  label: string;
+  language: 'fr' | 'en';
+  source: string;
+  license: string;
+}
+
+export const TRANSLATION_CATALOG: Record<BibleTranslationId, BibleTranslationMeta> = {
+  lsg: {
+    id: 'lsg',
+    code: 'LSG',
+    label: 'Louis Segond (1910)',
+    language: 'fr',
+    source: 'Corpus local LSG 1910 & eBible.org (fraLSG / helloao)',
+    license: 'Domaine Public'
+  },
+  darby: {
+    id: 'darby',
+    code: 'DRB',
+    label: 'Darby',
+    language: 'fr',
+    source: 'eBible.org (frajnd / helloao) & GetBible.net (darby)',
+    license: 'Domaine Public'
+  },
+  martin: {
+    id: 'martin',
+    code: 'MRT',
+    label: 'David Martin (1744)',
+    language: 'fr',
+    source: 'GetBible.net v2 (martin)',
+    license: 'Domaine Public'
+  },
+  ostervald: {
+    id: 'ostervald',
+    code: 'OST',
+    label: 'Ostervald',
+    language: 'fr',
+    source: 'eBible.org (fra_fob / helloao fra_ost)',
+    license: 'Domaine Public'
+  },
+  local: {
+    id: 'local',
+    code: 'LSG',
+    label: 'Hors ligne (LSG 1910)',
+    language: 'fr',
+    source: 'Base locale LSG 1910 (bible-lsg1910-complete.json)',
+    license: 'Domaine Public'
+  },
+  kjv: {
+    id: 'kjv',
+    code: 'KJV',
+    label: 'King James Version (KJV)',
+    language: 'en',
+    source: 'GetBible.net v2 (kjv) & helloao (eng_kjv)',
+    license: 'Public Domain'
+  }
+};
+
+export const DEFAULT_BIBLE_TRANSLATION: BibleTranslationId = 'lsg';
+
+export function normalizeTranslationId(translation?: string | null): BibleTranslationId | null {
+  if (!translation) return null;
+  const norm = translation.trim().toLowerCase();
+  if (norm in TRANSLATION_CATALOG) {
+    return norm as BibleTranslationId;
+  }
+  return null;
+}
+
+export function isFrenchTranslation(translation?: string | null): boolean {
+  const norm = normalizeTranslationId(translation);
+  return norm !== null && TRANSLATION_CATALOG[norm].language === 'fr';
+}
+
+const STANDALONE_ENGLISH_WORDS_REGEX = /(?<![a-zA-ZÀ-ÿ])(the|and|of|who)(?![a-zA-ZÀ-ÿ])/i;
+
+/**
+ * Vérifie qu'un ensemble de versets d'une version française ne contient pas de texte anglais
+ * (protection contre toute régression ou pollution de source/cache).
+ */
+export function detectUnexpectedEnglishInFrenchVerses(verses: Array<{ text: string }>): boolean {
+  if (!Array.isArray(verses) || verses.length === 0) return false;
+  return verses.some(v => typeof v?.text === 'string' && STANDALONE_ENGLISH_WORDS_REGEX.test(v.text));
+}
+
+export function extractHelloaoVerseText(content: any[]): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") {
+      parts.push(item);
+    } else if (item && typeof item === "object") {
+      if ("noteId" in item) continue; // Ignorer les appels de note de bas de page
+      if (typeof item.text === "string") {
+        parts.push(item.text);
+      } else if (item.lineBreak) {
+        parts.push(" ");
+      }
+    }
+  }
+  return parts
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?)\]])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .trim();
+}
+
+export function parseHelloaoChapter(
+  data: any,
+  bookId: number,
+  bookName: string,
+  chapterNum: number
+): Verse[] {
+  const contentList = data?.chapter?.content;
+  if (!Array.isArray(contentList)) {
+    throw new Error("Format de réponse invalide (helloao.org)");
+  }
+  const verses: Verse[] = [];
+  for (const entry of contentList) {
+    if (entry && entry.type === "verse" && typeof entry.number === "number") {
+      const text = extractHelloaoVerseText(entry.content || []);
+      if (text) {
+        verses.push({
+          book_id: bookId,
+          book_name: bookName,
+          chapter: chapterNum,
+          verse: entry.number,
+          text
+        });
+      }
+    }
+  }
+  if (verses.length === 0) {
+    throw new Error("Aucun verset trouvé dans ce chapitre");
+  }
+  return verses;
+}
+
+export function parseGetBibleChapter(
+  data: any,
+  bookId: number,
+  bookName: string,
+  chapterNum: number
+): Verse[] {
+  const versesList = data?.verses;
+  if (!Array.isArray(versesList) || versesList.length === 0) {
+    throw new Error("Format de réponse invalide (getbible.net)");
+  }
+  return versesList.map((v: any, index: number) => ({
+    book_id: bookId,
+    book_name: bookName,
+    chapter: chapterNum,
+    verse: Number(v.verse) || index + 1,
+    text: typeof v.text === "string" ? v.text.replace(/\s+/g, " ").trim() : ""
+  })).filter(v => v.text.length > 0);
+}
+
+async function fetchDirectPublicDomainChapter(
+  bookId: number,
+  bookName: string,
+  chapterNum: number,
+  translation: BibleTranslationId
+): Promise<Verse[]> {
+  const usfm = USFM_BOOK_CODES[bookId];
+  if (!usfm) {
+    throw new Error(`Code USFM introuvable pour le livre ${bookId}`);
+  }
+
+  const fetchWithCheck = async (url: string): Promise<any> => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Erreur source (${res.status}) sur ${url}`);
+    }
+    return res.json();
+  };
+
+  if (translation === 'lsg' || translation === 'local') {
+    const data = await fetchWithCheck(`https://bible.helloao.org/api/fra_lsg/${usfm}/${chapterNum}.json`);
+    return parseHelloaoChapter(data, bookId, bookName, chapterNum);
+  }
+
+  if (translation === 'darby') {
+    try {
+      const data = await fetchWithCheck(`https://bible.helloao.org/api/fra_jnd/${usfm}/${chapterNum}.json`);
+      return parseHelloaoChapter(data, bookId, bookName, chapterNum);
+    } catch {
+      const data = await fetchWithCheck(`https://api.getbible.net/v2/darby/${bookId}/${chapterNum}.json`);
+      return parseGetBibleChapter(data, bookId, bookName, chapterNum);
+    }
+  }
+
+  if (translation === 'martin') {
+    const data = await fetchWithCheck(`https://api.getbible.net/v2/martin/${bookId}/${chapterNum}.json`);
+    return parseGetBibleChapter(data, bookId, bookName, chapterNum);
+  }
+
+  if (translation === 'ostervald') {
+    const data = await fetchWithCheck(`https://bible.helloao.org/api/fra_ost/${usfm}/${chapterNum}.json`);
+    return parseHelloaoChapter(data, bookId, bookName, chapterNum);
+  }
+
+  if (translation === 'kjv') {
+    try {
+      const data = await fetchWithCheck(`https://api.getbible.net/v2/kjv/${bookId}/${chapterNum}.json`);
+      return parseGetBibleChapter(data, bookId, bookName, chapterNum);
+    } catch {
+      const englishBookName = BOOK_MAPPING_TO_ENGLISH[bookId];
+      if (!englishBookName) {
+        throw new Error(`Nom anglais introuvable pour le livre ${bookId}`);
+      }
+      const data = await fetchWithCheck(`https://bible-api.com/${encodeURIComponent(englishBookName)}+${chapterNum}?translation=kjv`);
+      if (!data || !Array.isArray(data.verses) || data.verses.length === 0) {
+        throw new Error("Format invalide depuis bible-api.com (KJV)");
+      }
+      return data.verses.map((v: any, index: number) => ({
+        book_id: bookId,
+        book_name: bookName,
+        chapter: chapterNum,
+        verse: v.verse || index + 1,
+        text: v.text ? String(v.text).replace(/\s+/g, " ").trim() : ""
+      }));
+    }
+  }
+
+  throw new Error(`Version biblique non prise en charge : ${translation}`);
+}
+
 export async function fetchOnlineChapter(
   bookId: number,
   bookName: string,
   chapterNum: number,
-  translation: string = "web"
+  translation: string = DEFAULT_BIBLE_TRANSLATION
 ): Promise<Verse[]> {
-  const englishBookName = BOOK_MAPPING_TO_ENGLISH[bookId];
-  if (!englishBookName) {
-    throw new Error(`Mapping not found for book ID ${bookId}`);
+  const normTrans = normalizeTranslationId(translation);
+  if (!normTrans) {
+    throw new Error(`Version biblique non disponible ou non supportée : "${translation}"`);
   }
 
-  const formattedName = encodeURIComponent(englishBookName);
-  const url = `https://bible-api.com/${formattedName}+${chapterNum}?translation=${translation}&utm_source=chatgpt.com`;
+  let verses: Verse[] | null = null;
+  let serverError: Error | null = null;
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+  // 1. Tenter d'abord le endpoint serveur /api/bible/chapter (sans authentification, sert LSG complet localement + proxy/cache)
+  if (typeof window !== 'undefined') {
+    try {
+      const apiUrl = `/api/bible/chapter?translation=${encodeURIComponent(normTrans)}&bookId=${bookId}&chapter=${chapterNum}`;
+      const response = await fetch(apiUrl);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && Array.isArray(data.verses) && data.verses.length > 0) {
+          verses = data.verses.map((v: any, index: number) => ({
+            book_id: bookId,
+            book_name: bookName,
+            chapter: chapterNum,
+            verse: Number(v.verse) || index + 1,
+            text: typeof v.text === 'string' ? v.text.trim() : ''
+          })).filter((v: Verse) => v.text.length > 0);
+        }
+      } else {
+        const errBody = await response.json().catch(() => ({}));
+        serverError = new Error(errBody.error || `Erreur serveur (${response.status})`);
+      }
+    } catch (err: any) {
+      serverError = err instanceof Error ? err : new Error(String(err));
+    }
   }
 
-  const data = await response.json();
-  if (!data || !data.verses || !Array.isArray(data.verses)) {
-    throw new Error("Invalid response format from bible-api.com");
+  // 2. En environnement Node (tests) ou si le serveur local n'a pas pu répondre, utiliser les sources CORS du domaine public
+  if (!verses || verses.length === 0) {
+    try {
+      verses = await fetchDirectPublicDomainChapter(bookId, bookName, chapterNum, normTrans);
+    } catch (directErr: any) {
+      throw directErr instanceof Error
+        ? directErr
+        : (serverError || new Error(`Impossible de charger la version ${TRANSLATION_CATALOG[normTrans].label}`));
+    }
   }
 
-  return data.verses.map((v: any, index: number) => ({
-    book_id: bookId,
-    book_name: bookName,
-    chapter: chapterNum,
-    verse: v.verse || (index + 1),
-    text: v.text ? v.text.trim() : ""
-  }));
+  if (!verses || verses.length === 0) {
+    throw new Error(`Aucun verset disponible pour ${bookName} ${chapterNum} (${TRANSLATION_CATALOG[normTrans].label})`);
+  }
+
+  // 3. Garde-fou linguistique : bloquer formellement tout texte anglais sous une étiquette française
+  if (isFrenchTranslation(normTrans) && detectUnexpectedEnglishInFrenchVerses(verses)) {
+    throw new Error(`Incohérence linguistique détectée pour la version ${TRANSLATION_CATALOG[normTrans].label} : texte anglais rejeté.`);
+  }
+
+  return verses;
 }
 
 export function querySqliteChapter(bookId: number, bookName: string, chapterNum: number): Verse[] | null {

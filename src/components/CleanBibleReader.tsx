@@ -90,9 +90,7 @@ export const CleanBibleReader: React.FC<CleanBibleReaderProps> = ({
       case 'ostervald':
         return 'OST';
       case 'martin':
-        return 'MAR';
-      case 's21':
-        return 'S21';
+        return 'MRT';
       default:
         return trans.slice(0, 3).toUpperCase();
     }

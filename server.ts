@@ -951,6 +951,160 @@ app.get("/api/bible/full-lsg1910", (req: Request, res: Response) => {
   }
 });
 
+// Public domain Bible chapter endpoint (no auth required) supporting LSG 1910 (local), Darby, Martin (1744), Ostervald, and KJV
+const SERVER_USFM_CODES: Record<number, string> = {
+  1: "GEN", 2: "EXO", 3: "LEV", 4: "NUM", 5: "DEU",
+  6: "JOS", 7: "JDG", 8: "RUT", 9: "1SA", 10: "2SA",
+  11: "1KI", 12: "2KI", 13: "1CH", 14: "2CH", 15: "EZR",
+  16: "NEH", 17: "EST", 18: "JOB", 19: "PSA", 20: "PRO",
+  21: "ECC", 22: "SNG", 23: "ISA", 24: "JER", 25: "LAM",
+  26: "EZK", 27: "DAN", 28: "HOS", 29: "JOL", 30: "AMO",
+  31: "OBA", 32: "JON", 33: "MIC", 34: "NAM", 35: "HAB",
+  36: "ZEP", 37: "HAG", 38: "ZEC", 39: "MAL",
+  40: "MAT", 41: "MRK", 42: "LUK", 43: "JHN", 44: "ACT",
+  45: "ROM", 46: "1CO", 47: "2CO", 48: "GAL", 49: "EPH",
+  50: "PHP", 51: "COL", 52: "1TH", 53: "2TH", 54: "1TI",
+  55: "2TI", 56: "TIT", 57: "PHM", 58: "HEB", 59: "JAS",
+  60: "1PE", 61: "2PE", 62: "1JN", 63: "2JN", 64: "3JN",
+  65: "JUD", 66: "REV"
+};
+
+const SERVER_ENGLISH_WORDS_GUARD = /(?<![a-zA-ZÀ-ÿ])(the|and|of|who)(?![a-zA-ZÀ-ÿ])/i;
+const serverExternalChapterCache = new Map<string, Array<{ verse: number; text: string }>>();
+
+function extractServerHelloaoText(content: any[]): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") {
+      parts.push(item);
+    } else if (item && typeof item === "object") {
+      if ("noteId" in item) continue;
+      if (typeof item.text === "string") parts.push(item.text);
+      else if (item.lineBreak) parts.push(" ");
+    }
+  }
+  return parts
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?)\]])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .trim();
+}
+
+app.get("/api/bible/chapter", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const translationRaw = String(req.query.translation || "lsg").trim().toLowerCase();
+    const bookId = Number(req.query.bookId);
+    const chapter = Number(req.query.chapter);
+
+    if (!bookId || !chapter || !SERVER_USFM_CODES[bookId]) {
+      res.status(400).json({ error: "Paramètres bookId ou chapter invalides." });
+      return;
+    }
+
+    const allowed = new Set(["lsg", "local", "darby", "martin", "ostervald", "kjv"]);
+    if (!allowed.has(translationRaw)) {
+      res.status(400).json({ error: `Version biblique non supportée : ${translationRaw}` });
+      return;
+    }
+
+    const corpus = getBibleCorpus();
+    const book = corpus.books.find(b => b.id === bookId);
+    const bookName = book?.name || `Livre ${bookId}`;
+    const usfm = SERVER_USFM_CODES[bookId];
+    const cacheKey = `${translationRaw}_${bookId}_${chapter}`;
+
+    // 1. Local LSG 1910 complete JSON (1,189 chapters, Public Domain)
+    if (translationRaw === "lsg" || translationRaw === "local") {
+      const localChapter = corpus.verses?.[`${bookId}_${chapter}`];
+      if (localChapter && Array.isArray(localChapter) && localChapter.length > 0) {
+        res.json({ translation: translationRaw, bookId, bookName, chapter, source: "local-lsg1910", verses: localChapter });
+        return;
+      }
+    }
+
+    if (serverExternalChapterCache.has(cacheKey)) {
+      res.json({
+        translation: translationRaw,
+        bookId,
+        bookName,
+        chapter,
+        source: "server-cache",
+        verses: serverExternalChapterCache.get(cacheKey)
+      });
+      return;
+    }
+
+    let verses: Array<{ verse: number; text: string }> = [];
+
+    if (translationRaw === "lsg" || translationRaw === "local") {
+      const r = await fetch(`https://bible.helloao.org/api/fra_lsg/${usfm}/${chapter}.json`);
+      if (!r.ok) throw new Error(`helloao fra_lsg status ${r.status}`);
+      const d: any = await r.json();
+      verses = (d?.chapter?.content || [])
+        .filter((c: any) => c?.type === "verse")
+        .map((c: any) => ({ verse: Number(c.number), text: extractServerHelloaoText(c.content || []) }))
+        .filter((v: any) => v.text.length > 0);
+    } else if (translationRaw === "darby") {
+      try {
+        const r = await fetch(`https://bible.helloao.org/api/fra_jnd/${usfm}/${chapter}.json`);
+        if (!r.ok) throw new Error(`helloao fra_jnd status ${r.status}`);
+        const d: any = await r.json();
+        verses = (d?.chapter?.content || [])
+          .filter((c: any) => c?.type === "verse")
+          .map((c: any) => ({ verse: Number(c.number), text: extractServerHelloaoText(c.content || []) }))
+          .filter((v: any) => v.text.length > 0);
+      } catch {
+        const r = await fetch(`https://api.getbible.net/v2/darby/${bookId}/${chapter}.json`);
+        if (!r.ok) throw new Error(`getbible darby status ${r.status}`);
+        const d: any = await r.json();
+        verses = (d?.verses || [])
+          .map((v: any, i: number) => ({ verse: Number(v.verse) || i + 1, text: String(v.text || "").replace(/\s+/g, " ").trim() }))
+          .filter((v: any) => v.text.length > 0);
+      }
+    } else if (translationRaw === "martin") {
+      const r = await fetch(`https://api.getbible.net/v2/martin/${bookId}/${chapter}.json`);
+      if (!r.ok) throw new Error(`getbible martin status ${r.status}`);
+      const d: any = await r.json();
+      verses = (d?.verses || [])
+        .map((v: any, i: number) => ({ verse: Number(v.verse) || i + 1, text: String(v.text || "").replace(/\s+/g, " ").trim() }))
+        .filter((v: any) => v.text.length > 0);
+    } else if (translationRaw === "ostervald") {
+      const r = await fetch(`https://bible.helloao.org/api/fra_ost/${usfm}/${chapter}.json`);
+      if (!r.ok) throw new Error(`helloao fra_ost status ${r.status}`);
+      const d: any = await r.json();
+      verses = (d?.chapter?.content || [])
+        .filter((c: any) => c?.type === "verse")
+        .map((c: any) => ({ verse: Number(c.number), text: extractServerHelloaoText(c.content || []) }))
+        .filter((v: any) => v.text.length > 0);
+    } else if (translationRaw === "kjv") {
+      const r = await fetch(`https://api.getbible.net/v2/kjv/${bookId}/${chapter}.json`);
+      if (!r.ok) throw new Error(`getbible kjv status ${r.status}`);
+      const d: any = await r.json();
+      verses = (d?.verses || [])
+        .map((v: any, i: number) => ({ verse: Number(v.verse) || i + 1, text: String(v.text || "").replace(/\s+/g, " ").trim() }))
+        .filter((v: any) => v.text.length > 0);
+    }
+
+    if (!verses.length) {
+      res.status(404).json({ error: `Chapitre ${bookName} ${chapter} introuvable dans la version ${translationRaw}.` });
+      return;
+    }
+
+    if (translationRaw !== "kjv" && verses.some(v => SERVER_ENGLISH_WORDS_GUARD.test(v.text))) {
+      res.status(502).json({ error: `La source retournée pour ${translationRaw} n'est pas en français.` });
+      return;
+    }
+
+    serverExternalChapterCache.set(cacheKey, verses);
+    res.json({ translation: translationRaw, bookId, bookName, chapter, source: "public-domain-api", verses });
+  } catch (err: any) {
+    console.error("Error in GET /api/bible/chapter:", err);
+    res.status(502).json({ error: `Impossible de charger ce chapitre (${err?.message || "erreur réseau"}).` });
+  }
+});
+
 // -------------------------------------------------------------
 // Bible Corpus Caching & Verified Verse Resolver
 // -------------------------------------------------------------

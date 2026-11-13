@@ -6,6 +6,7 @@ import {
   BookOpen, Home, Loader2, Palette
 } from 'lucide-react';
 import { Verse, Book, VerseNote, FavoriteVerse, ChapterMeditation, ChapterAudioMeditation, VerseHighlight, HighlightColor, HIGHLIGHT_PALETTE } from '../types/bible';
+import { TRANSLATION_CATALOG } from '../data/bibleData';
 import { cleanMarkdownText, cleanTextForSpeech } from '../lib/bibleFormatter';
 import { AiTextRenderer } from './AiTextRenderer';
 import { VerseShareModal } from './VerseShareModal';
@@ -21,6 +22,7 @@ import {
   saveReaderColorLocally
 } from '../types/readerTheme';
 import { useLanguage } from '../i18n/LanguageContext';
+import { getSortedFrenchVoices } from '../utils/frenchTts';
 
 export interface PureBibleReaderProps {
   selectedBook: Book;
@@ -79,6 +81,8 @@ export interface PureBibleReaderProps {
   highlights?: Record<string, VerseHighlight | string>;
   onSaveHighlight?: (verse: Verse, color: HighlightColor) => Promise<void> | void;
   onDeleteHighlight?: (verse: Verse) => Promise<void> | void;
+  highQualityAudioOnly?: boolean;
+  onTtsWarning?: (warning: string) => void;
 }
 
 export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
@@ -127,6 +131,8 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   highlights: propHighlights,
   onSaveHighlight,
   onDeleteHighlight,
+  highQualityAudioOnly = false,
+  onTtsWarning,
 }) => {
   // Selected verse unique ID for active study panel (e.g. "1_1_1")
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null);
@@ -507,9 +513,17 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
     utterance.rate = 0.95;
 
     const voices = window.speechSynthesis.getVoices();
-    const frVoice = voices.find(v => v.lang.startsWith('fr') && !v.name.includes('espeak')) || voices.find(v => v.lang.startsWith('fr'));
+    const hqVoices = highQualityAudioOnly ? getSortedFrenchVoices(voices, true) : [];
+    const fallbackVoices = getSortedFrenchVoices(voices, false);
+
+    if (highQualityAudioOnly && hqVoices.length === 0) {
+      onTtsWarning?.(t('settings.highQualityNoVoicesWarning'));
+    }
+
+    const frVoice = (highQualityAudioOnly && hqVoices.length > 0 ? hqVoices[0] : fallbackVoices[0]) || null;
     if (frVoice) {
       utterance.voice = frVoice;
+      utterance.lang = frVoice.lang || 'fr-FR';
     }
 
     utterance.onend = () => setIsSpeakingSummary(false);
@@ -525,17 +539,17 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
 
   const { language, t, getBookTitle } = useLanguage();
 
-  // Translations list organized by language
+  // Translations list organized by language (all verified Public Domain sources)
   const FRENCH_TRANSLATIONS = [
-    { id: 'lsg', code: 'LSG', label: 'Louis Segond (1910)' },
-    { id: 'darby', code: 'DRB', label: 'Darby' },
-    { id: 'martin', code: 'MRT', label: 'David Martin (1744)' },
-    { id: 'ostervald', code: 'OST', label: 'Ostervald' },
-    { id: 'local', code: 'LSG', label: language === 'en' ? 'Offline (LSG)' : 'Hors ligne (LSG)' },
+    { id: 'lsg', code: TRANSLATION_CATALOG.lsg.code, label: TRANSLATION_CATALOG.lsg.label },
+    { id: 'darby', code: TRANSLATION_CATALOG.darby.code, label: TRANSLATION_CATALOG.darby.label },
+    { id: 'martin', code: TRANSLATION_CATALOG.martin.code, label: TRANSLATION_CATALOG.martin.label },
+    { id: 'ostervald', code: TRANSLATION_CATALOG.ostervald.code, label: TRANSLATION_CATALOG.ostervald.label },
+    { id: 'local', code: TRANSLATION_CATALOG.local.code, label: language === 'en' ? 'Offline (LSG 1910)' : TRANSLATION_CATALOG.local.label },
   ];
 
   const ENGLISH_TRANSLATIONS = [
-    { id: 'kjv', code: 'KJV', label: 'King James Version (KJV)' },
+    { id: 'kjv', code: TRANSLATION_CATALOG.kjv.code, label: TRANSLATION_CATALOG.kjv.label },
   ];
 
   const TRANSLATIONS = [...FRENCH_TRANSLATIONS, ...ENGLISH_TRANSLATIONS];
@@ -656,8 +670,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                   {t('reader.frenchVersionsGroup')}
                 </div>
                 {FRENCH_TRANSLATIONS.map(tItem => {
-                  const isCurrent = selectedTranslation.toLowerCase() === tItem.id.toLowerCase() ||
-                    (tItem.id === 'local' && selectedTranslation === 'LSG');
+                  const isCurrent = selectedTranslation.toLowerCase() === tItem.id.toLowerCase();
                   return (
                     <button
                       key={tItem.id}
@@ -917,8 +930,15 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             <p className="text-xs text-[#8c8270] font-sans">Chargement des Écritures...</p>
           </div>
         ) : loadingError ? (
-          <div className="py-20 text-center space-y-2">
-            <p className="text-sm text-rose-400 font-sans">{loadingError}</p>
+          <div className="my-12 p-6 rounded-2xl border border-rose-500/30 bg-rose-950/20 text-center space-y-3">
+            <p className="text-sm text-rose-300 font-sans font-medium leading-relaxed">{loadingError}</p>
+            <button
+              type="button"
+              onClick={() => onSelectTranslation(selectedTranslation)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-[#c9a84c]/50 text-[#c9a84c] hover:bg-[#c9a84c]/10 text-xs font-sans font-semibold transition cursor-pointer"
+            >
+              <span>{language === 'en' ? 'Retry' : 'Réessayer'}</span>
+            </button>
           </div>
         ) : chapterVerses.length === 0 ? (
           <div className="py-20 text-center">

@@ -14,7 +14,8 @@ import {
 } from './types/bible';
 import { 
   BOOKS, getDailyVerseForToday, querySqliteChapter, searchLocalVerses, isSqliteInitialized, initializeSqliteDatabase, fetchOnlineChapter,
-  indexVerses, searchSmartVerses
+  indexVerses, searchSmartVerses, DEFAULT_BIBLE_TRANSLATION, TRANSLATION_CATALOG, normalizeTranslationId,
+  isFrenchTranslation, detectUnexpectedEnglishInFrenchVerses
 } from './data/bibleData';
 import { getChapterMaxVerses } from './data/bibleChapterVerseCounts';
 import { DEFAULT_BOOKMARK_FOLDERS } from './data/defaultBookmarkFolders';
@@ -88,8 +89,10 @@ import {
   classifyFrenchVoiceGender,
   waitForSpeechVoices,
   cleanBiblicalTextForSpeech,
-  isHighQualityVoice
+  isHighQualityVoice,
+  verifyHighQualityAudioDiagnostic
 } from './utils/frenchTts';
+import { useLanguage } from './i18n/LanguageContext';
 
 // Images d'ambiance spirituelle (Assets statiques bundlés & compatibles prod/preview)
 export const SANCTUARY_BG_PRESETS = [
@@ -190,6 +193,7 @@ export function loadMigratedLastReadingPosition(): ReadingPosition | null {
 }
 
 export default function App() {
+  const { t } = useLanguage();
   // Authentication states
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
@@ -343,11 +347,16 @@ export default function App() {
   });
   const [selectedTranslation, setSelectedTranslation] = useState<string>(() => {
     try {
-      return localStorage.getItem('bible_translation') || 'local';
+      const saved = localStorage.getItem('bible_translation');
+      const normalized = normalizeTranslationId(saved);
+      if (normalized) return normalized;
+      localStorage.setItem('bible_translation', DEFAULT_BIBLE_TRANSLATION);
+      return DEFAULT_BIBLE_TRANSLATION;
     } catch (_) {
-      return 'local';
+      return DEFAULT_BIBLE_TRANSLATION;
     }
   });
+  const [versesReloadNonce, setVersesReloadNonce] = useState<number>(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isGlobalNotifOpen, setIsGlobalNotifOpen] = useState<boolean>(false);
 
@@ -487,8 +496,19 @@ export default function App() {
   // Daily Verse of the Day
   const dailyVerseForCurrentDay: DailyVerse = getDailyVerseForToday();
 
-  // Handle local database and verse search indexing on mount
+  // Handle local database, cache migration, and verse search indexing on mount
   useEffect(() => {
+    // Purge legacy polluted IndexedDB verses cache containing stale English WEB / Darby texts
+    try {
+      if (localStorage.getItem('bible_verses_cache_v3_purged') !== 'true') {
+        versesCache.current = {};
+        explainCache.clearVersesCache().then(() => {
+          localStorage.setItem('bible_verses_cache_v3_purged', 'true');
+          refreshCacheStats();
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
     // Index all verses asynchronously on startup for instant search
     try {
       indexVerses();
@@ -608,41 +628,21 @@ export default function App() {
         try {
           // Check if already in IndexedDB to avoid unnecessary queries
           const cached = await explainCache.getVerses(cacheKey);
-          if (!cached || cached.length === 0) {
+          const validCached = cached && cached.length > 0 && !(isFrenchTranslation(selectedTranslation) && detectUnexpectedEnglishInFrenchVerses(cached));
+          if (!validCached) {
             let verses: Verse[] = [];
-            if (selectedTranslation === 'local') {
-              const isPreloaded = (bk.id === 1 && (ch === 1 || ch === 2)) || 
-                                  (bk.id === 19 && ch === 23);
-              if (isPreloaded) {
-                verses = querySqliteChapter(bk.id, bk.name, ch) || [];
-              } else {
-                try {
-                  const response = await authenticatedFetch('/api/gemini/fetch-verses', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ bookName: bk.name, chapterNum: ch })
-                  });
-                  if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.verses && Array.isArray(data.verses)) {
-                      verses = data.verses.map((v: any) => ({
-                        book_id: bk.id,
-                        book_name: bk.name,
-                        chapter: ch,
-                        verse: v.verse,
-                        text: v.text
-                      }));
-                    }
-                  }
-                } catch (e) {
-                  console.warn(e);
-                }
+            if (selectedTranslation === 'local' || selectedTranslation === 'lsg') {
+              const staticRes = querySqliteChapter(bk.id, bk.name, ch);
+              if (staticRes && staticRes.length > 0) {
+                verses = staticRes;
               }
-            } else {
+            }
+
+            if (verses.length === 0) {
               try {
                 verses = await fetchOnlineChapter(bk.id, bk.name, ch, selectedTranslation);
               } catch (e) {
-                console.warn(e);
+                console.warn(`Pre-download error for ${bk.name} ${ch} (${selectedTranslation}):`, e);
               }
             }
 
@@ -981,9 +981,11 @@ export default function App() {
   // In-memory cache to store fetched chapters and speed up navigation/continuous scroll massively
   const versesCache = useRef<Record<string, Promise<Verse[]> | Verse[]>>({});
 
-  // Helper to load a single chapter with in-memory cache
+  // Helper to load a single chapter with in-memory cache (strictly isolated per translation)
   const loadSingleChapterVerses = (chapterNum: number): Promise<Verse[]> => {
-    const cacheKey = `${selectedTranslation}_${selectedBook.id}_${chapterNum}`;
+    const activeTranslation = normalizeTranslationId(selectedTranslation) || DEFAULT_BIBLE_TRANSLATION;
+    const cacheKey = `${activeTranslation}_${selectedBook.id}_${chapterNum}`;
+    const translationLabel = TRANSLATION_CATALOG[activeTranslation]?.label || activeTranslation.toUpperCase();
     
     // If we have a cached value (promise or array), return it
     if (versesCache.current[cacheKey]) {
@@ -997,86 +999,60 @@ export default function App() {
     const fetchPromise = (async (): Promise<Verse[]> => {
       try {
         setLoadingError(null);
-        // --- CHECK INDEXEDDB OFFLINE VERSES CACHE FIRST ---
+        // --- CHECK INDEXEDDB OFFLINE VERSES CACHE STRICTLY FOR THIS VERSION ---
         let dbCached = await explainCache.getVerses(cacheKey);
-        if (!dbCached || !Array.isArray(dbCached) || dbCached.length === 0) {
-          dbCached = await explainCache.getVerses(`local_${selectedBook.id}_${chapterNum}`) || 
-                     await explainCache.getVerses(`${selectedBook.id}_${chapterNum}`);
+        // Autoriser le partage de cache uniquement entre 'local' et 'lsg' (tous deux LSG 1910)
+        if ((!dbCached || dbCached.length === 0) && (activeTranslation === 'local' || activeTranslation === 'lsg')) {
+          const siblingKey = activeTranslation === 'local'
+            ? `lsg_${selectedBook.id}_${chapterNum}`
+            : `local_${selectedBook.id}_${chapterNum}`;
+          dbCached = await explainCache.getVerses(siblingKey);
         }
+
         if (dbCached && Array.isArray(dbCached) && dbCached.length > 0) {
-          return dbCached;
+          // Garde-fou : ne jamais servir un texte anglais depuis le cache pour une version française
+          if (isFrenchTranslation(activeTranslation) && detectUnexpectedEnglishInFrenchVerses(dbCached)) {
+            console.warn(`Cache IndexedDB corrompu ignoré pour ${cacheKey}`);
+          } else {
+            return dbCached;
+          }
         }
 
         let verses: Verse[] = [];
-        if (selectedTranslation === 'local') {
-          const res = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
-          if (res !== null) {
-            verses = res;
+        if (activeTranslation === 'local' || activeTranslation === 'lsg') {
+          const localStatic = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+          if (localStatic !== null && localStatic.length > 0) {
+            verses = localStatic;
           } else {
-            try {
-              const response = await authenticatedFetch('/api/gemini/fetch-verses', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ bookName: selectedBook.name, chapterNum: chapterNum })
-              });
-              if (!response.ok) {
-                throw new Error("HTTP error " + response.status);
-              }
-              const data = await response.json();
-              if (data && data.verses && Array.isArray(data.verses) && data.verses.length > 0) {
-                verses = data.verses.map((v: any) => ({
-                  book_id: selectedBook.id,
-                  book_name: selectedBook.name,
-                  chapter: chapterNum,
-                  verse: v.verse,
-                  text: v.text
-                }));
-              } else {
-                throw new Error("Format de réponse invalide.");
-              }
-            } catch (err) {
-              console.warn("API dynamic verses fetch failed, trying online backup API:", err);
-              const fallbackRes = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
-              if (fallbackRes !== null) {
-                verses = fallbackRes;
-              } else {
-                try {
-                  verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, 'web');
-                } catch (onlineErr) {
-                  console.error("All verse retrieval attempts failed:", onlineErr);
-                  setLoadingError("Texte indisponible");
-                  return [];
-                }
-              }
-            }
+            verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, activeTranslation);
           }
         } else {
-          verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, selectedTranslation);
+          verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, activeTranslation);
         }
 
-        // --- SAVE TO INDEXEDDB OFFLINE CACHE FOR DURABLE OFFLINE RETRIEVAL ---
+        // --- SAVE TO INDEXEDDB OFFLINE CACHE FOR DURABLE RETRIEVAL ---
         if (verses && verses.length > 0) {
-          await explainCache.setVerses(cacheKey, selectedBook.id, chapterNum, selectedTranslation, verses);
+          await explainCache.setVerses(cacheKey, selectedBook.id, chapterNum, activeTranslation, verses);
         }
         return verses;
-      } catch (err) {
-        console.warn("Failed to load scriptures, using offline fallback:", err);
-        const fallbackRes = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
-        if (fallbackRes !== null) {
-          return fallbackRes;
-        } else {
-          setLoadingError("Texte indisponible");
-          return [];
-        }
+      } catch (err: any) {
+        console.error(`Erreur chargement chapitre (${activeTranslation}):`, err);
+        const errMsg = err?.message || `Impossible de charger ${selectedBook.name} ${chapterNum} (${translationLabel}).`;
+        setLoadingError(`Version ${translationLabel} indisponible pour ce chapitre : ${errMsg}`);
+        return [];
       }
     })();
 
     // Store the promise in cache
     versesCache.current[cacheKey] = fetchPromise;
 
-    // Replace with resolved array once done
+    // Replace with resolved array once done (only cache non-empty results)
     fetchPromise.then(v => {
-      versesCache.current[cacheKey] = v;
+      if (Array.isArray(v) && v.length > 0) {
+        versesCache.current[cacheKey] = v;
+      } else {
+        delete versesCache.current[cacheKey];
+      }
     }).catch(() => {
       delete versesCache.current[cacheKey];
     });
@@ -1098,14 +1074,15 @@ export default function App() {
     setChapterSummary(null); // Clear active summary cache
     
     // Quick synchronous check for the target chapter to eliminate visual flicker / saccades
-    const targetKey = `${selectedTranslation}_${selectedBook.id}_${selectedChapter}`;
+    const activeTranslation = normalizeTranslationId(selectedTranslation) || DEFAULT_BIBLE_TRANSLATION;
+    const targetKey = `${activeTranslation}_${selectedBook.id}_${selectedChapter}`;
     const directCached = versesCache.current[targetKey];
     
     let immediateVerses: Verse[] | null = null;
     if (!isContinuousScroll) {
       if (Array.isArray(directCached) && directCached.length > 0) {
         immediateVerses = directCached;
-      } else if (selectedTranslation === 'local') {
+      } else if (activeTranslation === 'local' || activeTranslation === 'lsg') {
         const sqlRes = querySqliteChapter(selectedBook.id, selectedBook.name, selectedChapter);
         if (sqlRes && sqlRes.length > 0) {
           immediateVerses = sqlRes;
@@ -1116,6 +1093,7 @@ export default function App() {
 
     if (immediateVerses) {
       setChapterVerses(immediateVerses);
+      setLoadingError(null);
       setLoadingVerses(false);
     } else {
       setLoadingVerses(true);
@@ -1152,7 +1130,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation, isContinuousScroll, loadedChapters]);
+  }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation, isContinuousScroll, loadedChapters, versesReloadNonce]);
 
   // Background Prefetching: predictively loads the next 2 chapters to make scrolling and clicking completely instant
   useEffect(() => {
@@ -2631,6 +2609,14 @@ export default function App() {
       return false;
     }
   });
+  const [highQualityAudioOnly, setHighQualityAudioOnly] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bible_high_quality_audio') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+  const hasWarnedInitialHighQualityRef = useRef<boolean>(false);
   const [announceVerseNumbers, setAnnounceVerseNumbers] = useState<boolean>(() => {
     try {
       // Default to false for a smooth, fluid, audiobook-style spiritual reading
@@ -2689,13 +2675,21 @@ export default function App() {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
     const updateVoices = () => {
-      const frVoices = getSortedFrenchVoices();
+      const rawVoices = window.speechSynthesis.getVoices() || [];
+      const frVoices = getSortedFrenchVoices(rawVoices, highQualityAudioOnly);
       setAvailableVoices(frVoices);
+
+      if (highQualityAudioOnly && rawVoices.length > 0 && !hasWarnedInitialHighQualityRef.current) {
+        hasWarnedInitialHighQualityRef.current = true;
+        if (frVoices.length === 0) {
+          setTtsWarning(t('settings.highQualityNoVoicesWarning'));
+        }
+      }
     };
 
     updateVoices();
     window.speechSynthesis.onvoiceschanged = updateVoices;
-    
+
     // Periodically poll just in case onvoiceschanged does not fire initially in some browsers
     const interval = setInterval(updateVoices, 1000);
     return () => {
@@ -2704,7 +2698,53 @@ export default function App() {
         window.speechSynthesis.onvoiceschanged = null;
       }
     };
-  }, []);
+  }, [highQualityAudioOnly, t]);
+
+  const handleToggleHighQualityAudio = async (enabled: boolean) => {
+    setHighQualityAudioOnly(enabled);
+    try {
+      localStorage.setItem('bible_high_quality_audio', String(enabled));
+    } catch (_) {}
+
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      if (enabled) {
+        setTtsWarning(t('settings.highQualityNoVoicesWarning'));
+      }
+      return;
+    }
+
+    if (!enabled) {
+      hasWarnedInitialHighQualityRef.current = false;
+      setAvailableVoices(getSortedFrenchVoices(undefined, false));
+      setTtsWarning((prev) =>
+        prev === t('settings.highQualityNoVoicesWarning') ? null : prev
+      );
+      return;
+    }
+
+    hasWarnedInitialHighQualityRef.current = true;
+    let rawVoices = window.speechSynthesis.getVoices() || [];
+    if (rawVoices.length === 0) {
+      rawVoices = await waitForSpeechVoices(800);
+    }
+
+    const hqVoices = getSortedFrenchVoices(rawVoices, true);
+    setAvailableVoices(hqVoices);
+
+    await verifyHighQualityAudioDiagnostic({
+      availableVoices: rawVoices,
+      highQualityAudioOnly: enabled,
+      logger: (msg) => logTts(msg),
+    });
+
+    if (hqVoices.length === 0) {
+      setTtsWarning(t('settings.highQualityNoVoicesWarning'));
+    } else {
+      setTtsWarning((prev) =>
+        prev === t('settings.highQualityNoVoicesWarning') ? null : prev
+      );
+    }
+  };
 
   const currentVerseToSpeakRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
@@ -2955,7 +2995,7 @@ export default function App() {
       // Async voice population fallback (Chrome/iOS initial load)
       waitForSpeechVoices(700).then((voices) => {
         if (voices.length > 0) {
-          setAvailableVoices(getSortedFrenchVoices(voices));
+          setAvailableVoices(getSortedFrenchVoices(voices, highQualityAudioOnly));
           speakVerse(index);
         } else {
           setTtsWarning("Aucune voix de synthèse vocale n'est détectée sur votre appareil.");
@@ -2980,15 +3020,17 @@ export default function App() {
       return;
     }
 
-    // Strictly resolve French voice matching the user's requested gender
+    // Strictly resolve French voice matching the user's requested gender & quality filter
     const resolution = resolveStrictFrenchVoice({
       gender: voiceGender,
       preferredVoiceURI: selectedVoiceURI,
       basePitch: isRawReading ? 1.0 : voicePitch,
-      availableVoices: currentVoices
+      availableVoices: currentVoices,
+      highQualityOnly: highQualityAudioOnly,
+      highQualityNoVoicesWarning: t('settings.highQualityNoVoicesWarning')
     });
 
-    logTts(`[TTS Debug Selector] Requested gender: "${voiceGender}", Selected URI: "${selectedVoiceURI || 'none'}", Resolved voice: ${resolution.voice ? resolution.voice.name : 'NONE'}`);
+    logTts(`[TTS Debug Selector] Requested gender: "${voiceGender}", HighQualityOnly: ${highQualityAudioOnly}, Selected URI: "${selectedVoiceURI || 'none'}", Resolved voice: ${resolution.voice ? resolution.voice.name : 'NONE'}`);
 
     // If no French voice is available, safely halt speech and alert user
     if (!resolution.voice) {
@@ -2998,8 +3040,8 @@ export default function App() {
       return;
     }
 
-    // Inform user once if fallback pitch compensation was needed (e.g. no native female voice installed)
-    if (resolution.fallbackApplied && resolution.warningMessage && index === 0) {
+    // Inform user once if fallback compensation was needed (e.g. no native female or Natural/Neural voice installed)
+    if (resolution.fallbackApplied && resolution.warningMessage && (index === 0 || resolution.highQualityMissing)) {
       setTtsWarning(resolution.warningMessage);
     }
 
@@ -4262,8 +4304,14 @@ export default function App() {
                                 gender: voiceGender,
                                 preferredVoiceURI: selectedVoiceURI,
                                 basePitch: isRawReading ? 1.0 : voicePitch,
-                                availableVoices: availableVoices
+                                availableVoices: window.speechSynthesis.getVoices(),
+                                highQualityOnly: highQualityAudioOnly,
+                                highQualityNoVoicesWarning: t('settings.highQualityNoVoicesWarning')
                               });
+
+                              if (resolution.fallbackApplied && resolution.warningMessage) {
+                                setTtsWarning(resolution.warningMessage);
+                              }
 
                               if (resolution.voice) {
                                 const utterance = new SpeechSynthesisUtterance("Que la paix de Dieu soit avec vous.");
@@ -4415,6 +4463,24 @@ export default function App() {
                       aria-label="Lecture audio automatique dès l'ouverture d'un nouveau chapitre"
                     >
                       {autoPlayChapterAudio ? 'Oui' : 'Non'}
+                    </button>
+                  </div>
+
+                  {/* Haute Qualité (Natural / Neural) Toggle */}
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-1.5 border-t border-[#2e2a1e]/40">
+                    <span className="text-[#6b6355]" title={t('settings.highQualityAudioDesc')}>{t('settings.highQualityAudioTitle')}</span>
+                    <button
+                      onClick={() => handleToggleHighQualityAudio(!highQualityAudioOnly)}
+                      className={`px-2 py-0.5 text-[8px] font-semibold uppercase rounded border cursor-pointer transition ${
+                        highQualityAudioOnly
+                          ? 'bg-[#c9a84c]/10 text-[#c9a84c] border-[#c9a84c]/30'
+                          : 'text-[#6b6355] border-[#2e2a1e]/40 hover:text-white'
+                      }`}
+                      role="switch"
+                      aria-checked={highQualityAudioOnly}
+                      aria-label={t('settings.highQualityAudioTitle')}
+                    >
+                      {highQualityAudioOnly ? 'Oui (HD)' : 'Non'}
                     </button>
                   </div>
 
@@ -4702,10 +4768,17 @@ export default function App() {
                 selectedChapter={selectedChapter}
                 selectedTranslation={selectedTranslation}
                 onSelectTranslation={(trans) => {
-                  setSelectedTranslation(trans);
-                  try {
-                    localStorage.setItem('bible_translation', trans);
-                  } catch (_) {}
+                  const targetKey = `${trans}_${selectedBook.id}_${selectedChapter}`;
+                  if (trans === selectedTranslation) {
+                    delete versesCache.current[targetKey];
+                    setLoadingError(null);
+                    setVersesReloadNonce(prev => prev + 1);
+                  } else {
+                    setSelectedTranslation(trans);
+                    try {
+                      localStorage.setItem('bible_translation', trans);
+                    } catch (_) {}
+                  }
                 }}
                 chapterVerses={chapterVerses}
                 loadingVerses={loadingVerses}
@@ -4752,6 +4825,8 @@ export default function App() {
                 onOpenConcordance={() => {
                   setActiveTab('dictionary');
                 }}
+                highQualityAudioOnly={highQualityAudioOnly}
+                onTtsWarning={setTtsWarning}
                 readingTimeToday={readingTimeToday}
                 dailyTimeGoal={dailyTimeGoal}
                 onAutoValidateChapter={() => {
@@ -5608,18 +5683,22 @@ export default function App() {
 
       {/* French TTS Guidance / Warning Toast */}
       {ttsWarning && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] max-w-md w-[92%] bg-[#12100c]/98 border border-amber-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md flex items-start gap-3 animate-fade-slide-up select-none">
+        <div
+          role="alert"
+          className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] max-w-md w-[92%] bg-[#12100c]/98 border border-amber-500/50 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md flex items-start gap-3 animate-fade-slide-up select-none"
+        >
           <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
             <Volume2 className="w-4 h-4" />
           </div>
           <div className="flex-1 space-y-1 text-left min-w-0">
-            <p className="font-serif font-bold text-xs text-amber-300">Synthèse Vocale en Français</p>
+            <p className="font-serif font-bold text-xs text-amber-300">{t('settings.ttsToastTitle')}</p>
             <p className="text-[11px] text-[#e8e0d0]/90 leading-relaxed font-sans">{ttsWarning}</p>
           </div>
           <button 
             onClick={() => setTtsWarning(null)} 
             className="text-[#8c8270] hover:text-[#e8e0d0] p-1 cursor-pointer transition shrink-0"
-            title="Fermer l'alerte"
+            title={t('common.close')}
+            aria-label={t('common.close')}
           >
             <X className="w-4 h-4" />
           </button>
@@ -5711,6 +5790,7 @@ export default function App() {
         speechVolume={voiceVolume}
         selectedVoiceGender={voiceGender}
         autoPlayChapterAudio={autoPlayChapterAudio}
+        highQualityAudioOnly={highQualityAudioOnly}
         userEmail={user?.email || undefined}
         readerColor={readerColor}
         themeMode={themeMode}
@@ -5730,6 +5810,7 @@ export default function App() {
           setAutoPlayChapterAudio(enabled);
           try { localStorage.setItem('bible_auto_play_chapter_audio', String(enabled)); } catch (_) {}
         }}
+        onChangeHighQualityAudioOnly={handleToggleHighQualityAudio}
         onChangeThemeMode={(t) => setThemeMode(t)}
         onSignOut={handleSignOut}
       />

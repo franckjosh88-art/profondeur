@@ -12,7 +12,7 @@ export interface CachedExplanation {
 }
 
 const DB_NAME = 'scripture_study_cache';
-const DB_VERSION = 2; // Bump version to 2 for the new verses store
+const DB_VERSION = 3; // Bump to 3 to purge legacy English-polluted verses cache
 const STORE_NAME = 'explanations_cache';
 const VERSES_STORE_NAME = 'verses_cache';
 
@@ -36,6 +36,10 @@ class IndexedExplainCache {
             store.createIndex('viewCount', 'viewCount', { unique: false });
             store.createIndex('timestamp', 'timestamp', { unique: false });
             store.createIndex('type', 'type', { unique: false });
+          }
+          // Rebuild verses_cache cleanly when upgrading from v1/v2 to v3 to invalidate stale English texts
+          if (event.oldVersion > 0 && event.oldVersion < 3 && db.objectStoreNames.contains(VERSES_STORE_NAME)) {
+            db.deleteObjectStore(VERSES_STORE_NAME);
           }
           if (!db.objectStoreNames.contains(VERSES_STORE_NAME)) {
             const store = db.createObjectStore(VERSES_STORE_NAME, { keyPath: 'key' });
@@ -335,22 +339,21 @@ class IndexedExplainCache {
           const bookId = parseInt(bIdStr, 10);
           const chapter = parseInt(chStr, 10);
 
-          // Store with standard key e.g. "1_1"
+          // Store explicitly under "lsg_<bookId>_<chapter>" and "local_<bookId>_<chapter>"
           store.put({
-            key,
+            key: `lsg_${key}`,
             bookId,
             chapter,
-            translation,
+            translation: 'lsg',
             verses,
             timestamp: Date.now()
           });
 
-          // Also store with "local_1_1" key for local reader matching
           store.put({
             key: `local_${key}`,
             bookId,
             chapter,
-            translation,
+            translation: 'local',
             verses,
             timestamp: Date.now()
           });

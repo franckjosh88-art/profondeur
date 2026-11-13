@@ -172,11 +172,28 @@ export function isHighQualityVoice(voice: SpeechSynthesisVoice): boolean {
   );
 }
 
-export function getSortedFrenchVoices(allVoices?: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return [];
-  const list = allVoices || window.speechSynthesis.getVoices() || [];
-  
-  const frenchOnly = list.filter(isStrictlyFrenchVoice);
+export function isNaturalOrNeuralVoice(voice: SpeechSynthesisVoice): boolean {
+  if (!voice || !voice.name) return false;
+  return /natural|neural/i.test(voice.name);
+}
+
+export function getSortedFrenchVoices(
+  allVoices?: SpeechSynthesisVoice[],
+  highQualityOnly: boolean = false
+): SpeechSynthesisVoice[] {
+  let list: SpeechSynthesisVoice[] = [];
+  if (allVoices) {
+    list = allVoices;
+  } else if (typeof window !== 'undefined' && window.speechSynthesis) {
+    list = window.speechSynthesis.getVoices() || [];
+  } else {
+    return [];
+  }
+
+  let frenchOnly = list.filter(isStrictlyFrenchVoice);
+  if (highQualityOnly) {
+    frenchOnly = frenchOnly.filter(isNaturalOrNeuralVoice);
+  }
 
   return [...frenchOnly].sort((a, b) => {
     const aName = a.name.toLowerCase();
@@ -208,6 +225,47 @@ export function getSortedFrenchVoices(allVoices?: SpeechSynthesisVoice[]): Speec
 
     return a.name.localeCompare(b.name);
   });
+}
+
+/**
+ * Diagnostic utility to verify that `highQualityAudioOnly` is working on the current device.
+ * Attempts to fetch available SpeechSynthesis voices, logs the count of voices containing
+ * 'Neural', 'Natural', or 'Google' in their names, verifies `getSortedFrenchVoices` filtering,
+ * and returns a boolean indicating whether at least one such high-quality voice is available.
+ */
+export async function verifyHighQualityAudioDiagnostic(options?: {
+  availableVoices?: SpeechSynthesisVoice[];
+  highQualityAudioOnly?: boolean;
+  timeoutMs?: number;
+  logger?: (message: string) => void;
+}): Promise<boolean> {
+  const {
+    availableVoices,
+    highQualityAudioOnly = true,
+    timeoutMs = 800,
+    logger = (msg: string) => console.log(msg),
+  } = options || {};
+
+  let voices: SpeechSynthesisVoice[] = [];
+  if (availableVoices) {
+    voices = availableVoices;
+  } else if (typeof window !== 'undefined' && window.speechSynthesis) {
+    voices = window.speechSynthesis.getVoices() || [];
+    if (voices.length === 0) {
+      voices = await waitForSpeechVoices(timeoutMs);
+    }
+  }
+
+  const highQualityNamedVoices = voices.filter((v) =>
+    /neural|natural|google/i.test(v?.name || '')
+  );
+  const filteredFrenchVoices = getSortedFrenchVoices(voices, highQualityAudioOnly);
+
+  logger(
+    `[TTS Diagnostic] High-quality voices ('Neural' | 'Natural' | 'Google') count: ${highQualityNamedVoices.length} (total: ${voices.length}, highQualityAudioOnly=${highQualityAudioOnly} French match count: ${filteredFrenchVoices.length})`
+  );
+
+  return highQualityNamedVoices.length > 0;
 }
 
 /**
@@ -280,6 +338,7 @@ export interface VoiceResolutionResult {
   genderResolved: 'male' | 'female' | 'unknown' | 'none';
   genderMatched: boolean;
   fallbackApplied: boolean;
+  highQualityMissing?: boolean;
   warningMessage: string | null;
   recommendedPitch: number;
 }
@@ -294,24 +353,47 @@ export function resolveStrictFrenchVoice(options: {
   preferredVoiceURI?: string;
   basePitch?: number;
   availableVoices?: SpeechSynthesisVoice[];
+  highQualityOnly?: boolean;
+  highQualityNoVoicesWarning?: string;
 }): VoiceResolutionResult {
-  const { gender, preferredVoiceURI, basePitch = 1.0, availableVoices } = options;
-  const sortedFr = getSortedFrenchVoices(availableVoices);
+  const {
+    gender,
+    preferredVoiceURI,
+    basePitch = 1.0,
+    availableVoices,
+    highQualityOnly = false,
+    highQualityNoVoicesWarning
+  } = options;
+
+  const sortedAllFr = getSortedFrenchVoices(availableVoices, false);
+  const sortedHighQuality = highQualityOnly
+    ? getSortedFrenchVoices(availableVoices, true)
+    : sortedAllFr;
 
   // If no French voice is available at all on the device
-  if (sortedFr.length === 0) {
+  if (sortedAllFr.length === 0) {
     return {
       voice: null,
       genderRequested: gender,
       genderResolved: 'none',
       genderMatched: false,
       fallbackApplied: true,
-      warningMessage: "Aucune voix française n'a été détectée sur votre appareil. La lecture est suspendue pour éviter une prononciation erronée en anglais. Veuillez activer une voix française dans les réglages système.",
+      highQualityMissing: highQualityOnly,
+      warningMessage:
+        (highQualityOnly && highQualityNoVoicesWarning) ||
+        "Aucune voix française n'a été détectée sur votre appareil. La lecture est suspendue pour éviter une prononciation erronée en anglais. Veuillez activer une voix française dans les réglages système.",
       recommendedPitch: basePitch
     };
   }
 
-  // 1. If user explicitly picked a preferred voiceURI, verify that it is indeed French
+  const highQualityMissing = highQualityOnly && sortedHighQuality.length === 0;
+  const sortedFr = highQualityMissing ? sortedAllFr : sortedHighQuality;
+  const hqWarning = highQualityMissing
+    ? highQualityNoVoicesWarning ||
+      "Aucune voix française « Natural » ou « Neural » n'est détectée sur cet appareil. La lecture utilise une voix française standard."
+    : null;
+
+  // 1. If user explicitly picked a preferred voiceURI, verify that it is indeed French (and Natural/Neural when highQualityOnly is active)
   if (preferredVoiceURI) {
     const manualVoice = sortedFr.find(v => v.voiceURI === preferredVoiceURI);
     if (manualVoice) {
@@ -321,8 +403,9 @@ export function resolveStrictFrenchVoice(options: {
         genderRequested: gender,
         genderResolved: manualGender,
         genderMatched: gender === 'auto' || manualGender === gender,
-        fallbackApplied: false,
-        warningMessage: null,
+        fallbackApplied: highQualityMissing,
+        highQualityMissing,
+        warningMessage: hqWarning,
         recommendedPitch: Math.max(0.95, Math.min(1.05, basePitch))
       };
     }
@@ -338,8 +421,9 @@ export function resolveStrictFrenchVoice(options: {
         genderRequested: 'female',
         genderResolved: 'female',
         genderMatched: true,
-        fallbackApplied: false,
-        warningMessage: null,
+        fallbackApplied: highQualityMissing,
+        highQualityMissing,
+        warningMessage: hqWarning,
         // Keep pitch completely natural to preserve acoustic timbre without distortion
         recommendedPitch: Math.max(0.98, Math.min(1.02, basePitch))
       };
@@ -356,7 +440,10 @@ export function resolveStrictFrenchVoice(options: {
       genderResolved: resolvedGender,
       genderMatched: false,
       fallbackApplied: true,
-      warningMessage: "Votre appareil ne possède pas de voix féminine française native. La lecture utilise la meilleure voix française disponible avec une intonation naturelle.",
+      highQualityMissing,
+      warningMessage:
+        hqWarning ||
+        "Votre appareil ne possède pas de voix féminine française native. La lecture utilise la meilleure voix française disponible avec une intonation naturelle.",
       recommendedPitch: 1.02
     };
   }
@@ -371,8 +458,9 @@ export function resolveStrictFrenchVoice(options: {
         genderRequested: 'male',
         genderResolved: 'male',
         genderMatched: true,
-        fallbackApplied: false,
-        warningMessage: null,
+        fallbackApplied: highQualityMissing,
+        highQualityMissing,
+        warningMessage: hqWarning,
         recommendedPitch: Math.max(0.96, Math.min(1.0, basePitch))
       };
     }
@@ -387,7 +475,10 @@ export function resolveStrictFrenchVoice(options: {
       genderResolved: resolvedGender,
       genderMatched: false,
       fallbackApplied: true,
-      warningMessage: "Votre appareil ne possède pas de voix masculine française explicite. La lecture utilise la voix française disponible avec son timbre naturel.",
+      highQualityMissing,
+      warningMessage:
+        hqWarning ||
+        "Votre appareil ne possède pas de voix masculine française explicite. La lecture utilise la voix française disponible avec son timbre naturel.",
       recommendedPitch: 0.98
     };
   }
@@ -402,8 +493,9 @@ export function resolveStrictFrenchVoice(options: {
     genderRequested: 'auto',
     genderResolved: chosenGender,
     genderMatched: true,
-    fallbackApplied: false,
-    warningMessage: null,
+    fallbackApplied: highQualityMissing,
+    highQualityMissing,
+    warningMessage: hqWarning,
     recommendedPitch: Math.max(0.96, Math.min(1.04, basePitch))
   };
 }

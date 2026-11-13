@@ -21,6 +21,7 @@ interface SettingsModalProps {
   speechVolume: number;
   selectedVoiceGender: 'female' | 'male' | 'all';
   autoPlayChapterAudio?: boolean;
+  highQualityAudioOnly?: boolean;
   userEmail?: string | null;
   readerColor?: string;
   themeMode?: 'dark' | 'sepia' | 'light';
@@ -31,6 +32,7 @@ interface SettingsModalProps {
   onChangeSpeechVolume: (volume: number) => void;
   onChangeVoiceGender: (gender: 'female' | 'male' | 'all') => void;
   onChangeAutoPlayChapterAudio?: (enabled: boolean) => void;
+  onChangeHighQualityAudioOnly?: (enabled: boolean) => void;
   onChangeThemeMode?: (theme: 'dark' | 'sepia' | 'light') => void;
   onSignOut?: () => void;
 }
@@ -42,6 +44,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   speechVolume,
   selectedVoiceGender,
   autoPlayChapterAudio = false,
+  highQualityAudioOnly = false,
   userEmail,
   readerColor = 'sanctuary',
   themeMode = 'dark',
@@ -52,6 +55,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeSpeechVolume,
   onChangeVoiceGender,
   onChangeAutoPlayChapterAudio,
+  onChangeHighQualityAudioOnly,
   onChangeThemeMode,
   onSignOut
 }) => {
@@ -465,6 +469,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         />
                       </button>
                     </div>
+
+                    {/* Option : Haute Qualité (voix Natural / Neural uniquement) */}
+                    <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
+                      <div className="space-y-0.5 text-left pr-2">
+                        <span className="text-xs font-serif font-bold text-[#f4efe2] flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-[#c9a84c]" aria-hidden="true" />
+                          <span>{t('settings.highQualityAudioTitle')}</span>
+                        </span>
+                        <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                          {t('settings.highQualityAudioDesc')}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={highQualityAudioOnly}
+                        aria-label={t('settings.highQualityAudioTitle')}
+                        onClick={() => onChangeHighQualityAudioOnly && onChangeHighQualityAudioOnly(!highQualityAudioOnly)}
+                        className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
+                          highQualityAudioOnly ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-[#0c0a07] shadow-md ring-0 transition duration-200 ease-in-out ${
+                            highQualityAudioOnly ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
                   </div>
 
                   {/* 4. PALETTE DU LECTEUR BIBLIQUE */}
@@ -548,22 +581,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ) : (
                 /* PAGE SOURCES & CRÉDITS */
                 <div className="space-y-4 text-sm font-sans leading-relaxed text-[#ded7c8]">
-                  {/* 1. Texte Louis Segond 1910 */}
-                  <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] space-y-2">
+                  {/* 1. Textes Bibliques Français & Anglais (Domaine Public) */}
+                  <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] space-y-2.5">
                     <div className="flex items-center gap-2">
                       <BookOpen className="w-4 h-4 text-[#c9a84c]" aria-hidden="true" />
                       <h4 className="font-serif font-bold text-sm text-[#f4efe2]">
-                        Texte Biblique : Louis Segond 1910
+                        Traductions Bibliques (Domaine Public)
                       </h4>
                     </div>
                     <span className="inline-block text-xs font-mono uppercase tracking-wider text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded font-bold">
-                      Domaine Public
+                      Domaine Public Vérifié
                     </span>
-                    <p className="text-sm text-[#b8af9e] leading-relaxed">
-                      L'ensemble du texte des Écritures saintes (Ancien et Nouveau Testament, 66 livres canoniques) utilisé dans cette application est issu de la révision officielle de 1910 de la traduction du pasteur et théologien suisse Louis Segond (1810-1885).
-                    </p>
+                    <ul className="text-sm text-[#b8af9e] leading-relaxed space-y-1.5 list-disc pl-4">
+                      <li><strong>Louis Segond (1910)</strong> : corpus local intégral (1 189 chapitres) et eBible.org (<code className="text-xs text-[#c9a84c]">fraLSG</code>).</li>
+                      <li><strong>Bible J.N. Darby</strong> : traduction française de John Nelson Darby via eBible.org (<code className="text-xs text-[#c9a84c]">frajnd</code>) et GetBible.</li>
+                      <li><strong>David Martin (1744)</strong> : texte historique du pasteur David Martin via GetBible (<code className="text-xs text-[#c9a84c]">martin</code>).</li>
+                      <li><strong>Ostervald</strong> : révision française de Jean-Frédéric Ostervald via eBible.org (<code className="text-xs text-[#c9a84c]">fra_fob</code>).</li>
+                      <li><strong>King James Version (KJV)</strong> : texte anglais du domaine public (1611/1769).</li>
+                    </ul>
                     <p className="text-xs text-[#a0947f]">
-                      Cette traduction historique fait partie intégrante du domaine public mondial et est exempte de tout droit patrimonial ou restriction commerciale.
+                      Toutes ces éditions historiques appartiennent au domaine public mondial et sont exemptes de restriction commerciale.
                     </p>
                   </div>
 

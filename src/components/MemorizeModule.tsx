@@ -338,12 +338,14 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
     let storedGender: 'auto' | 'male' | 'female' = 'auto';
     let storedVoiceURI = '';
     let storedPitch = 1.0;
+    let storedHighQualityOnly = false;
     try {
       const g = localStorage.getItem('bible_voice_gender');
       if (g === 'male' || g === 'female' || g === 'auto') storedGender = g;
       storedVoiceURI = localStorage.getItem('bible_preferred_voice_uri') || '';
       const p = localStorage.getItem('bible_voice_pitch');
       if (p) storedPitch = Number(p);
+      storedHighQualityOnly = localStorage.getItem('bible_high_quality_audio') === 'true';
     } catch (_) {}
 
     // Strictly resolve French voice
@@ -351,7 +353,8 @@ export const MemorizeModule: React.FC<MemorizeModuleProps> = ({
       gender: storedGender,
       preferredVoiceURI: storedVoiceURI,
       basePitch: storedPitch,
-      availableVoices: window.speechSynthesis.getVoices()
+      availableVoices: window.speechSynthesis.getVoices(),
+      highQualityOnly: storedHighQualityOnly
     });
 
     if (!resolution.voice) {
