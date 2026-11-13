@@ -20,6 +20,7 @@ import {
   normalizeReaderColorId,
   saveReaderColorLocally
 } from '../types/readerTheme';
+import { useLanguage } from '../i18n/LanguageContext';
 
 export interface PureBibleReaderProps {
   selectedBook: Book;
@@ -522,18 +523,25 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
     setTextToAppend(null);
   }, []);
 
-  // Translations list
-  const TRANSLATIONS = [
+  const { language, t, getBookTitle } = useLanguage();
+
+  // Translations list organized by language
+  const FRENCH_TRANSLATIONS = [
     { id: 'lsg', code: 'LSG', label: 'Louis Segond (1910)' },
     { id: 'darby', code: 'DRB', label: 'Darby' },
     { id: 'martin', code: 'MRT', label: 'David Martin (1744)' },
     { id: 'ostervald', code: 'OST', label: 'Ostervald' },
-    { id: 'kjv', code: 'KJV', label: 'King James (Anglais)' },
-    { id: 'local', code: 'LSG', label: 'Hors ligne (LSG)' },
+    { id: 'local', code: 'LSG', label: language === 'en' ? 'Offline (LSG)' : 'Hors ligne (LSG)' },
   ];
 
+  const ENGLISH_TRANSLATIONS = [
+    { id: 'kjv', code: 'KJV', label: 'King James Version (KJV)' },
+  ];
+
+  const TRANSLATIONS = [...FRENCH_TRANSLATIONS, ...ENGLISH_TRANSLATIONS];
+
   const getTranslationCode = (id: string) => {
-    const match = TRANSLATIONS.find(t => t.id.toLowerCase() === id.toLowerCase());
+    const match = TRANSLATIONS.find(tItem => tItem.id.toLowerCase() === id.toLowerCase());
     return match ? match.code : id.toUpperCase().slice(0, 3);
   };
 
@@ -604,9 +612,9 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
               borderColor: 'var(--r-border)',
               color: 'var(--r-accent)',
             }}
-            title="Choisir le livre et le chapitre"
+            title={language === 'en' ? 'Select book and chapter' : 'Choisir le livre et le chapitre'}
           >
-            <span>{selectedBook.name} {selectedChapter}</span>
+            <span>{getBookTitle(selectedBook)} {selectedChapter}</span>
             {hasChapterNote && (
               <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--r-accent)' }} title="Note enregistrée pour ce chapitre" />
             )}
@@ -627,34 +635,35 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 borderColor: 'var(--r-border)',
                 color: 'var(--r-text-secondary)',
               }}
-              title="Choisir la version de Bible"
+              title={language === 'en' ? 'Select Bible version' : 'Choisir la version de Bible'}
             >
               <span>{getTranslationCode(selectedTranslation)}</span>
               <ChevronDown className="w-3 h-3 opacity-70" />
             </button>
 
-            {/* Menu déroulant de versions */}
+            {/* Menu déroulant de versions organisé par langue */}
             {showVersionDropdown && (
               <div 
-                className="absolute left-0 mt-2 w-64 border rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left"
+                className="absolute left-0 mt-2 w-64 border rounded-2xl p-1.5 shadow-2xl z-50 animate-fade-in text-left max-h-[75vh] overflow-y-auto scroller-thin"
                 style={{
                   backgroundColor: 'var(--r-surface)',
                   borderColor: 'var(--r-border)',
                   color: 'var(--r-text)',
                 }}
               >
-                <div className="px-3 py-1.5 text-[10px] uppercase font-sans font-bold tracking-wider opacity-70">
-                  Versions disponibles
+                {/* Groupe 1 : Versions Françaises */}
+                <div className="px-3 py-1.5 text-[10px] uppercase font-sans font-bold tracking-wider text-[#c9a84c]">
+                  {t('reader.frenchVersionsGroup')}
                 </div>
-                {TRANSLATIONS.map(t => {
-                  const isCurrent = selectedTranslation.toLowerCase() === t.id.toLowerCase() ||
-                    (t.id === 'local' && selectedTranslation === 'LSG');
+                {FRENCH_TRANSLATIONS.map(tItem => {
+                  const isCurrent = selectedTranslation.toLowerCase() === tItem.id.toLowerCase() ||
+                    (tItem.id === 'local' && selectedTranslation === 'LSG');
                   return (
                     <button
-                      key={t.id}
+                      key={tItem.id}
                       type="button"
                       onClick={() => {
-                        onSelectTranslation(t.id);
+                        onSelectTranslation(tItem.id);
                         setShowVersionDropdown(false);
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-sans text-left transition cursor-pointer ${
@@ -668,8 +677,41 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                       }}
                     >
                       <div className="flex flex-col">
-                        <span className="font-medium">{t.label}</span>
-                        <span className="text-[10px] opacity-70 font-mono">{t.code}</span>
+                        <span className="font-medium">{tItem.label}</span>
+                        <span className="text-[10px] opacity-70 font-mono">{tItem.code}</span>
+                      </div>
+                      {isCurrent && <Check className="w-3.5 h-3.5" style={{ color: 'var(--r-accent)' }} />}
+                    </button>
+                  );
+                })}
+
+                {/* Groupe 2 : Versions Anglaises */}
+                <div className="px-3 py-1.5 text-[10px] uppercase font-sans font-bold tracking-wider text-[#c9a84c] mt-2 border-t border-[var(--r-border)] pt-2">
+                  {t('reader.englishVersionsGroup')}
+                </div>
+                {ENGLISH_TRANSLATIONS.map(tItem => {
+                  const isCurrent = selectedTranslation.toLowerCase() === tItem.id.toLowerCase();
+                  return (
+                    <button
+                      key={tItem.id}
+                      type="button"
+                      onClick={() => {
+                        onSelectTranslation(tItem.id);
+                        setShowVersionDropdown(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-sans text-left transition cursor-pointer ${
+                        isCurrent 
+                          ? 'font-bold' 
+                          : 'hover:opacity-80'
+                      }`}
+                      style={{
+                        backgroundColor: isCurrent ? 'var(--r-bg)' : undefined,
+                        color: isCurrent ? 'var(--r-accent)' : 'var(--r-text)',
+                      }}
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-medium">{tItem.label}</span>
+                        <span className="text-[10px] opacity-70 font-mono">{tItem.code}</span>
                       </div>
                       {isCurrent && <Check className="w-3.5 h-3.5" style={{ color: 'var(--r-accent)' }} />}
                     </button>

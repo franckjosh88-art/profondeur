@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Settings, Type, Volume2, LogOut, 
   Sparkles, X, Check, ShieldCheck, Palette,
-  BookOpen, Library, Sun, Moon, Coffee
+  BookOpen, Library, Sun, Moon, Coffee, Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -12,6 +12,7 @@ import {
 } from '../types/readerTheme';
 import { ReaderVersePreview } from './ReaderVersePreview';
 import { useModalA11y } from '../hooks/useModalA11y';
+import { useLanguage } from '../i18n/LanguageContext';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -56,23 +57,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'preferences' | 'credits'>('preferences');
   const activeColorPreset = getReaderPreset(readerColor);
+  const { language, setLanguage, t, supportedLanguages } = useLanguage();
 
   // Hook d'accessibilité : piège le focus clavier et écoute la touche Échap
   const modalRef = useModalA11y(isOpen, onClose);
 
-  // Niveaux de taille de texte prédéfinis
+  // Niveaux de taille de texte prédéfinis avec traductions
   const TEXT_SIZE_PRESETS = [
-    { label: 'Petit', value: 14, description: '14 px' },
-    { label: 'Moyen', value: 17, description: '17 px' },
-    { label: 'Grand', value: 20, description: '20 px' },
-    { label: 'Très grand', value: 24, description: '24 px' },
+    { label: t('settings.sizeSmall'), value: 14, description: '14 px' },
+    { label: t('settings.sizeMedium'), value: 17, description: '17 px' },
+    { label: t('settings.sizeLarge'), value: 20, description: '20 px' },
+    { label: t('settings.sizeExtraLarge'), value: 24, description: '24 px' },
   ];
 
   const THEMES_LIST: Array<{ id: 'dark' | 'sepia' | 'light'; name: string; desc: string; icon: any; previewBg: string; previewText: string; previewBorder: string }> = [
     {
       id: 'dark',
-      name: 'Sombre',
-      desc: 'Sanctuaire Noir & Or',
+      name: t('settings.themeDark'),
+      desc: t('settings.themeDarkDesc'),
       icon: Moon,
       previewBg: '#0e0c08',
       previewText: '#f4efe2',
@@ -80,8 +82,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     },
     {
       id: 'sepia',
-      name: 'Sépia',
-      desc: 'Parchemin chaud',
+      name: t('settings.themeSepia'),
+      desc: t('settings.themeSepiaDesc'),
       icon: Coffee,
       previewBg: '#f4ecd8',
       previewText: '#3d2f1f',
@@ -89,8 +91,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     },
     {
       id: 'light',
-      name: 'Clair',
-      desc: 'Blanc pur & Or doux',
+      name: t('settings.themeLight'),
+      desc: t('settings.themeLightDesc'),
       icon: Sun,
       previewBg: '#ffffff',
       previewText: '#171717',
@@ -124,10 +126,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
                 <div>
                   <h3 id="settings-modal-title" className="font-serif font-black text-base text-[#f4efe2]">
-                    {activeTab === 'preferences' ? 'Paramètres & Préférences' : 'Sources & Crédits'}
+                    {activeTab === 'preferences' ? `${t('settings.title')} & ${t('settings.preferencesTab')}` : t('settings.creditsTab')}
                   </h3>
                   <span className="text-xs font-mono text-[#a0947f] block">
-                    {activeTab === 'preferences' ? 'Confort de lecture, audio & affichage' : 'Origine des textes, données & mentions IA'}
+                    {activeTab === 'preferences' ? t('settings.languageSectionDesc') : 'Louis Segond 1910, Strong & IA'}
                   </span>
                 </div>
               </div>
@@ -135,7 +137,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                aria-label="Fermer les paramètres"
+                aria-label={t('common.close')}
                 className="min-h-[44px] min-w-[44px] p-2 rounded-xl text-[#8c8270] hover:text-[#c9a84c] hover:bg-[#1a1712] transition cursor-pointer flex items-center justify-center focus-visible:ring-2 focus-visible:ring-[#c9a84c]"
               >
                 <X className="w-5 h-5" aria-hidden="true" />
@@ -156,7 +158,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }`}
               >
                 <Settings className="w-4 h-4" aria-hidden="true" />
-                <span>Réglages</span>
+                <span>{t('settings.preferencesTab')}</span>
               </button>
               <button
                 type="button"
@@ -170,7 +172,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }`}
               >
                 <BookOpen className="w-4 h-4" aria-hidden="true" />
-                <span>Sources & Crédits</span>
+                <span>{t('settings.creditsTab')}</span>
               </button>
             </div>
 
@@ -178,29 +180,92 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex-1 overflow-y-auto p-5 space-y-5 scroller-thin">
               {activeTab === 'preferences' ? (
                 <>
+                  {/* SÉLECTEUR DE LANGUE MULTILINGUE (FRANÇAIS / ANGLAIS) */}
+                  <div className="p-4 rounded-xl border border-[#c9a84c]/40 bg-[#15120c] space-y-3 shadow-[0_0_16px_rgba(201,168,76,0.08)]">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-[#c9a84c]/20 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c]">
+                          <Globe className="w-4 h-4" aria-hidden="true" />
+                        </div>
+                        <div>
+                          <span className="text-sm font-serif font-bold text-[#f4efe2] block">
+                            {t('settings.languageSectionTitle')}
+                          </span>
+                          <span className="text-[11px] font-mono text-[#a0947f] block">
+                            {t('settings.languageSectionDesc')}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs font-mono text-[#c9a84c] uppercase font-bold px-2 py-0.5 rounded bg-[#c9a84c]/15 border border-[#c9a84c]/30">
+                        {language.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2.5 pt-1" role="radiogroup" aria-label={t('settings.languageSectionTitle')}>
+                      {supportedLanguages.map((langOption) => {
+                        const isSelected = language === langOption.code;
+                        return (
+                          <button
+                            key={langOption.code}
+                            type="button"
+                            role="radio"
+                            aria-checked={isSelected}
+                            onClick={() => setLanguage(langOption.code)}
+                            className={`min-h-[50px] p-3 rounded-xl border text-left transition cursor-pointer flex items-center justify-between focus-visible:ring-2 focus-visible:ring-[#c9a84c] ${
+                              isSelected
+                                ? 'border-[#c9a84c] bg-[#c9a84c]/18 ring-1 ring-[#c9a84c] text-[#f4efe2]'
+                                : 'border-[#2e2a1e] bg-[#0c0a07] text-[#a0947f] hover:border-[#c9a84c]/40 hover:text-[#e8e0d0]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <span className="text-xl" role="img" aria-label={langOption.label}>
+                                {langOption.flag}
+                              </span>
+                              <div className="flex flex-col">
+                                <span className={`text-xs font-serif font-bold ${isSelected ? 'text-[#f4efe2]' : 'text-[#ded7c8]'}`}>
+                                  {langOption.label}
+                                </span>
+                                <span className="text-[10px] font-mono opacity-70">
+                                  {langOption.code === 'fr' ? 'Par défaut' : 'Standard'}
+                                </span>
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <div className="w-5 h-5 rounded-full bg-[#c9a84c] flex items-center justify-center shrink-0">
+                                <Check className="w-3 h-3 text-[#0c0a07] stroke-[2.5]" aria-hidden="true" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {/* 1. THÈME GLOBAL (SOMBRE, SÉPIA, CLAIR) */}
                   <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Palette className="w-4 h-4 text-[#c9a84c]" aria-hidden="true" />
-                        <span className="text-sm font-serif font-bold text-[#f4efe2]">Thème d'affichage</span>
+                        <span className="text-sm font-serif font-bold text-[#f4efe2]">
+                          {t('settings.visualThemeTitle')}
+                        </span>
                       </div>
                       <span className="text-xs font-mono text-[#c9a84c] uppercase font-bold">
-                        {themeMode === 'sepia' ? 'Sépia' : themeMode === 'light' ? 'Clair' : 'Sombre'}
+                        {themeMode === 'sepia' ? t('settings.themeSepia') : themeMode === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 pt-1" role="radiogroup" aria-label="Thème d'affichage">
-                      {THEMES_LIST.map((t) => {
-                        const isSelected = themeMode === t.id;
-                        const Icon = t.icon;
+                    <div className="grid grid-cols-3 gap-2 pt-1" role="radiogroup" aria-label={t('settings.visualThemeTitle')}>
+                      {THEMES_LIST.map((tItem) => {
+                        const isSelected = themeMode === tItem.id;
+                        const Icon = tItem.icon;
                         return (
                           <button
-                            key={t.id}
+                            key={tItem.id}
                             type="button"
                             role="radio"
                             aria-checked={isSelected}
-                            onClick={() => onChangeThemeMode && onChangeThemeMode(t.id)}
+                            onClick={() => onChangeThemeMode && onChangeThemeMode(tItem.id)}
                             className={`min-h-[50px] p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between focus-visible:ring-2 focus-visible:ring-[#c9a84c] ${
                               isSelected
                                 ? 'border-[#c9a84c] bg-[#c9a84c]/15 ring-1 ring-[#c9a84c]'
@@ -210,7 +275,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <div className="flex items-center justify-between w-full mb-1">
                               <div 
                                 className="w-5 h-5 rounded-full border flex items-center justify-center shrink-0"
-                                style={{ backgroundColor: t.previewBg, borderColor: t.previewBorder }}
+                                style={{ backgroundColor: tItem.previewBg, borderColor: tItem.previewBorder }}
                               >
                                 {isSelected && <Check className="w-3 h-3 text-[#c9a84c]" aria-hidden="true" />}
                               </div>
@@ -218,10 +283,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             </div>
                             <div>
                               <span className="text-xs font-serif font-bold text-[#f4efe2] block">
-                                {t.name}
+                                {tItem.name}
                               </span>
                               <span className="text-[12px] font-mono text-[#a0947f] block truncate">
-                                {t.desc}
+                                {tItem.desc}
                               </span>
                             </div>
                           </button>
@@ -235,7 +300,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Type className="w-4 h-4 text-[#c9a84c]" aria-hidden="true" />
-                        <span className="text-sm font-serif font-bold text-[#f4efe2]">Taille du texte</span>
+                        <span className="text-sm font-serif font-bold text-[#f4efe2]">
+                          {t('settings.textSizeTitle')}
+                        </span>
                       </div>
                       <span className="text-xs font-mono font-bold text-[#c9a84c] px-2 py-0.5 rounded bg-[#c9a84c]/15 border border-[#c9a84c]/30">
                         {textSize} px
@@ -243,11 +310,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
 
                     <p className="text-xs font-sans text-[#a0947f] leading-relaxed">
-                      La taille choisie s'applique à la lecture de la Bible et à toute l'application.
+                      {t('settings.textSizeDesc')}
                     </p>
 
                     {/* Boutons de présélection : Petit, Moyen, Grand, Très grand */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1" role="radiogroup" aria-label="Taille de texte">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1" role="radiogroup" aria-label={t('settings.textSizeTitle')}>
                       {TEXT_SIZE_PRESETS.map((preset) => {
                         const isSelected = textSize === preset.value;
                         return (
@@ -292,7 +359,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         style={{ fontSize: `${textSize}px` }} 
                         className="font-serif italic leading-relaxed text-[#f4efe2] transition-all"
                       >
-                        « L'Éternel est mon berger : je ne manquerai de rien. »
+                        {language === 'en'
+                          ? '“The Lord is my shepherd; I shall not want.” — Psalm 23:1'
+                          : '« L\'Éternel est mon berger : je ne manquerai de rien. » — Psaume 23:1'}
                       </p>
                     </div>
                   </div>
@@ -301,13 +370,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] space-y-3.5">
                     <div className="flex items-center gap-2">
                       <Volume2 className="w-4 h-4 text-[#c9a84c]" aria-hidden="true" />
-                      <span className="text-sm font-serif font-bold text-[#f4efe2]">Paramètres audio</span>
+                      <span className="text-sm font-serif font-bold text-[#f4efe2]">
+                        {t('reader.listenChapter')}
+                      </span>
                     </div>
 
                     {/* Vitesse de parole */}
                     <div className="space-y-1">
                       <div className="flex justify-between text-xs font-mono text-[#a0947f]">
-                        <span>Vitesse d'élocution</span>
+                        <span>{t('settings.speechRateTitle')}</span>
                         <span className="text-[#c9a84c] font-bold">{speechRate}x</span>
                       </div>
                       <input
@@ -316,7 +387,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         max="1.5"
                         step="0.05"
                         value={speechRate}
-                        aria-label="Vitesse d'élocution"
+                        aria-label={t('settings.speechRateTitle')}
                         onChange={(e) => onChangeSpeechRate(Number(e.target.value))}
                         className="w-full accent-[#c9a84c] cursor-pointer min-h-[44px]"
                       />
@@ -325,7 +396,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {/* Volume audio */}
                     <div className="space-y-1">
                       <div className="flex justify-between text-xs font-mono text-[#a0947f]">
-                        <span>Volume de la voix</span>
+                        <span>{t('settings.speechVolumeTitle')}</span>
                         <span className="text-[#c9a84c] font-bold">{Math.round(speechVolume * 100)}%</span>
                       </div>
                       <input
@@ -334,7 +405,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         max="1"
                         step="0.05"
                         value={speechVolume}
-                        aria-label="Volume de la voix"
+                        aria-label={t('settings.speechVolumeTitle')}
                         onChange={(e) => onChangeSpeechVolume(Number(e.target.value))}
                         className="w-full accent-[#c9a84c] cursor-pointer min-h-[44px]"
                       />
@@ -342,12 +413,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     {/* Type de voix */}
                     <div className="space-y-1.5">
-                      <span className="text-xs font-mono text-[#a0947f] block">Timbre de voix</span>
+                      <span className="text-xs font-mono text-[#a0947f] block">
+                        {t('settings.voiceGenderTitle')}
+                      </span>
                       <div className="grid grid-cols-3 gap-2">
                         {[
-                          { id: 'female', label: 'Féminine' },
-                          { id: 'male', label: 'Masculine' },
-                          { id: 'all', label: 'Automatique' },
+                          { id: 'female', label: t('settings.voiceFemale') },
+                          { id: 'male', label: t('settings.voiceMale') },
+                          { id: 'all', label: t('settings.voiceAll') },
                         ].map((v) => (
                           <button
                             key={v.id}
@@ -369,17 +442,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
                       <div className="space-y-0.5 text-left pr-2">
                         <span className="text-xs font-serif font-bold text-[#f4efe2] block">
-                          Lecture automatique à l'ouverture
+                          {t('settings.autoPlayChapterTitle')}
                         </span>
                         <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
-                          Lancer la lecture audio dès l'ouverture d'un nouveau chapitre
+                          {t('settings.autoPlayChapterDesc')}
                         </span>
                       </div>
                       <button
                         type="button"
                         role="switch"
                         aria-checked={autoPlayChapterAudio}
-                        aria-label="Lecture audio automatique dès l'ouverture d'un nouveau chapitre"
+                        aria-label={t('settings.autoPlayChapterTitle')}
                         onClick={() => onChangeAutoPlayChapterAudio && onChangeAutoPlayChapterAudio(!autoPlayChapterAudio)}
                         className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
                           autoPlayChapterAudio ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
@@ -399,14 +472,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Palette className="w-4 h-4 text-[#c9a84c]" aria-hidden="true" />
-                        <span className="text-sm font-serif font-bold text-[#f4efe2]">Nuancier du lecteur</span>
+                        <span className="text-sm font-serif font-bold text-[#f4efe2]">
+                          {t('settings.readerAmbianceTitle')}
+                        </span>
                       </div>
                       <span className="text-xs font-mono text-[#c9a84c]">
                         {activeColorPreset.name}
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3 pt-1" role="radiogroup" aria-label="Palette du lecteur">
+                    <div className="flex flex-wrap items-center gap-3 pt-1" role="radiogroup" aria-label={t('settings.readerAmbianceTitle')}>
                       {ORDERED_READER_COLORS.map((preset) => {
                         const isSelected = (readerColor === 'sanctuary' && preset.id === 'sanctuaire') || readerColor === preset.id;
                         return (
@@ -450,9 +525,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* 5. COMPTE ET CONFIDENTIALITÉ */}
                   <div className="p-4 rounded-xl border border-[#2e2a1e] bg-[#12100c] flex items-center justify-between gap-3">
                     <div>
-                      <span className="text-xs font-mono uppercase text-[#a0947f] block">Compte Actif</span>
+                      <span className="text-xs font-mono uppercase text-[#a0947f] block">
+                        {t('settings.userAccountTitle')}
+                      </span>
                       <span className="text-sm font-serif font-bold text-[#f4efe2]">
-                        {userEmail || 'Utilisateur local'}
+                        {userEmail || (language === 'en' ? 'Local user' : 'Utilisateur local')}
                       </span>
                     </div>
 
@@ -463,7 +540,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         className="min-h-[44px] px-4 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs font-mono font-bold flex items-center gap-2 transition cursor-pointer focus-visible:ring-2 focus-visible:ring-red-400"
                       >
                         <LogOut className="w-4 h-4" aria-hidden="true" />
-                        <span>Déconnexion</span>
+                        <span>{t('settings.signOutButton')}</span>
                       </button>
                     )}
                   </div>

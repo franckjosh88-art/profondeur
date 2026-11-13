@@ -1,5 +1,6 @@
 import React from 'react';
 import { Menu, Search, User } from 'lucide-react';
+import { useLanguage } from '../i18n/LanguageContext';
 
 interface TopBarProps {
   currentPassage?: string;
@@ -17,6 +18,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSearchPress,
   onProfilePress
 }) => {
+  const { language, setLanguage, t } = useLanguage();
+
   return (
     <header className="w-full bg-[#050403]/95 backdrop-blur-md h-14 px-3 sm:px-4 md:px-6 flex items-center justify-between border-b border-[#2e2a1e] sticky top-0 z-40 select-none text-[#e8e0d0]">
       {/* GAUCHE : Bouton hamburger (3 traits) */}
@@ -25,8 +28,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           onClick={onOpenDrawer}
           className="p-2 rounded-xl text-[#c9a84c] hover:bg-[#1a1712] hover:text-[#ebd092] border border-[#2e2a1e]/50 hover:border-[#c9a84c]/50 transition cursor-pointer active:scale-95"
-          title="Menu Sanctuaire"
-          aria-label="Menu"
+          title={t('home.openMenu')}
+          aria-label={t('home.openMenu')}
         >
           <Menu className="w-5 h-5 stroke-[2.2]" />
         </button>
@@ -42,18 +45,28 @@ export const TopBar: React.FC<TopBarProps> = ({
           BIBLE PROFONDE
         </span>
         <span className="text-[7.5px] sm:text-[8px] font-mono uppercase text-[#8c8270] tracking-widest font-extrabold -mt-0.5">
-          Mode sacré
+          {language === 'en' ? 'Sacred Mode' : 'Mode sacré'}
         </span>
       </div>
 
-      {/* DROITE : Icône recherche et icône profil */}
+      {/* DROITE : Sélecteur de langue, icône recherche et icône profil */}
       <div className="flex items-center gap-1.5 sm:gap-2">
+        <button
+          type="button"
+          onClick={() => setLanguage(language === 'fr' ? 'en' : 'fr')}
+          aria-label={language === 'fr' ? "Switch to English" : "Passer en français"}
+          title={language === 'fr' ? "Switch to English" : "Passer en français"}
+          className="h-9 px-2 rounded-xl border border-[#2e2a1e]/50 hover:border-[#c9a84c]/50 bg-[#12100c] text-[#c9a84c] hover:text-[#ebd092] flex items-center justify-center gap-1 transition-colors cursor-pointer text-xs font-mono font-bold"
+        >
+          <span>{language === 'fr' ? '🇫🇷 FR' : '🇬🇧 EN'}</span>
+        </button>
+
         <button 
           type="button"
           onClick={onSearchPress}
           className="p-2 text-[#c9a84c] hover:bg-[#1a1712] hover:text-[#ebd092] rounded-xl border border-[#2e2a1e]/50 hover:border-[#c9a84c]/50 transition cursor-pointer active:scale-95"
-          title="Recherche"
-          aria-label="Recherche"
+          title={t('common.search')}
+          aria-label={t('common.search')}
         >
           <Search className="w-5 h-5 stroke-[2.2]" />
         </button>
@@ -62,8 +75,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           onClick={onProfilePress}
           className="p-2 text-[#c9a84c] hover:bg-[#1a1712] hover:text-[#ebd092] rounded-xl border border-[#2e2a1e]/50 hover:border-[#c9a84c]/50 transition cursor-pointer active:scale-95"
-          title="Mon Profil & Paramètres"
-          aria-label="Profil"
+          title={t('nav.profile')}
+          aria-label={t('nav.profile')}
         >
           <User className="w-5 h-5 stroke-[2.2]" />
         </button>

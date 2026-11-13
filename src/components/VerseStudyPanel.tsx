@@ -31,6 +31,7 @@ import { AiTextRenderer } from './AiTextRenderer';
 import { AiDisclaimer } from './AiDisclaimer';
 import { appAlert } from '../utils/dialog';
 import { fetchSimilarVerses, prefetchSimilarVerses, getFromCache } from '../services/similarVersesService';
+import { useLanguage } from '../i18n/LanguageContext';
 
 interface TranslationComparison {
   code: string;
@@ -78,6 +79,8 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
   onSelectHighlightColor,
   onRemoveHighlight,
 }) => {
+  const { language, t, getBookTitle } = useLanguage();
+
   // Action rows active sub-view
   const [activeTab, setActiveTab] = useState<ActivePanelTab>('none');
 
@@ -616,7 +619,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 }`}
               >
                 <Bookmark className={`w-4 h-4 ${isFavorite ? 'fill-current' : ''}`} />
-                <span>Favori</span>
+                <span>{language === 'en' ? 'Bookmark' : 'Favori'}</span>
               </button>
 
               {/* Copier */}
@@ -628,12 +631,12 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 {hasCopied ? (
                   <>
                     <Check className="w-4 h-4 text-emerald-400" />
-                    <span className="text-emerald-400">Copié</span>
+                    <span className="text-emerald-400">{t('common.copied')}</span>
                   </>
                 ) : (
                   <>
                     <Copy className="w-4 h-4" />
-                    <span>Copier</span>
+                    <span>{t('common.copy')}</span>
                   </>
                 )}
               </button>
@@ -651,7 +654,9 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
               {/* Surlignage (Jaune, Vert, Rose) */}
               {onSelectHighlightColor && (
                 <div className="flex items-center gap-1.5 bg-[#1b1812] px-2.5 py-1.5 rounded-xl border border-[#2e271c]">
-                  <span className="text-[10px] text-[#8c8270] font-sans mr-0.5 select-none">Surligner :</span>
+                  <span className="text-[10px] text-[#8c8270] font-sans mr-0.5 select-none">
+                    {language === 'en' ? 'Highlight:' : 'Surligner :'}
+                  </span>
                   {HIGHLIGHT_PALETTE.map((pal) => {
                     const isSelected = currentHighlightColor?.toLowerCase() === pal.id;
                     return (
@@ -663,7 +668,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                           isSelected ? 'ring-2 ring-offset-1 ring-offset-[#1b1812] ring-white scale-110 shadow-sm' : 'hover:scale-105 opacity-80 hover:opacity-100'
                         }`}
                         style={{ backgroundColor: pal.hex }}
-                        title={`Surligner en ${pal.name}`}
+                        title={`${language === 'en' ? 'Highlight in' : 'Surligner en'} ${pal.name}`}
                       >
                         {isSelected && <Check className="w-3.5 h-3.5 text-black stroke-[3]" />}
                       </button>
@@ -674,7 +679,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                       type="button"
                       onClick={onRemoveHighlight}
                       className="ml-1 p-1 rounded-md text-rose-400 hover:text-rose-300 hover:bg-rose-500/15 transition cursor-pointer"
-                      title="Effacer le surlignage"
+                      title={language === 'en' ? 'Clear highlight' : 'Effacer le surlignage'}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -689,7 +694,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 className="min-h-[44px] px-3.5 rounded-xl font-sans text-xs bg-[#1b1812] text-[#b8ad99] hover:bg-[#231f17] hover:text-[#ded7c8] flex items-center gap-1.5 transition cursor-pointer"
               >
                 <Share2 className="w-4 h-4" />
-                <span>Partager</span>
+                <span>{t('common.share')}</span>
               </button>
 
               {/* Analyser */}
@@ -703,7 +708,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 }`}
               >
                 <Sparkles className="w-4 h-4" />
-                <span>Analyser</span>
+                <span>{t('studyPanel.tabAnalyze')}</span>
               </button>
 
               {/* Comparer */}
@@ -717,7 +722,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 }`}
               >
                 <ArrowRightLeft className="w-4 h-4" />
-                <span>Comparer</span>
+                <span>{t('studyPanel.tabCompare')}</span>
               </button>
 
               {/* Similaires */}
@@ -731,7 +736,7 @@ export const VerseStudyPanel: React.FC<VerseStudyPanelProps> = ({
                 }`}
               >
                 <GitFork className="w-4 h-4" />
-                <span>Similaires</span>
+                <span>{t('studyPanel.tabSimilar')}</span>
               </button>
             </div>
           </div>

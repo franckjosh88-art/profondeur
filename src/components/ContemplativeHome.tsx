@@ -18,6 +18,7 @@ import {
 import { Book, ReadingHistory } from '../types/bible';
 import { BOOKS } from '../data/bibleData';
 import { getChapterMaxVerses } from '../data/bibleChapterVerseCounts';
+import { useLanguage } from '../i18n/LanguageContext';
 import prayerBgSanctuary from '../assets/images/prayer_bg_sanctuary_1790148027998.jpg';
 import prayerBgValley from '../assets/images/prayer_bg_valley_1790148041309.jpg';
 import prayerBgBible from '../assets/images/prayer_bg_bible_1790148055006.jpg';
@@ -204,8 +205,10 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
     }
   };
 
+  const { language, setLanguage, t, getBookTitle } = useLanguage();
+
   const activeVerse = CONTEMPLATIVE_VERSES[0];
-  const bookDisplayName = activeBook.name.toUpperCase();
+  const bookDisplayName = getBookTitle(activeBook).toUpperCase();
   const isLongBookName = bookDisplayName.length > 11;
   const isAudioPlaying = isSpeaking && !isPaused;
 
@@ -213,14 +216,14 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
 
   return (
     <div className="flex-1 w-full flex flex-col justify-between select-none">
-      {/* 1. EN-TÊTE : Menu (☰) à gauche, BIBLE PROFONDE au centre, Recherche à droite */}
+      {/* 1. EN-TÊTE : Menu (☰) à gauche, BIBLE PROFONDE au centre, Langue & Recherche à droite */}
       {!isZenMode && (
         <header className="w-full max-w-[560px] mx-auto px-5 pt-5 sm:pt-7 flex items-center justify-between z-30">
           <button
             type="button"
             onClick={onOpenDrawer}
-            aria-label="Ouvrir le menu"
-            title="Menu"
+            aria-label={t('home.openMenu')}
+            title={t('home.openMenu')}
             className="w-11 h-11 rounded-[14px] border border-[#c9a84c]/25 bg-[#0a0805]/45 hover:bg-[#14110b]/75 hover:border-[#c9a84c]/60 text-[#c9a84c] flex items-center justify-center transition-colors cursor-pointer"
           >
             <Menu className="w-[18px] h-[18px] stroke-[1.75]" />
@@ -230,22 +233,35 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             BIBLE PROFONDE
           </h1>
 
-          <button
-            type="button"
-            onClick={onOpenSearch}
-            aria-label="Rechercher un verset"
-            title="Rechercher"
-            className="w-11 h-11 rounded-[14px] border border-[#c9a84c]/25 bg-[#0a0805]/45 hover:bg-[#14110b]/75 hover:border-[#c9a84c]/60 text-[#c9a84c] flex items-center justify-center transition-colors cursor-pointer"
-          >
-            <Search className="w-[18px] h-[18px] stroke-[1.75]" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Bouton de bascule de langue instantané (FR / EN) */}
+            <button
+              type="button"
+              onClick={() => setLanguage(language === 'fr' ? 'en' : 'fr')}
+              aria-label={language === 'fr' ? "Switch to English" : "Passer en français"}
+              title={language === 'fr' ? "Passer en anglais (Switch to English)" : "Switch to French (Passer en français)"}
+              className="h-11 px-2.5 rounded-[14px] border border-[#c9a84c]/25 bg-[#0a0805]/45 hover:bg-[#14110b]/75 hover:border-[#c9a84c]/60 text-[#c9a84c] flex items-center justify-center gap-1 transition-colors cursor-pointer text-xs font-mono font-bold"
+            >
+              <span>{language === 'fr' ? '🇫🇷 FR' : '🇬🇧 EN'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenSearch}
+              aria-label={t('common.search')}
+              title={t('common.search')}
+              className="w-11 h-11 rounded-[14px] border border-[#c9a84c]/25 bg-[#0a0805]/45 hover:bg-[#14110b]/75 hover:border-[#c9a84c]/60 text-[#c9a84c] flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <Search className="w-[18px] h-[18px] stroke-[1.75]" />
+            </button>
+          </div>
         </header>
       )}
 
       {/* 2. CENTRE DE L'ÉCRAN : Lecture en cours épurée, sans cartes ni bordures */}
       <div className="flex-1 flex flex-col items-center justify-center w-full max-w-[560px] mx-auto px-5 py-8 pb-28 sm:pb-32 text-center">
         <span className="text-xs sm:text-[13px] font-sans text-[#b5ab99] tracking-[0.02em] mb-3 sm:mb-4">
-          Reprendre la lecture
+          {t('home.resumeReading')}
         </span>
 
         {/* Nom du livre en cours en très grand, en majuscules */}
@@ -275,10 +291,10 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
               setIsPickerOpen(prev => (pickerMode === 'chapter' ? !prev : true));
             }}
             aria-expanded={isPickerOpen}
-            aria-label={`Chapitre ${activeChapter}. Cliquer pour choisir un chapitre`}
+            aria-label={`${t('home.chapter')} ${activeChapter}`}
             className="min-h-[44px] px-5 py-2 rounded-full bg-[#0c0a07]/55 hover:bg-[#14110b]/85 border border-[#c9a84c]/30 hover:border-[#c9a84c]/65 text-[#f4efe2] text-[13px] sm:text-sm font-sans flex items-center justify-center gap-2.5 transition-all cursor-pointer"
           >
-            <span>Chapitre {activeChapter}</span>
+            <span>{t('home.chapter')} {activeChapter}</span>
             <ChevronDown
               className={`w-4 h-4 text-[#c9a84c] transition-transform duration-200 ${
                 isPickerOpen ? 'rotate-180' : ''
@@ -300,14 +316,14 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                   <>
                     <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-[#2e2a1e]">
                       <span className="font-serif text-xs uppercase tracking-wider text-[#c9a84c] font-semibold truncate pr-2">
-                        {activeBook.name}
+                        {getBookTitle(activeBook)}
                       </span>
                       <button
                         type="button"
                         onClick={() => setPickerMode('book')}
                         className="text-xs font-sans text-[#b5ab99] hover:text-[#ebd092] underline underline-offset-2 cursor-pointer px-1"
                       >
-                        Changer de livre
+                        {language === 'en' ? 'Change book' : 'Changer de livre'}
                       </button>
                     </div>
 
@@ -324,7 +340,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                               }
                               setIsPickerOpen(false);
                             }}
-                            aria-label={`Chapitre ${chNum}`}
+                            aria-label={`${t('home.chapter')} ${chNum}`}
                             className={`min-h-[44px] rounded-xl text-xs font-sans font-medium flex items-center justify-center border transition cursor-pointer ${
                               isSelected
                                 ? 'bg-[#d4b257] text-[#0c0a07] border-[#d4b257] font-bold'
@@ -349,7 +365,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                             : 'text-[#8c8270] hover:text-[#e8e0d0]'
                         }`}
                       >
-                        Ancien (39)
+                        {language === 'en' ? 'Old (39)' : 'Ancien (39)'}
                       </button>
                       <button
                         type="button"
@@ -360,7 +376,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                             : 'text-[#8c8270] hover:text-[#e8e0d0]'
                         }`}
                       >
-                        Nouveau (27)
+                        {language === 'en' ? 'New (27)' : 'Nouveau (27)'}
                       </button>
                     </div>
 
@@ -383,7 +399,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
                                 : 'bg-[#14110b] text-[#e8e0d0] border-[#2e2a1e] hover:border-[#c9a84c]/50'
                             }`}
                           >
-                            {bk.name}
+                            {getBookTitle(bk)}
                           </button>
                         );
                       })}
@@ -403,7 +419,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             className="min-h-[48px] px-7 sm:px-8 py-3 rounded-full bg-[#d4b257] hover:bg-[#dfc06b] active:scale-[0.98] text-[#0c0a07] font-sans font-semibold text-xs sm:text-[13px] uppercase tracking-[0.16em] flex items-center justify-center gap-2.5 shadow-[0_4px_20px_rgba(201,168,76,0.22)] transition-all cursor-pointer"
           >
             <BookOpen className="w-4 h-4 stroke-[1.9] text-[#0c0a07] shrink-0" />
-            <span>LIRE</span>
+            <span>{t('home.readButton')}</span>
           </button>
 
           <button
@@ -419,7 +435,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
             ) : (
               <>
                 <Play className="w-3.5 h-3.5 stroke-[2] text-[#c9a84c] shrink-0" />
-                <span>ÉCOUTER</span>
+                <span>{t('home.listenButton')}</span>
               </>
             )}
           </button>
@@ -436,7 +452,7 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
               onOpenDailyVerse();
             }
           }}
-          aria-label={`Verset du jour : ${activeVerse.reference}`}
+          aria-label={`${t('home.verseOfDayTitle')} : ${activeVerse.reference}`}
           className={`mt-8 sm:mt-10 max-w-[420px] mx-auto text-center group ${
             onOpenDailyVerse ? 'cursor-pointer' : ''
           }`}
@@ -459,8 +475,8 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
           <button
             type="button"
             onClick={() => onNavigateToTab('home')}
-            aria-label="Accueil"
-            title="Accueil"
+            aria-label={t('nav.home')}
+            title={t('nav.home')}
             className="w-12 h-11 rounded-2xl bg-[#c9a84c]/18 text-[#c9a84c] flex items-center justify-center transition-all cursor-pointer"
           >
             <Home className="w-[19px] h-[19px] stroke-[1.75]" />
@@ -469,8 +485,8 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
           <button
             type="button"
             onClick={() => onNavigateToTab('read')}
-            aria-label="Étude"
-            title="Étude"
+            aria-label={t('nav.study')}
+            title={t('nav.study')}
             className="w-12 h-11 rounded-2xl text-[#a89f8c] hover:text-[#f4efe2] hover:bg-white/5 flex items-center justify-center transition-all cursor-pointer"
           >
             <BookOpen className="w-[19px] h-[19px] stroke-[1.75]" />
@@ -479,8 +495,8 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
           <button
             type="button"
             onClick={() => onNavigateToTab('assistant')}
-            aria-label="Assistant"
-            title="Assistant"
+            aria-label={t('nav.assistant')}
+            title={t('nav.assistant')}
             className="w-12 h-11 rounded-2xl text-[#a89f8c] hover:text-[#f4efe2] hover:bg-white/5 flex items-center justify-center transition-all cursor-pointer"
           >
             <MessageSquare className="w-[19px] h-[19px] stroke-[1.75]" />
@@ -489,8 +505,8 @@ export const ContemplativeHome: React.FC<ContemplativeHomeProps> = ({
           <button
             type="button"
             onClick={() => onNavigateToTab('notes')}
-            aria-label="Notes"
-            title="Notes"
+            aria-label={t('nav.notes')}
+            title={t('nav.notes')}
             className="w-12 h-11 rounded-2xl text-[#a89f8c] hover:text-[#f4efe2] hover:bg-white/5 flex items-center justify-center transition-all cursor-pointer"
           >
             <Bookmark className="w-[19px] h-[19px] stroke-[1.75]" />
