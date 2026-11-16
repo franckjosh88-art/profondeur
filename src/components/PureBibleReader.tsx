@@ -3,10 +3,10 @@ import {
   ChevronDown, MoreVertical, ChevronLeft, ChevronRight, Volume2, VolumeX,
   Pause, Check, Bookmark, Copy, Share2, FileText, 
   Search, Sparkles, X, Dices, ScrollText, Mic, Clock, 
-  BookOpen, Home, Loader2, Palette
+  BookOpen, Home, Loader2, Palette, Moon
 } from 'lucide-react';
 import { Verse, Book, VerseNote, FavoriteVerse, ChapterMeditation, ChapterAudioMeditation, VerseHighlight, HighlightColor, HIGHLIGHT_PALETTE } from '../types/bible';
-import { TRANSLATION_CATALOG } from '../data/bibleData';
+import { TRANSLATION_CATALOG, BOOKS } from '../data/bibleData';
 import { cleanMarkdownText, cleanTextForSpeech } from '../lib/bibleFormatter';
 import { AiTextRenderer } from './AiTextRenderer';
 import { VerseShareModal } from './VerseShareModal';
@@ -23,6 +23,9 @@ import {
 } from '../types/readerTheme';
 import { useLanguage } from '../i18n/LanguageContext';
 import { getSortedFrenchVoices } from '../utils/frenchTts';
+import { SpeechSoundwave } from './SpeechSoundwave';
+import { formatSleepCountdown } from '../utils/chapterNavigation';
+import { isInSleepFadeWindow } from '../utils/sleepFade';
 
 export interface PureBibleReaderProps {
   selectedBook: Book;
@@ -83,6 +86,12 @@ export interface PureBibleReaderProps {
   onDeleteHighlight?: (verse: Verse) => Promise<void> | void;
   highQualityAudioOnly?: boolean;
   onTtsWarning?: (warning: string) => void;
+  speakingVerseKey?: string | null;
+  speechRate?: number;
+  speechVolume?: number;
+  sleepTimerMinutes?: number | null;
+  sleepRemainingSeconds?: number;
+  onChangeSleepTimerMinutes?: (minutes: number | null) => void;
 }
 
 export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
@@ -133,15 +142,48 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
   onDeleteHighlight,
   highQualityAudioOnly = false,
   onTtsWarning,
+  speakingVerseKey = null,
+  speechRate = 1.0,
+  speechVolume = 1.0,
+  sleepTimerMinutes = null,
+  sleepRemainingSeconds = 0,
+  onChangeSleepTimerMinutes,
 }) => {
   // Selected verse unique ID for active study panel (e.g. "1_1_1")
   const [selectedVerseId, setSelectedVerseId] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState<boolean>(false);
   const [showVersionDropdown, setShowVersionDropdown] = useState<boolean>(false);
+  const [showSleepTimerPopover, setShowSleepTimerPopover] = useState<boolean>(false);
+  const sleepTimerPopoverRef = useRef<HTMLDivElement | null>(null);
   const [shareModalVerse, setShareModalVerse] = useState<Verse | null>(null);
   const [showGoalToast, setShowGoalToast] = useState<boolean>(false);
   const [showReadingTimeToast, setShowReadingTimeToast] = useState<boolean>(false);
   const [showThemeModal, setShowThemeModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!showSleepTimerPopover) return;
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (
+        sleepTimerPopoverRef.current &&
+        !sleepTimerPopoverRef.current.contains(event.target as Node)
+      ) {
+        setShowSleepTimerPopover(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowSleepTimerPopover(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showSleepTimerPopover]);
 
   // Thème de couleur du lecteur (7 couleurs personnalisables)
   const [readerColorId, setReaderColorId] = useState<ReaderColorId>(() => {
@@ -197,9 +239,11 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
     }
   }, [selectedBook.id, selectedChapter, chapterSummaryText]);
 
-  // Limites de navigation par chapitre (désactivation des flèches)
-  const isFirstChapter = selectedChapter <= 1;
-  const isLastChapter = selectedChapter >= (selectedBook.chapters_count || 1);
+  // Limites de navigation par chapitre (traversée complète de Genèse 1 à Apocalypse 22)
+  const isFirstChapter = selectedBook.id === BOOKS[0]?.id && selectedChapter <= 1;
+  const isLastChapter =
+    selectedBook.id === BOOKS[BOOKS.length - 1]?.id &&
+    selectedChapter >= (selectedBook.chapters_count || 1);
 
   // Calcul dynamique de la hauteur de la barre de navigation du bas
   const [bottomNavHeight, setBottomNavHeight] = useState<number>(() => {
@@ -953,6 +997,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
             {chapterVerses.map((item, idx) => {
               const verseUniqueId = `${item.book_id}_${item.chapter}_${item.verse}`;
               const isSelected = selectedVerseId === verseUniqueId;
+              const isCurrentlySpoken = speakingVerseKey === verseUniqueId;
               const rawHighlight = activeHighlights[verseUniqueId];
               const cleanText = cleanVerseText(item.text);
 
@@ -992,6 +1037,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
 
                   <span
                     id={`verse-${item.book_id}-${item.chapter}-${item.verse}`}
+                    aria-current={isCurrentlySpoken ? 'true' : undefined}
                     onTouchStart={(e) => handleVersePointerDown(item, e)}
                     onTouchMove={handleVersePointerMove}
                     onTouchEnd={handleVersePointerUp}
@@ -1010,15 +1056,17 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                       setSelectedVerseId(isSelected ? null : verseUniqueId);
                     }}
                     className={`inline cursor-pointer transition-colors duration-150 rounded px-1 py-0.5 select-text ${
-                      isSelected 
-                        ? 'bg-[#c9a84c]/20 ring-1 ring-[#c9a84c]/40 text-[#fff8e7]' 
-                        : isHighlighted
-                          ? 'highlight-fade-in hover:brightness-105'
-                          : 'hover:bg-white/5'
+                      isCurrentlySpoken
+                        ? 'bg-[#c9a84c]/25 ring-1 ring-[#c9a84c]/70'
+                        : isSelected 
+                          ? 'bg-[#c9a84c]/20 ring-1 ring-[#c9a84c]/40 text-[#fff8e7]' 
+                          : isHighlighted
+                            ? 'highlight-fade-in hover:brightness-105'
+                            : 'hover:bg-white/5'
                     }`}
                     style={{
-                      backgroundColor: isSelected ? undefined : highlightBg,
-                      borderBottom: isSelected ? undefined : highlightBorderBottom,
+                      backgroundColor: (isCurrentlySpoken || isSelected) ? undefined : highlightBg,
+                      borderBottom: (isCurrentlySpoken || isSelected) ? undefined : highlightBorderBottom,
                       animationDelay: isHighlighted ? `${Math.min(idx * 30, 320)}ms` : undefined,
                     }}
                     title="Pression longue pour surligner (Jaune, Vert, Rose)"
@@ -1026,10 +1074,10 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                     {/* Numéros de versets petits, intégrés dans le flux du texte */}
                     <sup 
                       className={`text-[11px] font-sans mr-1 select-none ${
-                        isSelected ? 'font-bold' : 'font-normal'
+                        isSelected || isCurrentlySpoken ? 'font-bold' : 'font-normal'
                       }`}
                       style={{
-                        color: isSelected ? 'var(--r-accent)' : 'var(--r-verse-num)'
+                        color: isSelected || isCurrentlySpoken ? 'var(--r-accent)' : 'var(--r-verse-num)'
                       }}
                     >
                       {item.verse}
@@ -1226,14 +1274,104 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
 
       {/* 4. ÉLÉMENTS FLOTTANTS DISCRETS & ACCESSIBLES */}
       <div 
-        className={`fixed inset-x-0 pointer-events-none z-50 transition-opacity duration-300 ${
-          isControlsIdle ? 'opacity-60' : 'opacity-100'
+        className={`fixed inset-x-0 pointer-events-none z-50 transition-[bottom,opacity] duration-300 ${
+          isControlsIdle && !showSleepTimerPopover ? 'opacity-60' : 'opacity-100'
         }`}
         style={{
-          bottom: `calc(${bottomNavHeight}px + 16px + env(safe-area-inset-bottom, 0px))`
+          bottom: `calc(${bottomNavHeight}px + ${isSpeaking || sleepTimerMinutes !== null ? 24 : 16}px + env(safe-area-inset-bottom, 0px))`
         }}
       >
-        <div className="w-full px-4 flex items-center justify-between pointer-events-none relative max-w-full">
+        <div
+          ref={sleepTimerPopoverRef}
+          className="w-full px-4 flex items-center justify-between pointer-events-none relative max-w-full"
+        >
+          {/* Sélecteur contextuel Minuterie de sommeil (15 / 30 / 60 min) au-dessus du lecteur audio */}
+          {showSleepTimerPopover && onChangeSleepTimerMinutes && (
+            <div
+              role="dialog"
+              aria-label={t('settings.sleepTimerTitle')}
+              className="pointer-events-auto absolute bottom-[calc(100%+14px)] left-1/2 -translate-x-1/2 w-[min(92vw,300px)] rounded-2xl border p-3.5 shadow-[0_12px_36px_rgba(0,0,0,0.65)] backdrop-blur-md space-y-3"
+              style={{
+                backgroundColor: 'var(--r-surface)',
+                borderColor: 'var(--r-border)',
+                color: 'var(--r-text)',
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Moon className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--r-accent)' }} aria-hidden="true" />
+                  <span className="text-xs font-serif font-bold truncate">
+                    {t('settings.sleepTimerTitle')}
+                  </span>
+                </div>
+                {sleepTimerMinutes !== null && sleepRemainingSeconds > 0 && (
+                  <span
+                    className="text-[11px] font-mono font-bold tabular-nums whitespace-nowrap shrink-0"
+                    style={{ color: 'var(--r-accent)' }}
+                  >
+                    {isInSleepFadeWindow(sleepRemainingSeconds, sleepTimerMinutes * 60)
+                      ? `${t('settings.sleepFadeActive')} · ${formatSleepCountdown(sleepRemainingSeconds)}`
+                      : formatSleepCountdown(sleepRemainingSeconds)}
+                  </span>
+                )}
+              </div>
+
+              <div
+                className="grid grid-cols-3 gap-2"
+                role="radiogroup"
+                aria-label={t('settings.sleepTimerTitle')}
+              >
+                {[15, 30, 60].map((minutes) => {
+                  const isSelected = sleepTimerMinutes === minutes;
+                  return (
+                    <button
+                      key={minutes}
+                      type="button"
+                      role="radio"
+                      aria-checked={isSelected}
+                      onClick={() => {
+                        onChangeSleepTimerMinutes(minutes);
+                        setShowSleepTimerPopover(false);
+                      }}
+                      className="min-h-[44px] py-2 px-2 rounded-xl text-xs font-mono tabular-nums whitespace-nowrap shrink-0 transition cursor-pointer border flex items-center justify-center active:scale-95 focus-visible:ring-2"
+                      style={{
+                        backgroundColor: isSelected ? 'var(--r-accent)' : 'var(--r-bg)',
+                        borderColor: isSelected ? 'var(--r-accent)' : 'var(--r-border)',
+                        color: isSelected ? 'var(--r-bg)' : 'var(--r-text)',
+                        fontWeight: isSelected ? 700 : 500,
+                      }}
+                    >
+                      {minutes} min
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onChangeSleepTimerMinutes(null);
+                  setShowSleepTimerPopover(false);
+                }}
+                className="w-full min-h-[40px] py-1.5 px-3 rounded-xl text-xs font-sans whitespace-nowrap transition cursor-pointer border flex items-center justify-center active:scale-[0.98]"
+                style={{
+                  backgroundColor: sleepTimerMinutes === null ? 'var(--r-bg)' : 'transparent',
+                  borderColor: 'var(--r-border)',
+                  color: sleepTimerMinutes === null ? 'var(--r-accent)' : 'var(--r-text-secondary)',
+                  fontWeight: sleepTimerMinutes === null ? 600 : 400,
+                }}
+              >
+                {t('settings.sleepTimerOff')}
+              </button>
+
+              <p
+                className="text-[11px] font-sans leading-snug text-center"
+                style={{ color: 'var(--r-text-muted)' }}
+              >
+                {t('settings.sleepFadeHint')}
+              </p>
+            </div>
+          )}
           
           {/* Flèche précédent : à gauche, à 16px du bord */}
           <button
@@ -1257,7 +1395,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
           </button>
 
           {/* Bouton audio flottant : centré */}
-          <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
+          <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none flex flex-col items-center">
             <button
               type="button"
               onClick={onToggleAudio}
@@ -1267,8 +1405,20 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 borderColor: 'var(--r-border)',
                 color: isSpeaking && !isPaused ? 'var(--r-bg)' : 'var(--r-accent)',
               }}
-              title={isSpeaking && !isPaused ? 'Pause de la lecture audio' : 'Écouter'}
-              aria-label={isSpeaking && !isPaused ? 'Pause de la lecture audio' : 'Écouter'}
+              title={
+                isSpeaking && !isPaused
+                  ? 'Pause de la lecture audio'
+                  : isSpeaking && isPaused
+                    ? 'Reprendre la lecture audio'
+                    : 'Écouter'
+              }
+              aria-label={
+                isSpeaking && !isPaused
+                  ? 'Pause de la lecture audio'
+                  : isSpeaking && isPaused
+                    ? 'Reprendre la lecture audio'
+                    : 'Écouter'
+              }
             >
               {isSpeaking && !isPaused ? (
                 <Pause className="w-6 h-6 fill-current" />
@@ -1276,7 +1426,59 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
                 <Volume2 className="w-6 h-6" />
               )}
             </button>
+            <div className="absolute top-[calc(100%+4px)] left-1/2 -translate-x-1/2 pointer-events-none">
+              <SpeechSoundwave
+                isSpeaking={isSpeaking}
+                isPaused={isPaused}
+                speechRate={speechRate}
+                speechVolume={speechVolume}
+              />
+            </div>
           </div>
+
+          {/* Bouton Minuterie de sommeil (15 / 30 / 60 min) dans le lecteur audio */}
+          {onChangeSleepTimerMinutes && (
+            <div className="absolute left-[calc(50%+40px)] pointer-events-none flex flex-col items-center">
+              <button
+                type="button"
+                onClick={() => setShowSleepTimerPopover((prev) => !prev)}
+                aria-label={
+                  sleepTimerMinutes !== null && sleepRemainingSeconds > 0
+                    ? `${t('settings.sleepTimerTitle')} (${formatSleepCountdown(sleepRemainingSeconds)})`
+                    : t('settings.sleepTimerTitle')
+                }
+                aria-expanded={showSleepTimerPopover}
+                aria-haspopup="dialog"
+                title={t('settings.sleepTimerTitle')}
+                className="pointer-events-auto w-11 h-11 min-h-[44px] min-w-[44px] rounded-full backdrop-blur-md flex items-center justify-center transition-all duration-150 shadow-[0_4px_16px_rgba(0,0,0,0.55)] cursor-pointer select-none active:scale-95 border"
+                style={{
+                  backgroundColor:
+                    sleepTimerMinutes !== null || showSleepTimerPopover
+                      ? 'var(--r-bg)'
+                      : 'var(--r-surface)',
+                  borderColor:
+                    sleepTimerMinutes !== null || showSleepTimerPopover
+                      ? 'var(--r-accent)'
+                      : 'var(--r-border)',
+                  color:
+                    sleepTimerMinutes !== null || showSleepTimerPopover
+                      ? 'var(--r-accent)'
+                      : 'var(--r-text-secondary)',
+                }}
+              >
+                <Moon className="w-4 h-4" />
+              </button>
+              {sleepTimerMinutes !== null && sleepRemainingSeconds > 0 && (
+                <span
+                  data-testid="reader-sleep-countdown"
+                  className="absolute top-[calc(100%+4px)] left-1/2 -translate-x-1/2 text-[10px] font-mono font-semibold tabular-nums whitespace-nowrap pointer-events-none select-none"
+                  style={{ color: 'var(--r-accent)' }}
+                >
+                  {formatSleepCountdown(sleepRemainingSeconds)}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Flèche suivant : à droite, à 16px du bord */}
           <button
@@ -1306,7 +1508,7 @@ export const PureBibleReader: React.FC<PureBibleReaderProps> = ({
         <div 
           className="fixed left-1/2 -translate-x-1/2 z-[60] px-4 py-1.5 rounded-full border text-xs font-sans shadow-xl animate-fade-in flex items-center gap-1.5 select-none pointer-events-none"
           style={{
-            bottom: `calc(${bottomNavHeight}px + 16px + 56px + 16px + env(safe-area-inset-bottom, 0px))`,
+            bottom: `calc(${bottomNavHeight}px + ${isSpeaking ? 24 : 16}px + 56px + 16px + env(safe-area-inset-bottom, 0px))`,
             backgroundColor: 'var(--r-surface)',
             borderColor: 'var(--r-border)',
             color: 'var(--r-text)',

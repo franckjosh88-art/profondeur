@@ -31,15 +31,17 @@ export const MELODY_STYLES: MelodyStyleOption[] = [
   }
 ];
 
-class AmbientMelodyGenerator {
+export class AmbientMelodyGenerator {
   private audioCtx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private filterNode: BiquadFilterNode | null = null;
   private activeOscillators: { osc: OscillatorNode; gain: GainNode }[] = [];
   private chordInterval: any = null;
   private pluckInterval: any = null;
+  private stopTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentChordIndex = 0;
   private currentVolume = 0.15; // default volume level (0.0 to 1.0)
+  private fadeMultiplier = 1.0; // sleep timer fade attenuation (0.0 to 1.0)
   private isMelodyActive = false;
   private currentStyle: MelodyStyle = 'warm_pad';
 
@@ -118,6 +120,11 @@ class AmbientMelodyGenerator {
     if (style) {
       this.currentStyle = style;
     }
+
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
     
     if (this.isMelodyActive) {
       this.rebootLoop();
@@ -126,10 +133,17 @@ class AmbientMelodyGenerator {
 
     try {
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.audioCtx = new AudioCtxClass();
+      if (!this.audioCtx) {
+        this.audioCtx = new AudioCtxClass();
+      } else if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume?.();
+      }
       
       this.masterGain = this.audioCtx.createGain();
-      this.masterGain.gain.setValueAtTime(this.currentVolume, this.audioCtx.currentTime);
+      this.masterGain.gain.setValueAtTime(
+        this.currentVolume * this.fadeMultiplier,
+        this.audioCtx.currentTime
+      );
 
       // Lowpass filter frequency adapts according to the preset vibe
       const filterFreq = this.currentStyle === 'deep_peace' ? 320 : (this.currentStyle === 'celestial_air' ? 650 : 450);
@@ -304,6 +318,20 @@ class AmbientMelodyGenerator {
   }
 
   public stop() {
+    if (!this.isMelodyActive && this.stopTimeout) {
+      return;
+    }
+    this.fadeOutAndStop(1000);
+  }
+
+  /**
+   * Smoothly fades out ambient melody over fadeDurationMs and tears down audio nodes cleanly.
+   */
+  public fadeOutAndStop(fadeDurationMs: number = 1500) {
+    const safeDurationMs = Math.max(120, fadeDurationMs);
+    const fadeSec = safeDurationMs / 1000;
+    const wasActive = this.isMelodyActive || Boolean(this.audioCtx);
+
     this.isMelodyActive = false;
 
     if (this.chordInterval) {
@@ -314,20 +342,41 @@ class AmbientMelodyGenerator {
       clearTimeout(this.pluckInterval);
       this.pluckInterval = null;
     }
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
+
+    if (!wasActive) {
+      this.fadeMultiplier = 1.0;
+      return;
+    }
 
     const now = this.audioCtx ? this.audioCtx.currentTime : 0;
 
-    this.activeOscillators.forEach(({ osc, gain }) => {
+    if (this.masterGain && this.audioCtx) {
       try {
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(0, now + fadeSec);
+      } catch (_) {}
+    }
+
+    const oscillatorsToStop = [...this.activeOscillators];
+    this.activeOscillators = [];
+
+    oscillatorsToStop.forEach(({ osc, gain }) => {
+      try {
+        gain.gain.cancelScheduledValues?.(now);
         gain.gain.setValueAtTime(gain.gain.value, now);
-        gain.gain.linearRampToValueAtTime(0, now + 1.2);
+        gain.gain.linearRampToValueAtTime(0, now + fadeSec);
         setTimeout(() => {
           try {
             osc.stop();
             osc.disconnect();
             gain.disconnect();
           } catch (_) {}
-        }, 1500);
+        }, safeDurationMs + 150);
       } catch (_) {
         try {
           osc.stop();
@@ -335,37 +384,51 @@ class AmbientMelodyGenerator {
       }
     });
 
-    this.activeOscillators = [];
-
-    if (this.masterGain && this.audioCtx) {
-      try {
-        this.masterGain.gain.linearRampToValueAtTime(0, this.audioCtx.currentTime + 1.0);
-      } catch (_) {}
-    }
-
-    setTimeout(() => {
+    this.stopTimeout = setTimeout(() => {
+      this.stopTimeout = null;
       if (this.audioCtx && !this.isMelodyActive) {
         try {
-          this.audioCtx.close();
+          this.audioCtx.close?.();
         } catch (_) {}
         this.audioCtx = null;
         this.masterGain = null;
         this.filterNode = null;
       }
-    }, 1200);
+      this.fadeMultiplier = 1.0;
+    }, safeDurationMs + 200);
+  }
+
+  public setFadeMultiplier(multiplier: number, rampDurationSec: number = 0.9) {
+    this.fadeMultiplier = Math.max(0, Math.min(1, multiplier));
+    if (this.masterGain && this.audioCtx) {
+      try {
+        const now = this.audioCtx.currentTime;
+        const target = this.currentVolume * this.fadeMultiplier;
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(target, now + Math.max(0.05, rampDurationSec));
+      } catch (_) {}
+    }
   }
 
   public setVolume(volume: number) {
     this.currentVolume = Math.max(0, Math.min(1, volume));
     if (this.masterGain && this.audioCtx) {
       try {
-        this.masterGain.gain.linearRampToValueAtTime(this.currentVolume, this.audioCtx.currentTime + 0.2);
+        const now = this.audioCtx.currentTime;
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(this.currentVolume * this.fadeMultiplier, now + 0.2);
       } catch (_) {}
     }
   }
 
   public getVolume(): number {
     return this.currentVolume;
+  }
+
+  public getEffectiveVolume(): number {
+    return Number((this.currentVolume * this.fadeMultiplier).toFixed(4));
   }
 
   public isActive(): boolean {

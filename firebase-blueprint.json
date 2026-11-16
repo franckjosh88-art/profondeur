@@ -10,7 +10,20 @@
         "displayName": { "type": "string" },
         "createdAt": { "type": "string" },
         "textSize": { "type": "integer" },
-        "readerColor": { "type": "string" }
+        "readerColor": { "type": "string" },
+        "lastReadingPosition": {
+          "type": "object",
+          "properties": {
+            "book_id": { "type": "integer" },
+            "book_name": { "type": "string" },
+            "chapter": { "type": "integer" },
+            "verse": { "type": "integer" },
+            "livre": { "type": "string" },
+            "chapitre": { "type": "integer" },
+            "verset": { "type": "integer" },
+            "timestamp": { "type": "string" }
+          }
+        }
       },
       "required": ["uid", "email"]
     },

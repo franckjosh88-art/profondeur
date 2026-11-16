@@ -50,11 +50,12 @@ export const NATURE_SOUNDS: NatureSoundOption[] = [
   }
 ];
 
-class NatureSoundsSynthesizer {
+export class NatureSoundsSynthesizer {
   private audioCtx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private currentType: NatureSoundType = 'none';
   private currentVolume = 0.15; // 0.0 to 1.0
+  private fadeMultiplier = 1.0; // sleep timer fade attenuation (0.0 to 1.0)
   private isActive = false;
 
   // Active audio nodes to cleanup on stop
@@ -67,6 +68,7 @@ class NatureSoundsSynthesizer {
   // Schedulers and intervals
   private dropTimeout: any = null;
   private birdTimeout: any = null;
+  private stopTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Lazy loaded in start()
@@ -103,6 +105,11 @@ class NatureSoundsSynthesizer {
 
   public start(type: NatureSoundType) {
     this.currentType = type;
+
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
     
     if (type === 'none') {
       this.stop();
@@ -116,12 +123,12 @@ class NatureSoundsSynthesizer {
       if (!this.audioCtx) {
         this.audioCtx = new AudioCtxClass();
       } else if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume();
+        this.audioCtx.resume?.();
       }
 
       const ctx = this.audioCtx;
       this.masterGain = ctx.createGain();
-      this.masterGain.gain.setValueAtTime(this.currentVolume, ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(this.currentVolume * this.fadeMultiplier, ctx.currentTime);
       this.masterGain.connect(ctx.destination);
 
       this.isActive = true;
@@ -531,31 +538,86 @@ class NatureSoundsSynthesizer {
   }
 
   public stop() {
+    if (!this.isActive && this.stopTimeout) {
+      return;
+    }
+    this.fadeOutAndStop(800);
+  }
+
+  /**
+   * Smoothly ramps down masterGain over fadeDurationMs before tearing down the audio graph.
+   */
+  public fadeOutAndStop(fadeDurationMs: number = 1500) {
+    const safeDurationMs = Math.max(120, fadeDurationMs);
+    const fadeSec = safeDurationMs / 1000;
+    const hadAudio = this.isActive || Boolean(this.audioCtx);
+
     this.isActive = false;
-    this.stopAudioGraph();
+
+    if (this.dropTimeout) {
+      clearTimeout(this.dropTimeout);
+      this.dropTimeout = null;
+    }
+    if (this.birdTimeout) {
+      clearTimeout(this.birdTimeout);
+      this.birdTimeout = null;
+    }
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
+
+    if (!hadAudio) {
+      this.fadeMultiplier = 1.0;
+      return;
+    }
 
     if (this.masterGain && this.audioCtx) {
       try {
-        this.masterGain.gain.linearRampToValueAtTime(0, this.audioCtx.currentTime + 0.8);
+        const now = this.audioCtx.currentTime;
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(0, now + fadeSec);
       } catch (_) {}
     }
 
-    setTimeout(() => {
-      if (this.audioCtx && !this.isActive) {
-        try {
-          this.audioCtx.close();
-        } catch (_) {}
-        this.audioCtx = null;
-        this.masterGain = null;
+    this.stopTimeout = setTimeout(() => {
+      this.stopTimeout = null;
+      if (!this.isActive) {
+        this.stopAudioGraph();
+        if (this.audioCtx) {
+          try {
+            this.audioCtx.close?.();
+          } catch (_) {}
+          this.audioCtx = null;
+          this.masterGain = null;
+        }
+        this.fadeMultiplier = 1.0;
       }
-    }, 900);
+    }, safeDurationMs + 150);
+  }
+
+  public setFadeMultiplier(multiplier: number, rampDurationSec: number = 0.9) {
+    this.fadeMultiplier = Math.max(0, Math.min(1, multiplier));
+    if (this.masterGain && this.audioCtx) {
+      try {
+        const now = this.audioCtx.currentTime;
+        const target = this.currentVolume * this.fadeMultiplier;
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(target, now + Math.max(0.05, rampDurationSec));
+      } catch (_) {}
+    }
   }
 
   public setVolume(volume: number) {
     this.currentVolume = Math.max(0, Math.min(1, volume));
     if (this.masterGain && this.audioCtx) {
       try {
-        this.masterGain.gain.linearRampToValueAtTime(this.currentVolume, this.audioCtx.currentTime + 0.25);
+        const now = this.audioCtx.currentTime;
+        this.masterGain.gain.cancelScheduledValues?.(now);
+        this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+        this.masterGain.gain.linearRampToValueAtTime(this.currentVolume * this.fadeMultiplier, now + 0.25);
       } catch (_) {}
     }
   }
@@ -564,8 +626,16 @@ class NatureSoundsSynthesizer {
     return this.currentVolume;
   }
 
+  public getEffectiveVolume(): number {
+    return Number((this.currentVolume * this.fadeMultiplier).toFixed(4));
+  }
+
   public getType(): NatureSoundType {
     return this.currentType;
+  }
+
+  public isPlaying(): boolean {
+    return this.isActive;
   }
 }
 

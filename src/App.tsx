@@ -92,6 +92,18 @@ import {
   isHighQualityVoice,
   verifyHighQualityAudioDiagnostic
 } from './utils/frenchTts';
+import {
+  getNextChapter,
+  getPreviousChapter,
+  shouldAdvanceOnSpeechError,
+  shouldContinueOnChapterChange,
+} from './utils/chapterNavigation';
+import { emitSpeechTelemetry } from './utils/speechWaveform';
+import {
+  DEFAULT_SLEEP_FADE_WINDOW_SECONDS,
+  computeSleepFadeFactor,
+  computeEffectiveVoiceVolume,
+} from './utils/sleepFade';
 import { useLanguage } from './i18n/LanguageContext';
 
 // Images d'ambiance spirituelle (Assets statiques bundlés & compatibles prod/preview)
@@ -193,7 +205,9 @@ export function loadMigratedLastReadingPosition(): ReadingPosition | null {
 }
 
 export default function App() {
-  const { t } = useLanguage();
+  const { t, getBookTitle } = useLanguage();
+  const hasRestoredCloudPositionRef = useRef<boolean>(false);
+  const lastSyncedProfilePositionKeyRef = useRef<string>('');
   // Authentication states
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
@@ -981,10 +995,10 @@ export default function App() {
   // In-memory cache to store fetched chapters and speed up navigation/continuous scroll massively
   const versesCache = useRef<Record<string, Promise<Verse[]> | Verse[]>>({});
 
-  // Helper to load a single chapter with in-memory cache (strictly isolated per translation)
-  const loadSingleChapterVerses = (chapterNum: number): Promise<Verse[]> => {
+  // Helper to load a single chapter for any book with in-memory cache (strictly isolated per translation)
+  const loadChapterVersesForBook = (targetBook: Book, chapterNum: number): Promise<Verse[]> => {
     const activeTranslation = normalizeTranslationId(selectedTranslation) || DEFAULT_BIBLE_TRANSLATION;
-    const cacheKey = `${activeTranslation}_${selectedBook.id}_${chapterNum}`;
+    const cacheKey = `${activeTranslation}_${targetBook.id}_${chapterNum}`;
     const translationLabel = TRANSLATION_CATALOG[activeTranslation]?.label || activeTranslation.toUpperCase();
     
     // If we have a cached value (promise or array), return it
@@ -1004,8 +1018,8 @@ export default function App() {
         // Autoriser le partage de cache uniquement entre 'local' et 'lsg' (tous deux LSG 1910)
         if ((!dbCached || dbCached.length === 0) && (activeTranslation === 'local' || activeTranslation === 'lsg')) {
           const siblingKey = activeTranslation === 'local'
-            ? `lsg_${selectedBook.id}_${chapterNum}`
-            : `local_${selectedBook.id}_${chapterNum}`;
+            ? `lsg_${targetBook.id}_${chapterNum}`
+            : `local_${targetBook.id}_${chapterNum}`;
           dbCached = await explainCache.getVerses(siblingKey);
         }
 
@@ -1020,24 +1034,24 @@ export default function App() {
 
         let verses: Verse[] = [];
         if (activeTranslation === 'local' || activeTranslation === 'lsg') {
-          const localStatic = querySqliteChapter(selectedBook.id, selectedBook.name, chapterNum);
+          const localStatic = querySqliteChapter(targetBook.id, targetBook.name, chapterNum);
           if (localStatic !== null && localStatic.length > 0) {
             verses = localStatic;
           } else {
-            verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, activeTranslation);
+            verses = await fetchOnlineChapter(targetBook.id, targetBook.name, chapterNum, activeTranslation);
           }
         } else {
-          verses = await fetchOnlineChapter(selectedBook.id, selectedBook.name, chapterNum, activeTranslation);
+          verses = await fetchOnlineChapter(targetBook.id, targetBook.name, chapterNum, activeTranslation);
         }
 
         // --- SAVE TO INDEXEDDB OFFLINE CACHE FOR DURABLE RETRIEVAL ---
         if (verses && verses.length > 0) {
-          await explainCache.setVerses(cacheKey, selectedBook.id, chapterNum, activeTranslation, verses);
+          await explainCache.setVerses(cacheKey, targetBook.id, chapterNum, activeTranslation, verses);
         }
         return verses;
       } catch (err: any) {
         console.error(`Erreur chargement chapitre (${activeTranslation}):`, err);
-        const errMsg = err?.message || `Impossible de charger ${selectedBook.name} ${chapterNum} (${translationLabel}).`;
+        const errMsg = err?.message || `Impossible de charger ${targetBook.name} ${chapterNum} (${translationLabel}).`;
         setLoadingError(`Version ${translationLabel} indisponible pour ce chapitre : ${errMsg}`);
         return [];
       }
@@ -1058,6 +1072,11 @@ export default function App() {
     });
 
     return fetchPromise;
+  };
+
+  // Helper to load a single chapter for the currently selected book
+  const loadSingleChapterVerses = (chapterNum: number): Promise<Verse[]> => {
+    return loadChapterVersesForBook(selectedBook, chapterNum);
   };
 
   // Synchronize loadedChapters state on book or chapter transitions
@@ -1132,26 +1151,28 @@ export default function App() {
     };
   }, [selectedBook, selectedChapter, sqliteDbReady, selectedTranslation, isContinuousScroll, loadedChapters, versesReloadNonce]);
 
-  // Background Prefetching: predictively loads the next 2 chapters to make scrolling and clicking completely instant
+  // Background Prefetching: predictively loads the next 2 chapters (including across book boundaries) for gapless audio playback
   useEffect(() => {
     if (!sqliteDbReady) return;
 
     const prefetchAhead = async () => {
       const currentHighest = isContinuousScroll ? Math.max(...loadedChapters) : selectedChapter;
-      
-      // Prefetch the next 2 chapters silently in the background
-      for (let offset = 1; offset <= 2; offset++) {
-        const targetChapter = currentHighest + offset;
-        if (targetChapter <= selectedBook.chapters_count) {
-          loadSingleChapterVerses(targetChapter).catch(() => {});
-        }
+      let cursorBook = selectedBook;
+      let cursorChapter = currentHighest;
+
+      for (let step = 0; step < 2; step++) {
+        const nextTarget = getNextChapter(cursorBook, cursorChapter);
+        if (!nextTarget) break;
+        loadChapterVersesForBook(nextTarget.book, nextTarget.chapter).catch(() => {});
+        cursorBook = nextTarget.book;
+        cursorChapter = nextTarget.chapter;
       }
     };
 
-    // Delay background activity slightly to let key UI rendering finish first
+    // Prefetch quickly (300ms) so consecutive chapters & cross-book transitions are ready immediately
     const timer = setTimeout(() => {
       prefetchAhead();
-    }, 800);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [selectedBook, selectedChapter, loadedChapters, isContinuousScroll, sqliteDbReady, selectedTranslation]);
@@ -1199,6 +1220,45 @@ export default function App() {
           setDoc(userDocRef, { readerColor: 'sanctuaire' }, { merge: true }).catch((err) => {
             console.warn("Could not set default readerColor in Firestore:", err);
           });
+        }
+        if (uData && uData.lastReadingPosition && !hasRestoredCloudPositionRef.current) {
+          const cloudPos = uData.lastReadingPosition;
+          const bId = Number(cloudPos.book_id);
+          const resolvedBook = BOOKS.find(b => b.id === bId);
+          if (resolvedBook) {
+            hasRestoredCloudPositionRef.current = true;
+            const validCh = Math.min(Math.max(1, Number(cloudPos.chapitre ?? cloudPos.chapter) || 1), resolvedBook.chapters_count);
+            const maxV = getChapterMaxVerses(resolvedBook.id, validCh);
+            const validV = Math.min(Math.max(1, Number(cloudPos.verset ?? cloudPos.verse) || 1), maxV);
+            const restored: ReadingPosition = {
+              book_id: resolvedBook.id,
+              book_name: resolvedBook.name,
+              chapter: validCh,
+              verse: validV,
+              timestamp: cloudPos.timestamp || new Date().toISOString()
+            };
+            setLastReadingPosition(restored);
+            try {
+              localStorage.setItem('bible_last_reading_position', JSON.stringify({
+                livre: resolvedBook.name,
+                book_id: resolvedBook.id,
+                book_name: resolvedBook.name,
+                chapitre: validCh,
+                chapter: validCh,
+                verset: validV,
+                verse: validV,
+                timestamp: restored.timestamp
+              }));
+            } catch (_) {}
+            if (!isSpeakingRef.current && !isPlayingContinuousRef.current) {
+              setSelectedBook(resolvedBook);
+              setSelectedChapter(validCh);
+              if (validV > 1) {
+                setTargetResumePosition(restored);
+                setTargetResumeVerseNum(validV);
+              }
+            }
+          }
         }
       } else {
         // Document inexistant -> défaut 'sanctuaire'
@@ -1487,6 +1547,27 @@ export default function App() {
       }));
     } catch (_) {}
 
+    // Persist reading/audio position to Firestore user profile when authenticated
+    if (user) {
+      const posKey = `${bookId}_${chapterNum}_${validVerseNum}`;
+      if (lastSyncedProfilePositionKeyRef.current !== posKey) {
+        lastSyncedProfilePositionKeyRef.current = posKey;
+        const userDocRef = doc(db, 'users', user.uid);
+        setDoc(userDocRef, {
+          lastReadingPosition: cleanFirestoreData({
+            livre: bookName,
+            book_id: bookId,
+            book_name: bookName,
+            chapitre: chapterNum,
+            chapter: chapterNum,
+            verset: validVerseNum,
+            verse: validVerseNum,
+            timestamp: newPosition.timestamp
+          })
+        }, { merge: true }).catch(() => {});
+      }
+    }
+
     setReadingHistory((prev) => {
       const existingIndex = prev.findIndex(h => h.book_id === bookId && h.chapter === chapterNum);
       const existing = existingIndex !== -1 ? prev[existingIndex] : null;
@@ -1573,15 +1654,38 @@ export default function App() {
     };
 
     // 5. Mise à jour de l'état
-    const isNewChapter = targetBook.id !== selectedBook.id || validChapter !== selectedChapter;
-    if ((isNewChapter || activeTab !== 'read') && autoPlayChapterAudio) {
+    const currentBookNow = selectedBookRef.current || selectedBook;
+    const currentChapterNow = selectedChapterRef.current || selectedChapter;
+    const isNewChapter = targetBook.id !== currentBookNow.id || validChapter !== currentChapterNow;
+    const shouldKeepPlaying = shouldContinueOnChapterChange(
+      isSpeakingRef.current,
+      isPausedRef.current,
+      isPlayingContinuousRef.current
+    );
+    if (shouldKeepPlaying) {
+      autoPlayNextChapterAudioRef.current = true;
+    } else if ((isNewChapter || activeTab !== 'read') && autoPlayChapterAudio) {
       autoPlayNextChapterAudioRef.current = true;
     }
+
     setSelectedBook(targetBook);
     setSelectedChapter(validChapter);
-    setSelectedVerseId(`${targetBook.id}_${validChapter}_${validVerse}`);
-    setTargetResumePosition(validatedPosition);
-    setTargetResumeVerseNum(validVerse);
+    selectedBookRef.current = targetBook;
+    selectedChapterRef.current = validChapter;
+
+    if (validVerse > 1) {
+      setSelectedVerseId(`${targetBook.id}_${validChapter}_${validVerse}`);
+      setTargetResumePosition(validatedPosition);
+      setTargetResumeVerseNum(validVerse);
+    } else {
+      setSelectedVerseId(null);
+      setTargetResumePosition(null);
+      setTargetResumeVerseNum(null);
+      if (isNewChapter && typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+
     setLastReadingPosition(validatedPosition);
     setActiveTab('read');
 
@@ -1602,30 +1706,67 @@ export default function App() {
     updateChapterProgress(targetBook.id, targetBook.name, validChapter, validVerse);
   };
 
-  // Navigating chapter index helpers avec validation { livre, chapitre, verset }
+  // Navigating chapter index helpers avec validation { livre, chapitre, verset } et continuité audio
   const handleNextChapter = () => {
-    if (selectedChapter < selectedBook.chapters_count) {
-      navigateToScripture({ livre: selectedBook.id, chapitre: selectedChapter + 1, verset: 1 });
-    } else {
-      // Go to next book
-      const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
-      if (currentIdx < BOOKS.length - 1) {
-        navigateToScripture({ livre: BOOKS[currentIdx + 1].id, chapitre: 1, verset: 1 });
+    const currentBookNow = selectedBookRef.current || selectedBook;
+    const currentChapterNow = selectedChapterRef.current || selectedChapter;
+    const nextTarget = getNextChapter(currentBookNow, currentChapterNow);
+
+    if (!nextTarget) {
+      if (isSpeakingRef.current || isPlayingContinuousRef.current) {
+        stopSpeaking();
+        setAudioStatusToast({
+          title: t('settings.endOfBibleTitle'),
+          message: t('settings.endOfBibleMessage'),
+        });
+      }
+      return;
+    }
+
+    const keepAudioPlaying = shouldContinueOnChapterChange(
+      isSpeakingRef.current,
+      isPausedRef.current,
+      isPlayingContinuousRef.current
+    );
+
+    if (keepAudioPlaying) {
+      currentVerseToSpeakRef.current = -1;
+      autoPlayNextChapterAudioRef.current = true;
+      isPlayingContinuousRef.current = true;
+      setIsPlayingContinuous(true);
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        (window as any)._activeUtterances = [];
       }
     }
+
+    navigateToScripture({ livre: nextTarget.book.id, chapitre: nextTarget.chapter, verset: 1 });
   };
 
   const handlePreviousChapter = () => {
-    if (selectedChapter > 1) {
-      navigateToScripture({ livre: selectedBook.id, chapitre: selectedChapter - 1, verset: 1 });
-    } else {
-      // Go to prev book
-      const currentIdx = BOOKS.findIndex(b => b.id === selectedBook.id);
-      if (currentIdx > 0) {
-        const prevBook = BOOKS[currentIdx - 1];
-        navigateToScripture({ livre: prevBook.id, chapitre: prevBook.chapters_count, verset: 1 });
+    const currentBookNow = selectedBookRef.current || selectedBook;
+    const currentChapterNow = selectedChapterRef.current || selectedChapter;
+    const prevTarget = getPreviousChapter(currentBookNow, currentChapterNow);
+    if (!prevTarget) return;
+
+    const keepAudioPlaying = shouldContinueOnChapterChange(
+      isSpeakingRef.current,
+      isPausedRef.current,
+      isPlayingContinuousRef.current
+    );
+
+    if (keepAudioPlaying) {
+      currentVerseToSpeakRef.current = -1;
+      autoPlayNextChapterAudioRef.current = true;
+      isPlayingContinuousRef.current = true;
+      setIsPlayingContinuous(true);
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        (window as any)._activeUtterances = [];
       }
     }
+
+    navigateToScripture({ livre: prevTarget.book.id, chapitre: prevTarget.chapter, verset: 1 });
   };
 
   // Naviguer directement au verset ou chapitre suivant
@@ -2505,10 +2646,15 @@ export default function App() {
   // Web Speech API Text-to-Speech (TTS) Integration
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [isPlayingContinuous, setIsPlayingContinuous] = useState<boolean>(false);
   const [currentSpeakingVerseIndex, setCurrentSpeakingVerseIndex] = useState<number>(-1);
   const [playbackRate, setPlaybackRate] = useState<number>(1.0);
   const [ttsLogs, setTtsLogs] = useState<string[]>([]);
   const [audioBookmarkToast, setAudioBookmarkToast] = useState<{ message: string; favorited: boolean } | null>(null);
+  const [audioStatusToast, setAudioStatusToast] = useState<{ title: string; message: string } | null>(null);
+  const [audioSleepTimerMinutes, setAudioSleepTimerMinutes] = useState<number | null>(null);
+  const [audioSleepRemainingSeconds, setAudioSleepRemainingSeconds] = useState<number>(0);
+  const [sleepFadeFactor, setSleepFadeFactor] = useState<number>(1.0);
 
   useEffect(() => {
     if (audioBookmarkToast) {
@@ -2516,6 +2662,13 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [audioBookmarkToast]);
+
+  useEffect(() => {
+    if (audioStatusToast) {
+      const timer = setTimeout(() => setAudioStatusToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [audioStatusToast]);
 
   const logTts = (msg: string, type: 'log' | 'warn' | 'error' = 'log') => {
     const timestamp = new Date().toLocaleTimeString();
@@ -2747,10 +2900,136 @@ export default function App() {
   };
 
   const currentVerseToSpeakRef = useRef<number>(-1);
+  const pausedVerseIndexRef = useRef<number>(-1);
   const autoPlayNextChapterAudioRef = useRef<boolean>(false);
   const nextVerseTimeoutRef = useRef<any>(null);
   const wakeLockRef = useRef<any>(null);
   const speechPauseResumeIntervalRef = useRef<any>(null);
+  const consecutiveTtsErrorsRef = useRef<number>(0);
+
+  // Synchronized refs to avoid stale closures inside asynchronous utterance.onend callbacks
+  const isPlayingContinuousRef = useRef<boolean>(false);
+  const isSpeakingRef = useRef<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
+  const chapterVersesRef = useRef<Verse[]>(chapterVerses);
+  const selectedBookRef = useRef<Book>(selectedBook);
+  const selectedChapterRef = useRef<number>(selectedChapter);
+  const autoAdvanceChapterSpeechRef = useRef<boolean>(autoAdvanceChapterSpeech);
+  const playbackRateRef = useRef<number>(playbackRate);
+  const voiceVolumeRef = useRef<number>(voiceVolume);
+  const voicePitchRef = useRef<number>(voicePitch);
+  const isRawReadingRef = useRef<boolean>(isRawReading);
+  const voiceGenderRef = useRef<'auto' | 'male' | 'female'>(voiceGender);
+  const selectedVoiceURIRef = useRef<string>(selectedVoiceURI);
+  const highQualityAudioOnlyRef = useRef<boolean>(highQualityAudioOnly);
+  const isMelodyEnabledRef = useRef<boolean>(false);
+  const isNatureEnabledRef = useRef<boolean>(false);
+  const sleepFadeFactorRef = useRef<number>(1.0);
+
+  useEffect(() => { isPlayingContinuousRef.current = isPlayingContinuous; }, [isPlayingContinuous]);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+  useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+  useEffect(() => { chapterVersesRef.current = chapterVerses; }, [chapterVerses]);
+  useEffect(() => { selectedBookRef.current = selectedBook; }, [selectedBook]);
+  useEffect(() => { selectedChapterRef.current = selectedChapter; }, [selectedChapter]);
+  useEffect(() => { autoAdvanceChapterSpeechRef.current = autoAdvanceChapterSpeech; }, [autoAdvanceChapterSpeech]);
+  useEffect(() => { playbackRateRef.current = playbackRate; }, [playbackRate]);
+  useEffect(() => { voiceVolumeRef.current = voiceVolume; }, [voiceVolume]);
+  useEffect(() => { voicePitchRef.current = voicePitch; }, [voicePitch]);
+  useEffect(() => { isRawReadingRef.current = isRawReading; }, [isRawReading]);
+  useEffect(() => { voiceGenderRef.current = voiceGender; }, [voiceGender]);
+  useEffect(() => { selectedVoiceURIRef.current = selectedVoiceURI; }, [selectedVoiceURI]);
+  useEffect(() => { highQualityAudioOnlyRef.current = highQualityAudioOnly; }, [highQualityAudioOnly]);
+
+  // Minuterie de sommeil dédiée à la lecture audio des chapitres (15 / 30 / 60 min) avec fondu sonore progressif
+  useEffect(() => {
+    if (audioSleepTimerMinutes === null) {
+      sleepFadeFactorRef.current = 1.0;
+      setSleepFadeFactor(1.0);
+      setAudioSleepRemainingSeconds(0);
+      ambientMelody.setFadeMultiplier(1.0, 0.35);
+      natureSounds.setFadeMultiplier(1.0, 0.35);
+      if (isSpeakingRef.current) {
+        emitSpeechTelemetry({
+          phase: 'fade',
+          rate: playbackRateRef.current,
+          volume: voiceVolumeRef.current,
+        });
+      }
+      return;
+    }
+
+    const totalSeconds = audioSleepTimerMinutes * 60;
+    let remaining = totalSeconds;
+    sleepFadeFactorRef.current = 1.0;
+    setSleepFadeFactor(1.0);
+    setAudioSleepRemainingSeconds(totalSeconds);
+    ambientMelody.setFadeMultiplier(1.0, 0.2);
+    natureSounds.setFadeMultiplier(1.0, 0.2);
+
+    const interval = setInterval(() => {
+      remaining -= 1;
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        setAudioSleepRemainingSeconds(0);
+        setAudioSleepTimerMinutes(null);
+
+        const hadAudioPlaying =
+          isSpeakingRef.current ||
+          isPlayingContinuousRef.current ||
+          ambientMelody.isActive() ||
+          natureSounds.isPlaying();
+
+        ambientMelody.fadeOutAndStop(1500);
+        natureSounds.fadeOutAndStop(1500);
+
+        if (isNatureEnabledRef.current) {
+          setIsNatureEnabled(false);
+        }
+
+        if (isSpeakingRef.current || isPlayingContinuousRef.current) {
+          stopSpeaking();
+        }
+
+        sleepFadeFactorRef.current = 1.0;
+        setSleepFadeFactor(1.0);
+
+        if (hadAudioPlaying) {
+          setAudioStatusToast({
+            title: t('settings.sleepTimerTitle'),
+            message: t('settings.sleepTimerExpired'),
+          });
+        }
+        return;
+      }
+
+      setAudioSleepRemainingSeconds(remaining);
+
+      const factor = computeSleepFadeFactor(
+        remaining,
+        totalSeconds,
+        DEFAULT_SLEEP_FADE_WINDOW_SECONDS
+      );
+
+      if (factor !== sleepFadeFactorRef.current) {
+        sleepFadeFactorRef.current = factor;
+        setSleepFadeFactor(factor);
+        ambientMelody.setFadeMultiplier(factor, 1.05);
+        natureSounds.setFadeMultiplier(factor, 1.05);
+
+        if (isSpeakingRef.current) {
+          emitSpeechTelemetry({
+            phase: 'fade',
+            rate: playbackRateRef.current,
+            volume: computeEffectiveVoiceVolume(voiceVolumeRef.current, factor),
+          });
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [audioSleepTimerMinutes]);
 
   // Auto-scrolling state variables
   const [isAutoScrollWithSpeech, setIsAutoScrollWithSpeech] = useState<boolean>(true);
@@ -2765,6 +3044,7 @@ export default function App() {
       return false; // dynamic default off to preserve energy
     }
   });
+  useEffect(() => { isMelodyEnabledRef.current = isMelodyEnabled; }, [isMelodyEnabled]);
   const [melodyVolume, setMelodyVolume] = useState<number>(() => {
     try {
       const vol = localStorage.getItem('bible_melody_volume');
@@ -2793,6 +3073,7 @@ export default function App() {
       return false;
     }
   });
+  useEffect(() => { isNatureEnabledRef.current = isNatureEnabled; }, [isNatureEnabled]);
   const [natureSoundVolume, setNatureSoundVolume] = useState<number>(() => {
     try {
       const vol = localStorage.getItem('bible_nature_volume');
@@ -2814,44 +3095,51 @@ export default function App() {
   const [isVigilActive, setIsVigilActive] = useState<boolean>(false);
   const [vigilDuration, setVigilDuration] = useState<number>(20); // default 20 minutes
   const [vigilTimeRemaining, setVigilTimeRemaining] = useState<number>(0);
-  const [vigilInitialVolume, setVigilInitialVolume] = useState<number>(0.15);
-  const [vigilInitialNatureVolume, setVigilInitialNatureVolume] = useState<number>(0.15);
 
   // Vigil mode sleep timer logic
   useEffect(() => {
-    if (!isVigilActive) return;
+    if (!isVigilActive) {
+      return;
+    }
 
-    setVigilInitialVolume(melodyVolume);
-    setVigilInitialNatureVolume(natureSoundVolume);
-    setVigilTimeRemaining(vigilDuration * 60);
+    const totalSecs = vigilDuration * 60;
+    let remaining = totalSecs;
+    setVigilTimeRemaining(totalSecs);
 
     const intervalId = setInterval(() => {
-      setVigilTimeRemaining((prev) => {
-        if (prev <= 1) {
-          clearInterval(intervalId);
-          setIsVigilActive(false);
-          // End session: stop speaking, melody, and nature sounds to sleep peacefully
-          if (typeof window !== 'undefined' && window.speechSynthesis) {
-            window.speechSynthesis.cancel();
-          }
-          ambientMelody.stop();
-          natureSounds.stop();
-          return 0;
+      remaining -= 1;
+
+      if (remaining <= 0) {
+        clearInterval(intervalId);
+        setVigilTimeRemaining(0);
+        setIsVigilActive(false);
+
+        ambientMelody.fadeOutAndStop(1500);
+        natureSounds.fadeOutAndStop(1500);
+        if (isNatureEnabledRef.current) {
+          setIsNatureEnabled(false);
         }
+        if (isSpeakingRef.current || isPlayingContinuousRef.current) {
+          stopSpeaking();
+        }
+        sleepFadeFactorRef.current = 1.0;
+        setSleepFadeFactor(1.0);
+        return;
+      }
 
-        const nextTime = prev - 1;
-        const totalSecs = vigilDuration * 60;
-        const ratio = nextTime / totalSecs;
-
-        // Proportional volume reduction (fading down to 0)
-        const nextVolume = Math.max(0, vigilInitialVolume * ratio);
-        setMelodyVolume(nextVolume);
-
-        const nextNatureVolume = Math.max(0, vigilInitialNatureVolume * ratio);
-        setNatureSoundVolume(nextNatureVolume);
-
-        return nextTime;
-      });
+      setVigilTimeRemaining(remaining);
+      const ratio = computeSleepFadeFactor(remaining, totalSecs, Math.min(totalSecs, 60));
+      sleepFadeFactorRef.current = ratio;
+      setSleepFadeFactor(ratio);
+      ambientMelody.setFadeMultiplier(ratio, 1.05);
+      natureSounds.setFadeMultiplier(ratio, 1.05);
+      if (isSpeakingRef.current && ratio < 1) {
+        emitSpeechTelemetry({
+          phase: 'fade',
+          rate: playbackRateRef.current,
+          volume: computeEffectiveVoiceVolume(voiceVolumeRef.current, ratio),
+        });
+      }
     }, 1000);
 
     return () => clearInterval(intervalId);
@@ -2860,15 +3148,11 @@ export default function App() {
   const toggleVigilMode = () => {
     if (isVigilActive) {
       setIsVigilActive(false);
-      setMelodyVolume(vigilInitialVolume);
-      setNatureSoundVolume(vigilInitialNatureVolume);
-      try {
-        localStorage.setItem('bible_melody_volume', String(vigilInitialVolume));
-        localStorage.setItem('bible_nature_volume', String(vigilInitialNatureVolume));
-      } catch (_) {}
+      sleepFadeFactorRef.current = 1.0;
+      setSleepFadeFactor(1.0);
+      ambientMelody.setFadeMultiplier(1.0, 0.4);
+      natureSounds.setFadeMultiplier(1.0, 0.4);
     } else {
-      setVigilInitialVolume(melodyVolume);
-      setVigilInitialNatureVolume(natureSoundVolume);
       setIsVigilActive(true);
     }
   };
@@ -2886,7 +3170,7 @@ export default function App() {
 
   // Synchronize background nature sounds (can play continuously when enabled for deep immersive reading)
   useEffect(() => {
-    if (isNatureEnabled && activeTab === 'reader') {
+    if (isNatureEnabled && activeTab === 'read') {
       natureSounds.start(natureSoundType);
       natureSounds.setVolume(natureSoundVolume);
     } else {
@@ -2894,9 +3178,13 @@ export default function App() {
     }
   }, [isNatureEnabled, natureSoundType, natureSoundVolume, activeTab]);
 
-  // Clean up speech synthesis when navigating away or selecting another chapter
+  // Clean up speech synthesis ONLY on component unmount (survives chapter changes for continuous playback)
   useEffect(() => {
     return () => {
+      if (nextVerseTimeoutRef.current) {
+        clearTimeout(nextVerseTimeoutRef.current);
+        nextVerseTimeoutRef.current = null;
+      }
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }
@@ -2911,8 +3199,9 @@ export default function App() {
         }
       } catch (_) {}
       ambientMelody.stop();
+      natureSounds.stop();
     };
-  }, [selectedBook, selectedChapter, activeTab]);
+  }, []);
 
   const requestWakeLock = async () => {
     try {
@@ -2990,12 +3279,17 @@ export default function App() {
       return;
     }
 
+    const activeVerses = chapterVersesRef.current;
+    const activeBook = selectedBookRef.current;
+    const activeChapter = selectedChapterRef.current;
+    const isHqOnly = highQualityAudioOnlyRef.current;
+
     const currentVoices = window.speechSynthesis.getVoices();
     if (currentVoices.length === 0) {
       // Async voice population fallback (Chrome/iOS initial load)
       waitForSpeechVoices(700).then((voices) => {
         if (voices.length > 0) {
-          setAvailableVoices(getSortedFrenchVoices(voices, highQualityAudioOnly));
+          setAvailableVoices(getSortedFrenchVoices(voices, isHqOnly));
           speakVerse(index);
         } else {
           setTtsWarning("Aucune voix de synthèse vocale n'est détectée sur votre appareil.");
@@ -3005,32 +3299,49 @@ export default function App() {
       return;
     }
 
-    if (index < 0 || index >= chapterVerses.length) {
-      if (index >= chapterVerses.length && autoAdvanceChapterSpeech) {
-        // Look up if a subsequent chapter exists in the Bible
-        const nextChapterExists = selectedChapter < selectedBook.chapters_count || 
-                                  BOOKS.findIndex(b => b.id === selectedBook.id) < BOOKS.length - 1;
-        if (nextChapterExists) {
+    if (index < 0 || index >= activeVerses.length) {
+      const continuousAllowed =
+        (autoAdvanceChapterSpeechRef.current || isPlayingContinuousRef.current) &&
+        !isPausedRef.current;
+
+      if (index >= activeVerses.length && activeVerses.length > 0 && continuousAllowed) {
+        const nextTarget = getNextChapter(activeBook, activeChapter);
+        if (nextTarget) {
           autoPlayNextChapterAudioRef.current = true;
-          handleNextChapter();
+          isPlayingContinuousRef.current = true;
+          setIsPlayingContinuous(true);
+          currentVerseToSpeakRef.current = -1;
+          navigateToScripture({
+            livre: nextTarget.book.id,
+            chapitre: nextTarget.chapter,
+            verset: 1,
+          });
           return;
         }
+        // Fin de la Bible atteinte (Apocalypse 22 terminé)
+        stopSpeaking();
+        setAudioStatusToast({
+          title: t('settings.endOfBibleTitle'),
+          message: t('settings.endOfBibleMessage'),
+        });
+        return;
       }
+
       stopSpeaking();
       return;
     }
 
     // Strictly resolve French voice matching the user's requested gender & quality filter
     const resolution = resolveStrictFrenchVoice({
-      gender: voiceGender,
-      preferredVoiceURI: selectedVoiceURI,
-      basePitch: isRawReading ? 1.0 : voicePitch,
+      gender: voiceGenderRef.current,
+      preferredVoiceURI: selectedVoiceURIRef.current,
+      basePitch: isRawReadingRef.current ? 1.0 : voicePitchRef.current,
       availableVoices: currentVoices,
-      highQualityOnly: highQualityAudioOnly,
+      highQualityOnly: isHqOnly,
       highQualityNoVoicesWarning: t('settings.highQualityNoVoicesWarning')
     });
 
-    logTts(`[TTS Debug Selector] Requested gender: "${voiceGender}", HighQualityOnly: ${highQualityAudioOnly}, Selected URI: "${selectedVoiceURI || 'none'}", Resolved voice: ${resolution.voice ? resolution.voice.name : 'NONE'}`);
+    logTts(`[TTS Debug Selector] Requested gender: "${voiceGenderRef.current}", HighQualityOnly: ${isHqOnly}, Selected URI: "${selectedVoiceURIRef.current || 'none'}", Resolved voice: ${resolution.voice ? resolution.voice.name : 'NONE'}`);
 
     // If no French voice is available, safely halt speech and alert user
     if (!resolution.voice) {
@@ -3056,7 +3367,7 @@ export default function App() {
           const speakingState = window.speechSynthesis.speaking;
           const pausedState = window.speechSynthesis.paused;
           logTts(`[TTS Debug Heartbeat] speaking: ${speakingState}, paused: ${pausedState}`);
-          if (speakingState && !pausedState) {
+          if (speakingState && !pausedState && !isPausedRef.current) {
             logTts("[TTS Debug Heartbeat] Triggering pause-resume hack to maintain active audio session.");
             window.speechSynthesis.pause();
             window.speechSynthesis.resume();
@@ -3069,8 +3380,20 @@ export default function App() {
     window.speechSynthesis.cancel();
     setCurrentSpeakingVerseIndex(index);
     currentVerseToSpeakRef.current = index;
+    pausedVerseIndexRef.current = index;
+    isPausedRef.current = false;
+    setIsPaused(false);
+    isSpeakingRef.current = true;
+    setIsSpeaking(true);
+    if (autoAdvanceChapterSpeechRef.current) {
+      isPlayingContinuousRef.current = true;
+      setIsPlayingContinuous(true);
+    }
 
-    const verseObj = chapterVerses[index];
+    const verseObj = activeVerses[index];
+    // Sauvegarder la position de lecture/écoute (livre, chapitre, verset) dans Firebase & localStorage
+    updateChapterProgress(verseObj.book_id, verseObj.book_name, verseObj.chapter, verseObj.verse);
+
     // Remove Strong codes and any markdown markings from the spoken reading
     const cleanText = cleanTextForSpeech(verseObj.text);
     const textToSpeak = `Verset ${verseObj.verse}. ${cleanText}`;
@@ -3079,9 +3402,12 @@ export default function App() {
     const utterance = new SpeechSynthesisUtterance(textToSpeak);
     utterance.lang = resolution.voice.lang || 'fr-FR';
     utterance.voice = resolution.voice;
-    utterance.rate = playbackRate;
-    utterance.pitch = isRawReading ? 1.0 : resolution.recommendedPitch;
-    utterance.volume = voiceVolume;
+    utterance.rate = playbackRateRef.current;
+    utterance.pitch = isRawReadingRef.current ? 1.0 : resolution.recommendedPitch;
+    utterance.volume = computeEffectiveVoiceVolume(
+      voiceVolumeRef.current,
+      sleepFadeFactorRef.current
+    );
 
     // Prevent garbage collection on mobile browsers (e.g. Chrome/iOS/Android)
     if (!(window as any)._activeUtterances) {
@@ -3112,19 +3438,47 @@ export default function App() {
     };
 
     utterance.onstart = () => {
+      consecutiveTtsErrorsRef.current = 0;
       logState('onstart');
+      emitSpeechTelemetry({
+        phase: 'start',
+        text: textToSpeak,
+        charIndex: 0,
+        rate: utterance.rate,
+        volume: utterance.volume,
+      });
     };
 
     utterance.onpause = () => {
       logState('onpause');
+      emitSpeechTelemetry({
+        phase: 'pause',
+        text: textToSpeak,
+        rate: utterance.rate,
+        volume: utterance.volume,
+      });
     };
 
     utterance.onresume = () => {
       logState('onresume');
+      emitSpeechTelemetry({
+        phase: 'resume',
+        text: textToSpeak,
+        rate: utterance.rate,
+        volume: utterance.volume,
+      });
     };
 
     utterance.onboundary = (e) => {
       logState('onboundary', { charIndex: e.charIndex, name: e.name, elapsedTime: e.elapsedTime });
+      emitSpeechTelemetry({
+        phase: 'boundary',
+        text: textToSpeak,
+        charIndex: e.charIndex,
+        charLength: (e as unknown as { charLength?: number }).charLength,
+        rate: utterance.rate,
+        volume: utterance.volume,
+      });
     };
 
     utterance.onmark = (e) => {
@@ -3133,13 +3487,20 @@ export default function App() {
 
     utterance.onend = () => {
       logState('onend');
+      emitSpeechTelemetry({
+        phase: 'end',
+        text: textToSpeak,
+        charIndex: textToSpeak.length,
+        rate: utterance.rate,
+        volume: utterance.volume,
+      });
       cleanUtterance();
-      // Move consecutively to next verse if we are still active on index
-      if (currentVerseToSpeakRef.current === index) {
+      // Move consecutively to next verse only if not paused and still on this verse index
+      if (!isPausedRef.current && currentVerseToSpeakRef.current === index) {
         logTts(`[TTS Debug] Moving consecutively from verse ${index} to ${index + 1}`);
         speakVerse(index + 1);
       } else {
-        logTts(`[TTS Debug] currentVerseToSpeakRef.current (${currentVerseToSpeakRef.current}) differs from index (${index}). Next verse skipped.`);
+        logTts(`[TTS Debug] currentVerseToSpeakRef.current (${currentVerseToSpeakRef.current}) differs from index (${index}) or paused (${isPausedRef.current}). Next verse skipped.`);
       }
     };
 
@@ -3149,24 +3510,34 @@ export default function App() {
       logTts(`[TTS Debug Event Details] Error for verse ${index}: error='${errCode}', type='${e.type}'`, 'warn');
       cleanUtterance();
       
-      const ignorableErrors = ['interrupted', 'canceled', 'agent-rejected'];
-      const isIgnorable = !errCode || ignorableErrors.includes(errCode);
-      if (!isIgnorable && currentVerseToSpeakRef.current === index) {
-        logTts(`[TTS Debug] Hard speech synthesis error '${errCode}'. Stopping speaking.`, 'error');
+      const decision = shouldAdvanceOnSpeechError(errCode, consecutiveTtsErrorsRef.current);
+      if (decision === 'skip' && !isPausedRef.current && currentVerseToSpeakRef.current === index) {
+        consecutiveTtsErrorsRef.current += 1;
+        logTts(`[TTS Debug] Transient speech synthesis error '${errCode}'. Skipping to next verse (${index + 1}).`, 'warn');
+        speakVerse(index + 1);
+      } else if (decision === 'stop' && currentVerseToSpeakRef.current === index) {
+        logTts(`[TTS Debug] Too many consecutive speech errors ('${errCode}'). Stopping speaking.`, 'error');
+        emitSpeechTelemetry({ phase: 'stop' });
         stopSpeaking();
       }
     };
 
+    if (nextVerseTimeoutRef.current) {
+      clearTimeout(nextVerseTimeoutRef.current);
+    }
+
     logTts(`[TTS Debug] Queueing speak() invocation for verse ${index} in 60ms to let cancel() settle.`);
-    setTimeout(() => {
-      if (currentVerseToSpeakRef.current === index) {
+    nextVerseTimeoutRef.current = setTimeout(() => {
+      if (!isPausedRef.current && currentVerseToSpeakRef.current === index) {
         logTts(`[TTS Debug] Invoking window.speechSynthesis.speak() for verse ${index}`);
         window.speechSynthesis.speak(utterance);
+        isSpeakingRef.current = true;
         setIsSpeaking(true);
+        isPausedRef.current = false;
         setIsPaused(false);
 
         // Synchronisation : Débute chaque verset par un carillon ou pincement de harpe céleste en harmonie
-        if (isMelodyEnabled) {
+        if (isMelodyEnabledRef.current) {
           ambientMelody.triggerTransitPluck();
         }
       } else {
@@ -3178,25 +3549,69 @@ export default function App() {
   const pauseSpeaking = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     logTts("[TTS Debug Action] pauseSpeaking() invoked.");
-    window.speechSynthesis.pause();
+    isPausedRef.current = true;
     setIsPaused(true);
+    autoPlayNextChapterAudioRef.current = false;
+    pausedVerseIndexRef.current =
+      currentVerseToSpeakRef.current >= 0 ? currentVerseToSpeakRef.current : pausedVerseIndexRef.current;
+    window.speechSynthesis.pause();
+    emitSpeechTelemetry({
+      phase: 'pause',
+      rate: playbackRateRef.current,
+      volume: voiceVolumeRef.current,
+    });
   };
 
   const resumeSpeaking = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     logTts("[TTS Debug Action] resumeSpeaking() invoked.");
-    window.speechSynthesis.resume();
+    isPausedRef.current = false;
     setIsPaused(false);
+    if (autoAdvanceChapterSpeechRef.current) {
+      isPlayingContinuousRef.current = true;
+      setIsPlayingContinuous(true);
+    }
+    emitSpeechTelemetry({
+      phase: 'resume',
+      rate: playbackRateRef.current,
+      volume: voiceVolumeRef.current,
+    });
+    if (window.speechSynthesis.paused && window.speechSynthesis.speaking) {
+      window.speechSynthesis.resume();
+    } else {
+      const targetIdx =
+        pausedVerseIndexRef.current >= 0
+          ? pausedVerseIndexRef.current
+          : Math.max(0, currentVerseToSpeakRef.current);
+      speakVerse(targetIdx);
+    }
   };
 
   const stopSpeaking = () => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    logTts("[TTS Debug Action] stopSpeaking() invoked. Calling cancel().");
-    window.speechSynthesis.cancel();
+    emitSpeechTelemetry({ phase: 'stop' });
+    if (nextVerseTimeoutRef.current) {
+      clearTimeout(nextVerseTimeoutRef.current);
+      nextVerseTimeoutRef.current = null;
+    }
+    autoPlayNextChapterAudioRef.current = false;
+    isPlayingContinuousRef.current = false;
+    setIsPlayingContinuous(false);
+    isPausedRef.current = false;
+    setIsPaused(false);
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    setCurrentSpeakingVerseIndex(-1);
+    currentVerseToSpeakRef.current = -1;
+    pausedVerseIndexRef.current = -1;
+    consecutiveTtsErrorsRef.current = 0;
 
-    // Clear active utterances to release memory
-    logTts("[TTS Debug Action] Resetting active utterances array.");
-    (window as any)._activeUtterances = [];
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      logTts("[TTS Debug Action] stopSpeaking() invoked. Calling cancel().");
+      window.speechSynthesis.cancel();
+      // Clear active utterances to release memory
+      logTts("[TTS Debug Action] Resetting active utterances array.");
+      (window as any)._activeUtterances = [];
+    }
 
     // Clear periodic pause-resume interval
     if (speechPauseResumeIntervalRef.current) {
@@ -3207,27 +3622,27 @@ export default function App() {
 
     // Release screen wake lock
     releaseWakeLock();
-
-    setIsSpeaking(false);
-    setIsPaused(false);
-    setCurrentSpeakingVerseIndex(-1);
-    currentVerseToSpeakRef.current = -1;
   };
 
   const handlePlayPause = () => {
-    if (isSpeaking) {
-      if (isPaused) {
+    if (isSpeakingRef.current) {
+      if (isPausedRef.current) {
         resumeSpeaking();
       } else {
         pauseSpeaking();
       }
     } else {
+      const enableContinuous = autoAdvanceChapterSpeechRef.current;
+      isPlayingContinuousRef.current = enableContinuous;
+      setIsPlayingContinuous(enableContinuous);
+
       let startIndex = 0;
+      const versesNow = chapterVersesRef.current;
       if (selectedVerseId) {
         const parts = selectedVerseId.split('_');
         if (parts.length === 3) {
           const verseNum = Number(parts[2]);
-          const foundIdx = chapterVerses.findIndex(v => v.verse === verseNum);
+          const foundIdx = versesNow.findIndex(v => v.verse === verseNum);
           if (foundIdx !== -1) {
             startIndex = foundIdx;
           }
@@ -3236,6 +3651,56 @@ export default function App() {
       speakVerse(startIndex);
     }
   };
+
+  // Media Session API integration for background / lock-screen controls on mobile & desktop
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+
+    const ms = navigator.mediaSession;
+    try {
+      if (isSpeaking && typeof MediaMetadata !== 'undefined') {
+        const activeVerse =
+          currentSpeakingVerseIndex >= 0 && currentSpeakingVerseIndex < chapterVerses.length
+            ? chapterVerses[currentSpeakingVerseIndex]
+            : null;
+        const verseSuffix = activeVerse ? ` · Verset ${activeVerse.verse}` : '';
+        ms.metadata = new MediaMetadata({
+          title: `${getBookTitle(selectedBook)} ${selectedChapter}${verseSuffix}`,
+          artist: 'Bible Profonde Audio',
+          album: TRANSLATION_CATALOG[selectedTranslation]?.label || 'Louis Segond 1910',
+        });
+      }
+      ms.playbackState = isSpeaking ? (isPaused ? 'paused' : 'playing') : 'none';
+    } catch (_) {}
+
+    const safeSetHandler = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, handler);
+      } catch (_) {}
+    };
+
+    if (isSpeaking) {
+      safeSetHandler('play', () => resumeSpeaking());
+      safeSetHandler('pause', () => pauseSpeaking());
+      safeSetHandler('stop', () => stopSpeaking());
+      safeSetHandler('nexttrack', () => handleNextChapter());
+      safeSetHandler('previoustrack', () => handlePreviousChapter());
+    } else {
+      safeSetHandler('play', null);
+      safeSetHandler('pause', null);
+      safeSetHandler('stop', null);
+      safeSetHandler('nexttrack', null);
+      safeSetHandler('previoustrack', null);
+    }
+
+    return () => {
+      safeSetHandler('play', null);
+      safeSetHandler('pause', null);
+      safeSetHandler('stop', null);
+      safeSetHandler('nexttrack', null);
+      safeSetHandler('previoustrack', null);
+    };
+  }, [isSpeaking, isPaused, selectedBook, selectedChapter, currentSpeakingVerseIndex, selectedTranslation, chapterVerses]);
 
   // Quick Voice Note State & Handlers (press-and-hold on current audio button)
   const [isQuickRecordingVoiceNote, setIsQuickRecordingVoiceNote] = useState<boolean>(false);
@@ -3659,13 +4124,21 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeTab, selectedBook, selectedChapter, user]);
 
-  // Auto-play chapter audio immediately after its verses are fully fetched
+  // Auto-play chapter audio immediately after the newly selected chapter's verses are loaded
   useEffect(() => {
-    if (!loadingVerses && chapterVerses.length > 0 && autoPlayNextChapterAudioRef.current && activeTab === 'read') {
+    const firstVerse = chapterVerses[0];
+    const matchesTargetChapter =
+      !!firstVerse &&
+      firstVerse.book_id === selectedBook.id &&
+      firstVerse.chapter === selectedChapter;
+
+    if (!loadingVerses && matchesTargetChapter && autoPlayNextChapterAudioRef.current && activeTab === 'read') {
       autoPlayNextChapterAudioRef.current = false;
       const timer = setTimeout(() => {
-        speakVerse(0);
-      }, 150);
+        if (!isPausedRef.current) {
+          speakVerse(0);
+        }
+      }, 120);
       return () => clearTimeout(timer);
     }
   }, [chapterVerses, loadingVerses, activeTab, selectedBook.id, selectedChapter]);
@@ -3684,7 +4157,7 @@ export default function App() {
 
     if (previousChapterKeyRef.current !== currentChapterKey) {
       previousChapterKeyRef.current = currentChapterKey;
-      if (autoPlayChapterAudio && activeTab === 'read') {
+      if ((autoPlayChapterAudio || isPlayingContinuousRef.current) && !isPausedRef.current && activeTab === 'read') {
         autoPlayNextChapterAudioRef.current = true;
       }
     }
@@ -4220,11 +4693,13 @@ export default function App() {
                         <button
                           key={genderVal}
                           onClick={() => {
+                            voiceGenderRef.current = genderVal;
                             setVoiceGender(genderVal);
                             try {
                               localStorage.setItem('bible_voice_gender', genderVal);
                             } catch (_) {}
                             // Clear precise voice selection to let automatic gender-matching take effect
+                            selectedVoiceURIRef.current = '';
                             setSelectedVoiceURI('');
                             try {
                               localStorage.removeItem('bible_preferred_voice_uri');
@@ -4260,6 +4735,7 @@ export default function App() {
                         value={selectedVoiceURI}
                         onChange={(e) => {
                           const val = e.target.value;
+                          selectedVoiceURIRef.current = val;
                           setSelectedVoiceURI(val);
                           try {
                             localStorage.setItem('bible_preferred_voice_uri', val);
@@ -4701,12 +5177,23 @@ export default function App() {
                 selectedBook={selectedBook}
                 selectedChapter={selectedChapter}
                 onSelectBookAndChapter={(book, chapterNum) => {
-                  if (isSpeaking) {
-                    stopSpeaking();
-                  }
-                  if (autoPlayChapterAudio) {
+                  const keepAudioPlaying = shouldContinueOnChapterChange(
+                    isSpeakingRef.current,
+                    isPausedRef.current,
+                    isPlayingContinuousRef.current
+                  );
+                  if (keepAudioPlaying) {
+                    currentVerseToSpeakRef.current = -1;
+                    autoPlayNextChapterAudioRef.current = true;
+                    if (typeof window !== 'undefined' && window.speechSynthesis) {
+                      window.speechSynthesis.cancel();
+                      (window as any)._activeUtterances = [];
+                    }
+                  } else if (autoPlayChapterAudio) {
                     autoPlayNextChapterAudioRef.current = true;
                   }
+                  selectedBookRef.current = book;
+                  selectedChapterRef.current = chapterNum;
                   setSelectedBook(book);
                   setSelectedChapter(chapterNum);
                   const newPos: ReadingPosition = {
@@ -4739,14 +5226,12 @@ export default function App() {
                 readingHistory={readingHistory}
                 onNavigateToChapter={handleNavigateChallengeToReader}
                 onPlayAudioCurrentChapter={() => {
-                  if (isSpeaking && !isPaused) {
-                    stopSpeaking();
-                  } else if (isSpeaking && isPaused) {
-                    resumeSpeaking();
-                  } else if (loadingVerses || chapterVerses.length === 0) {
+                  if (loadingVerses || chapterVerses.length === 0) {
                     autoPlayNextChapterAudioRef.current = true;
+                    isPlayingContinuousRef.current = autoAdvanceChapterSpeechRef.current;
+                    setIsPlayingContinuous(autoAdvanceChapterSpeechRef.current);
                   } else {
-                    speakVerse(0);
+                    handlePlayPause();
                   }
                 }}
                 onSelectSanctuaryBg={(bgUrl) => setSanctuaryBgImage(bgUrl)}
@@ -4789,13 +5274,17 @@ export default function App() {
                 onNextChapter={handleNextChapter}
                 isSpeaking={isSpeaking}
                 isPaused={isPaused}
-                onToggleAudio={() => {
-                  if (isSpeaking && !isPaused) {
-                    stopSpeaking();
-                  } else {
-                    speakVerse(0);
-                  }
-                }}
+                speakingVerseKey={
+                  isSpeaking && currentSpeakingVerseIndex >= 0 && chapterVerses[currentSpeakingVerseIndex]
+                    ? `${chapterVerses[currentSpeakingVerseIndex].book_id}_${chapterVerses[currentSpeakingVerseIndex].chapter}_${chapterVerses[currentSpeakingVerseIndex].verse}`
+                    : null
+                }
+                onToggleAudio={handlePlayPause}
+                speechRate={playbackRate}
+                speechVolume={computeEffectiveVoiceVolume(voiceVolume, sleepFadeFactor)}
+                sleepTimerMinutes={audioSleepTimerMinutes}
+                sleepRemainingSeconds={audioSleepRemainingSeconds}
+                onChangeSleepTimerMinutes={(minutes) => setAudioSleepTimerMinutes(minutes)}
                 onExplainVerse={(v) => {
                   setActiveExplainVerse(v);
                 }}
@@ -5681,6 +6170,31 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Toast Fin de la Bible / Minuterie de sommeil */}
+      {audioStatusToast && (
+        <div
+          role="status"
+          className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[110] max-w-md w-[92%] bg-[#12100c]/98 border border-[#c9a84c]/55 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md flex items-start gap-3 animate-fade-slide-up select-none"
+        >
+          <div className="w-8 h-8 rounded-xl bg-[#c9a84c]/15 border border-[#c9a84c]/30 flex items-center justify-center text-[#c9a84c] shrink-0 mt-0.5">
+            <Volume2 className="w-4 h-4" />
+          </div>
+          <div className="flex-1 space-y-1 text-left min-w-0">
+            <p className="font-serif font-bold text-xs text-[#c9a84c]">{audioStatusToast.title}</p>
+            <p className="text-[11px] text-[#e8e0d0]/90 leading-relaxed font-sans">{audioStatusToast.message}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAudioStatusToast(null)}
+            className="text-[#8c8270] hover:text-[#e8e0d0] p-1 cursor-pointer transition shrink-0"
+            title={t('common.close')}
+            aria-label={t('common.close')}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* French TTS Guidance / Warning Toast */}
       {ttsWarning && (
         <div
@@ -5788,9 +6302,15 @@ export default function App() {
         textSize={textSize}
         speechRate={playbackRate}
         speechVolume={voiceVolume}
-        selectedVoiceGender={voiceGender}
+        selectedVoiceGender={voiceGender === 'auto' ? 'all' : voiceGender}
+        autoAdvanceChapterSpeech={autoAdvanceChapterSpeech}
         autoPlayChapterAudio={autoPlayChapterAudio}
         highQualityAudioOnly={highQualityAudioOnly}
+        sleepTimerMinutes={audioSleepTimerMinutes}
+        sleepRemainingSeconds={audioSleepRemainingSeconds}
+        isMelodyEnabled={isMelodyEnabled}
+        isNatureEnabled={isNatureEnabled}
+        natureSoundType={natureSoundType}
         userEmail={user?.email || undefined}
         readerColor={readerColor}
         themeMode={themeMode}
@@ -5803,14 +6323,38 @@ export default function App() {
           try { localStorage.setItem('bible_voice_volume', String(vol)); } catch (_) {}
         }}
         onChangeVoiceGender={(gender) => {
-          setVoiceGender(gender);
-          try { localStorage.setItem('bible_voice_gender', gender); } catch (_) {}
+          const normalizedGender = gender === 'all' ? 'auto' : gender;
+          voiceGenderRef.current = normalizedGender;
+          setVoiceGender(normalizedGender);
+          try { localStorage.setItem('bible_voice_gender', normalizedGender); } catch (_) {}
+        }}
+        onChangeAutoAdvanceChapterSpeech={(enabled) => {
+          autoAdvanceChapterSpeechRef.current = enabled;
+          setAutoAdvanceChapterSpeech(enabled);
+          try { localStorage.setItem('bible_auto_advance_speech', String(enabled)); } catch (_) {}
+          if (isSpeakingRef.current) {
+            isPlayingContinuousRef.current = enabled;
+            setIsPlayingContinuous(enabled);
+          }
         }}
         onChangeAutoPlayChapterAudio={(enabled) => {
           setAutoPlayChapterAudio(enabled);
           try { localStorage.setItem('bible_auto_play_chapter_audio', String(enabled)); } catch (_) {}
         }}
         onChangeHighQualityAudioOnly={handleToggleHighQualityAudio}
+        onChangeSleepTimerMinutes={(minutes) => setAudioSleepTimerMinutes(minutes)}
+        onChangeMelodyEnabled={(enabled) => {
+          setIsMelodyEnabled(enabled);
+          try { localStorage.setItem('bible_melody_enabled', String(enabled)); } catch (_) {}
+        }}
+        onChangeNatureEnabled={(enabled) => {
+          setIsNatureEnabled(enabled);
+          try { localStorage.setItem('bible_nature_enabled', String(enabled)); } catch (_) {}
+        }}
+        onChangeNatureSoundType={(soundType) => {
+          setNatureSoundType(soundType);
+          try { localStorage.setItem('bible_nature_type', soundType); } catch (_) {}
+        }}
         onChangeThemeMode={(t) => setThemeMode(t)}
         onSignOut={handleSignOut}
       />

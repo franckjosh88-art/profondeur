@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Settings, Type, Volume2, LogOut, 
   Sparkles, X, Check, ShieldCheck, Palette,
-  BookOpen, Library, Sun, Moon, Coffee, Globe
+  BookOpen, Library, Sun, Moon, Coffee, Globe, Clock, Music, Leaf
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -13,6 +13,9 @@ import {
 import { ReaderVersePreview } from './ReaderVersePreview';
 import { useModalA11y } from '../hooks/useModalA11y';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatSleepCountdown } from '../utils/chapterNavigation';
+import { isInSleepFadeWindow } from '../utils/sleepFade';
+import { NATURE_SOUNDS, NatureSoundType } from '../utils/natureSounds';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -20,8 +23,14 @@ interface SettingsModalProps {
   speechRate: number;
   speechVolume: number;
   selectedVoiceGender: 'female' | 'male' | 'all';
+  autoAdvanceChapterSpeech?: boolean;
   autoPlayChapterAudio?: boolean;
   highQualityAudioOnly?: boolean;
+  sleepTimerMinutes?: number | null;
+  sleepRemainingSeconds?: number;
+  isMelodyEnabled?: boolean;
+  isNatureEnabled?: boolean;
+  natureSoundType?: NatureSoundType;
   userEmail?: string | null;
   readerColor?: string;
   themeMode?: 'dark' | 'sepia' | 'light';
@@ -31,8 +40,13 @@ interface SettingsModalProps {
   onChangeSpeechRate: (rate: number) => void;
   onChangeSpeechVolume: (volume: number) => void;
   onChangeVoiceGender: (gender: 'female' | 'male' | 'all') => void;
+  onChangeAutoAdvanceChapterSpeech?: (enabled: boolean) => void;
   onChangeAutoPlayChapterAudio?: (enabled: boolean) => void;
   onChangeHighQualityAudioOnly?: (enabled: boolean) => void;
+  onChangeSleepTimerMinutes?: (minutes: number | null) => void;
+  onChangeMelodyEnabled?: (enabled: boolean) => void;
+  onChangeNatureEnabled?: (enabled: boolean) => void;
+  onChangeNatureSoundType?: (type: NatureSoundType) => void;
   onChangeThemeMode?: (theme: 'dark' | 'sepia' | 'light') => void;
   onSignOut?: () => void;
 }
@@ -43,8 +57,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   speechRate,
   speechVolume,
   selectedVoiceGender,
+  autoAdvanceChapterSpeech = true,
   autoPlayChapterAudio = false,
   highQualityAudioOnly = false,
+  sleepTimerMinutes = null,
+  sleepRemainingSeconds = 0,
+  isMelodyEnabled = false,
+  isNatureEnabled = false,
+  natureSoundType = 'rain',
   userEmail,
   readerColor = 'sanctuary',
   themeMode = 'dark',
@@ -54,8 +74,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onChangeSpeechRate,
   onChangeSpeechVolume,
   onChangeVoiceGender,
+  onChangeAutoAdvanceChapterSpeech,
   onChangeAutoPlayChapterAudio,
   onChangeHighQualityAudioOnly,
+  onChangeSleepTimerMinutes,
+  onChangeMelodyEnabled,
+  onChangeNatureEnabled,
+  onChangeNatureSoundType,
   onChangeThemeMode,
   onSignOut
 }) => {
@@ -442,6 +467,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
 
+                    {/* Option : Lecture continue des chapitres */}
+                    <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
+                      <div className="space-y-0.5 text-left pr-2">
+                        <span className="text-xs font-serif font-bold text-[#f4efe2] block">
+                          {t('settings.continuousPlayTitle')}
+                        </span>
+                        <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                          {t('settings.continuousPlayDesc')}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={autoAdvanceChapterSpeech}
+                        aria-label={t('settings.continuousPlayTitle')}
+                        onClick={() => onChangeAutoAdvanceChapterSpeech && onChangeAutoAdvanceChapterSpeech(!autoAdvanceChapterSpeech)}
+                        className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
+                          autoAdvanceChapterSpeech ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
+                        }`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-[#0c0a07] shadow-md ring-0 transition duration-200 ease-in-out ${
+                            autoAdvanceChapterSpeech ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
                     {/* Option : Lecture audio automatique à l'ouverture d'un nouveau chapitre */}
                     <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
                       <div className="space-y-0.5 text-left pr-2">
@@ -498,6 +551,146 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         />
                       </button>
                     </div>
+
+                    {/* Option : Mélodie ambiante */}
+                    {onChangeMelodyEnabled && (
+                      <div className="pt-3 border-t border-[#2e2a1e]/60 flex items-center justify-between gap-3">
+                        <div className="space-y-0.5 text-left pr-2">
+                          <span className="text-xs font-serif font-bold text-[#f4efe2] flex items-center gap-1.5">
+                            <Music className="w-3.5 h-3.5 text-[#c9a84c]" aria-hidden="true" />
+                            <span>{t('settings.ambientMelodyTitle')}</span>
+                          </span>
+                          <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                            {t('settings.ambientMelodyDesc')}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isMelodyEnabled}
+                          aria-label={t('settings.ambientMelodyTitle')}
+                          onClick={() => onChangeMelodyEnabled(!isMelodyEnabled)}
+                          className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
+                            isMelodyEnabled ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-[#0c0a07] shadow-md ring-0 transition duration-200 ease-in-out ${
+                              isMelodyEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Option : Sons de la nature */}
+                    {onChangeNatureEnabled && (
+                      <div className="pt-3 border-t border-[#2e2a1e]/60 space-y-2.5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="space-y-0.5 text-left pr-2">
+                            <span className="text-xs font-serif font-bold text-[#f4efe2] flex items-center gap-1.5">
+                              <Leaf className="w-3.5 h-3.5 text-[#c9a84c]" aria-hidden="true" />
+                              <span>{t('settings.natureSoundTitle')}</span>
+                            </span>
+                            <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                              {t('settings.natureSoundDesc')}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={isNatureEnabled}
+                            aria-label={t('settings.natureSoundTitle')}
+                            onClick={() => onChangeNatureEnabled(!isNatureEnabled)}
+                            className={`relative inline-flex min-h-[44px] min-w-[56px] h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out items-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] focus-visible:outline-none ${
+                              isNatureEnabled ? 'bg-[#c9a84c]' : 'bg-[#1e1b15] border-[#2e2a1e]'
+                            }`}
+                          >
+                            <span
+                              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-[#0c0a07] shadow-md ring-0 transition duration-200 ease-in-out ${
+                                isNatureEnabled ? 'translate-x-6' : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                        {isNatureEnabled && onChangeNatureSoundType && (
+                          <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                            {NATURE_SOUNDS.filter((opt) => opt.id !== 'none').map((opt) => {
+                              const isSelected = natureSoundType === opt.id;
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => onChangeNatureSoundType(opt.id)}
+                                  className={`min-h-[38px] py-1.5 px-2 rounded-xl text-[11px] font-sans transition cursor-pointer border flex items-center justify-center gap-1 focus-visible:ring-2 focus-visible:ring-[#c9a84c] ${
+                                    isSelected
+                                      ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]/60 font-bold'
+                                      : 'bg-[#050403] text-[#a0947f] border-[#2e2a1e] hover:text-[#e8e0d0]'
+                                  }`}
+                                >
+                                  <span aria-hidden="true">{opt.icon}</span>
+                                  <span className="truncate">{opt.name.split(' ')[0]}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Option : Minuterie de sommeil (15 / 30 / 60 min) */}
+                    {onChangeSleepTimerMinutes && (
+                      <div className="pt-3 border-t border-[#2e2a1e]/60 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-serif font-bold text-[#f4efe2] flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-[#c9a84c]" aria-hidden="true" />
+                            <span>{t('settings.sleepTimerTitle')}</span>
+                          </span>
+                          {sleepTimerMinutes !== null && sleepRemainingSeconds > 0 && (
+                            <span
+                              className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded border ${
+                                isInSleepFadeWindow(sleepRemainingSeconds, sleepTimerMinutes * 60)
+                                  ? 'text-[#f4efe2] bg-[#c9a84c]/25 border-[#c9a84c]/60'
+                                  : 'text-[#c9a84c] bg-[#c9a84c]/15 border-[#c9a84c]/30'
+                              }`}
+                            >
+                              {isInSleepFadeWindow(sleepRemainingSeconds, sleepTimerMinutes * 60)
+                                ? `${t('settings.sleepFadeActive')} · ${formatSleepCountdown(sleepRemainingSeconds)}`
+                                : formatSleepCountdown(sleepRemainingSeconds)}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[12px] font-sans text-[#a0947f] block leading-relaxed">
+                          {t('settings.sleepTimerDesc')}
+                        </span>
+                        <div className="grid grid-cols-4 gap-2 pt-1" role="radiogroup" aria-label={t('settings.sleepTimerTitle')}>
+                          {[
+                            { value: null, label: t('settings.sleepTimerOff') },
+                            { value: 15, label: '15 min' },
+                            { value: 30, label: '30 min' },
+                            { value: 60, label: '60 min' },
+                          ].map((opt) => {
+                            const isSelected = sleepTimerMinutes === opt.value;
+                            return (
+                              <button
+                                key={String(opt.value)}
+                                type="button"
+                                role="radio"
+                                aria-checked={isSelected}
+                                onClick={() => onChangeSleepTimerMinutes(opt.value)}
+                                className={`min-h-[40px] py-1.5 px-2 rounded-xl text-xs font-mono transition cursor-pointer border flex items-center justify-center focus-visible:ring-2 focus-visible:ring-[#c9a84c] ${
+                                  isSelected
+                                    ? 'bg-[#c9a84c]/20 text-[#c9a84c] border-[#c9a84c]/60 font-bold'
+                                    : 'bg-[#050403] text-[#a0947f] border-[#2e2a1e] hover:text-[#e8e0d0]'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* 4. PALETTE DU LECTEUR BIBLIQUE */}
